@@ -46,6 +46,7 @@ def test_source_uses_no_model_or_api_client_imports():
         Path("src/abi/modules/live_reread.py"),
         Path("src/abi/modules/production_run.py"),
         Path("src/abi/modules/evaluation.py"),
+        Path("src/abi/modules/final_artifact.py"),
     }
 
     for path in Path("src/abi").rglob("*.py"):

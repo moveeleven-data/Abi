@@ -28,6 +28,11 @@ from abi.modules.evaluation import (
     EVALUATION_MAX_MODEL_CALLS_DEFAULT,
     run_evaluation_demo,
 )
+from abi.modules.final_artifact import (
+    FINAL_ARTIFACT_CLIENTS,
+    FINAL_ARTIFACT_MAX_MODEL_CALLS_DEFAULT,
+    run_final_artifact_packet,
+)
 from abi.modules.human_calibration import run_human_calibration_demo
 from abi.modules.live_abi_ear import (
     LIVE_ABI_EAR_CLIENTS,
@@ -197,6 +202,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=EVALUATION_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for evaluation workers.",
     )
+    final_artifact_parser = subparsers.add_parser(
+        "final-artifact",
+        help="Build final-artifact candidate and paper packet scaffolds",
+    )
+    final_artifact_subparsers = final_artifact_parser.add_subparsers(
+        dest="final_artifact_command",
+        required=True,
+    )
+    final_artifact_packet_parser = final_artifact_subparsers.add_parser(
+        "packet",
+        help="Run the guarded final-artifact candidate packet scaffold",
+    )
+    final_artifact_packet_parser.add_argument(
+        "--client",
+        choices=FINAL_ARTIFACT_CLIENTS,
+        required=True,
+        help="Final-artifact packet client path to use.",
+    )
+    final_artifact_packet_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow the OpenAI path to make live model calls.",
+    )
+    final_artifact_packet_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=FINAL_ARTIFACT_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for final-artifact workers.",
+    )
     calibration_parser = subparsers.add_parser(
         "calibration",
         help="Run deterministic human calibration commands",
@@ -316,6 +350,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "evaluation" and args.evaluation_command == "demo":
         return _cmd_evaluation_demo(
+            config,
+            client_name=args.client,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
+    if args.command == "final-artifact" and args.final_artifact_command == "packet":
+        return _cmd_final_artifact_packet(
             config,
             client_name=args.client,
             allow_live_model=args.allow_live_model,
@@ -517,6 +558,23 @@ def _cmd_evaluation_demo(
     max_model_calls: int,
 ) -> int:
     result = run_evaluation_demo(
+        config,
+        client_name=client_name,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_final_artifact_packet(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_final_artifact_packet(
         config,
         client_name=client_name,
         allow_live_model=allow_live_model,

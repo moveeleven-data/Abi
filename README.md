@@ -218,3 +218,25 @@ The `final_artifact` profile refuses fixture/candidate state until a real final
 artifact packet, non-fixture evidence, strongest-rival and raw-model baseline
 comparisons, hostile audit, real validation gate, and final operator approval
 are present.
+
+## Phase 13 Final Artifact Packet
+
+Phase 13 builds a final-artifact candidate and paper/report packet scaffold. It
+does not finalize the project, mark final gates passed, claim phase shift, or
+claim real human validation. The fake path requires no API key:
+
+```powershell
+.\.venv\Scripts\abi.exe final-artifact packet --client fake
+```
+
+The OpenAI path refuses unless explicitly opted in, and still requires
+`OPENAI_API_KEY` before any live model path could run:
+
+```powershell
+.\.venv\Scripts\abi.exe final-artifact packet --client openai
+.\.venv\Scripts\abi.exe final-artifact packet --client openai --allow-live-model --max-model-calls 8
+```
+
+The packet remains non-final, not human-validated, not finalization-eligible,
+and includes a finalization-readiness report showing the current run is still
+blocked by the `final_artifact` profile.
