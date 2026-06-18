@@ -145,3 +145,20 @@ The OpenAI packet path refuses unless explicitly opted in, and still requires
 .\.venv\Scripts\abi.exe ear live-demo --client openai
 .\.venv\Scripts\abi.exe ear live-demo --client openai --allow-live-model --max-model-calls 8
 ```
+
+## Phase 9 Guarded Live Minimal Reread
+
+Phase 9 adds a guarded live-shaped Minimal Reread packet without replacing the
+deterministic reread demo. The fake path requires no API key:
+
+```powershell
+.\.venv\Scripts\abi.exe reread live-demo --client fake
+```
+
+The OpenAI path refuses unless explicitly opted in, and still requires
+`OPENAI_API_KEY` before any client call:
+
+```powershell
+.\.venv\Scripts\abi.exe reread live-demo --client openai
+.\.venv\Scripts\abi.exe reread live-demo --client openai --allow-live-model --max-model-calls 12
+```

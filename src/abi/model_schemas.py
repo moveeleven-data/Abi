@@ -21,6 +21,18 @@ class WorkerRole(str, Enum):
     ABI_EAR_PROSE_INVENTOR = "abi_ear_prose_inventor"
     ABI_EAR_REFINER = "abi_ear_refiner"
     ABI_EAR_REREAD_TRACER = "abi_ear_reread_tracer"
+    REREAD_FORMAL_PROBLEM_BUILDER = "reread_formal_problem_builder"
+    REREAD_GERM_AFTERIMAGE_PAIRER = "reread_germ_afterimage_pairer"
+    REREAD_CONSEQUENCE_GRAPH_BUILDER = "reread_consequence_graph_builder"
+    REREAD_DRAFT_COMPOSER = "reread_draft_composer"
+    REREAD_FIRST_READ_TRACER = "reread_first_read_tracer"
+    REREAD_REREAD_TRACER = "reread_reread_tracer"
+    REREAD_FAILURE_DIAGNOSER = "reread_failure_diagnoser"
+    REREAD_INTERVENTION_BUILDER = "reread_intervention_builder"
+    REREAD_RECOMPOSER = "reread_recomposer"
+    REREAD_COUNTERFACTUAL_EVALUATOR = "reread_counterfactual_evaluator"
+    REREAD_IRREDUCIBILITY_REPORTER = "reread_irreducibility_reporter"
+    REREAD_GATE_EVALUATOR = "reread_gate_evaluator"
 
 
 @dataclass(frozen=True)
@@ -88,6 +100,95 @@ LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS = (
     ABI_EAR_REFINED_INVENTION_SCHEMA,
     ABI_EAR_REREAD_TRACE_SCHEMA,
 )
+
+REREAD_FORMAL_PROBLEM_SCHEMA = WorkerSchema(
+    name="MinimalRereadFormalProblemModelOutput",
+    version="1",
+    artifact_type="live_reread_formal_problem",
+)
+
+REREAD_GERM_AFTERIMAGE_PAIR_SCHEMA = WorkerSchema(
+    name="MinimalRereadGermAfterimagePairModelOutput",
+    version="1",
+    artifact_type="live_reread_germ_afterimage_pair",
+)
+
+REREAD_CONSEQUENCE_GRAPH_SCHEMA = WorkerSchema(
+    name="MinimalRereadConsequenceGraphModelOutput",
+    version="1",
+    artifact_type="live_reread_consequence_graph",
+)
+
+REREAD_DRAFT_VERSION_SCHEMA = WorkerSchema(
+    name="MinimalRereadDraftVersionModelOutput",
+    version="1",
+    artifact_type="live_reread_draft_version",
+)
+
+REREAD_FIRST_READ_TRACE_SCHEMA = WorkerSchema(
+    name="MinimalRereadFirstReadTraceModelOutput",
+    version="1",
+    artifact_type="live_reread_first_read_trace",
+)
+
+REREAD_REREAD_TRACE_SCHEMA = WorkerSchema(
+    name="MinimalRereadRereadTraceModelOutput",
+    version="1",
+    artifact_type="live_reread_reread_trace",
+)
+
+REREAD_FAILURE_DIAGNOSIS_SCHEMA = WorkerSchema(
+    name="MinimalRereadFailureDiagnosisModelOutput",
+    version="1",
+    artifact_type="live_reread_failure_diagnosis",
+)
+
+REREAD_INTERVENTION_SCHEMA = WorkerSchema(
+    name="MinimalRereadInterventionModelOutput",
+    version="1",
+    artifact_type="live_reread_intervention",
+)
+
+REREAD_RECOMPOSED_DRAFT_SCHEMA = WorkerSchema(
+    name="MinimalRereadRecomposedDraftModelOutput",
+    version="1",
+    artifact_type="live_reread_recomposed_draft",
+)
+
+REREAD_COUNTERFACTUAL_RESULT_SCHEMA = WorkerSchema(
+    name="MinimalRereadCounterfactualResultModelOutput",
+    version="1",
+    artifact_type="live_reread_counterfactual_result",
+)
+
+REREAD_IRREDUCIBILITY_REPORT_SCHEMA = WorkerSchema(
+    name="MinimalRereadIrreducibilityReportModelOutput",
+    version="1",
+    artifact_type="live_reread_irreducibility_report",
+)
+
+REREAD_GATE_REPORT_SCHEMA = WorkerSchema(
+    name="MinimalRereadGateReportModelOutput",
+    version="1",
+    artifact_type="live_reread_gate_report",
+)
+
+LIVE_MINIMAL_REREAD_MODEL_SCHEMAS = (
+    REREAD_FORMAL_PROBLEM_SCHEMA,
+    REREAD_GERM_AFTERIMAGE_PAIR_SCHEMA,
+    REREAD_CONSEQUENCE_GRAPH_SCHEMA,
+    REREAD_DRAFT_VERSION_SCHEMA,
+    REREAD_FIRST_READ_TRACE_SCHEMA,
+    REREAD_REREAD_TRACE_SCHEMA,
+    REREAD_FAILURE_DIAGNOSIS_SCHEMA,
+    REREAD_INTERVENTION_SCHEMA,
+    REREAD_RECOMPOSED_DRAFT_SCHEMA,
+    REREAD_COUNTERFACTUAL_RESULT_SCHEMA,
+    REREAD_IRREDUCIBILITY_REPORT_SCHEMA,
+    REREAD_GATE_REPORT_SCHEMA,
+)
+
+LIVE_MODEL_WORKER_SCHEMAS = LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
 
 
 def abi_ear_germ_analysis_json_schema() -> dict[str, Any]:
@@ -282,6 +383,245 @@ def abi_ear_reread_trace_json_schema() -> dict[str, Any]:
     }
 
 
+def minimal_reread_formal_problem_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "benchmark_input": {"type": "string"},
+            "problem_statement": {"type": "string"},
+            "initial_reader_state": _free_object_schema(),
+            "target_reader_state": _free_object_schema(),
+            "success_conditions": _string_array_schema(),
+            "forbidden_shortcuts": _string_array_schema(),
+        },
+        [
+            "benchmark_input",
+            "problem_statement",
+            "initial_reader_state",
+            "target_reader_state",
+            "success_conditions",
+            "forbidden_shortcuts",
+        ],
+    )
+
+
+def minimal_reread_germ_afterimage_pair_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "germ": {"type": "string"},
+            "afterimage": {"type": "string"},
+            "reader_state_delta": _free_object_schema(),
+            "load_bearing_words": _string_array_schema(),
+        },
+        ["germ", "afterimage", "reader_state_delta", "load_bearing_words"],
+    )
+
+
+def minimal_reread_consequence_graph_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "problem_statement": {"type": "string"},
+            "germ": {"type": "string"},
+            "nodes": {
+                "type": "array",
+                "items": _object_schema(
+                    {
+                        "id": {"type": "string"},
+                        "label": {"type": "string"},
+                        "kind": {"type": "string"},
+                    },
+                    ["id", "label", "kind"],
+                ),
+            },
+            "edges": {
+                "type": "array",
+                "items": _object_schema(
+                    {
+                        "from": {"type": "string"},
+                        "to": {"type": "string"},
+                        "relation": {"type": "string"},
+                    },
+                    ["from", "to", "relation"],
+                ),
+            },
+            "cycle": _string_array_schema(),
+            "structural_claim": {"type": "string"},
+        },
+        ["problem_statement", "germ", "nodes", "edges", "cycle", "structural_claim"],
+    )
+
+
+def minimal_reread_draft_version_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "version_id": {"type": "string"},
+            "used_graph_nodes": _string_array_schema(),
+            "text": {"type": "string"},
+            "intended_afterimage": {"type": "string"},
+            "known_weakness": {"type": "string"},
+        },
+        ["version_id", "used_graph_nodes", "text", "intended_afterimage", "known_weakness"],
+    )
+
+
+def minimal_reread_first_read_trace_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "draft_version_id": {"type": "string"},
+            "opening_read": {"type": "string"},
+            "noticed_evidence": _string_array_schema(),
+            "missed_evidence": _string_array_schema(),
+            "reader_state": _free_object_schema(),
+            "blind_spots": _string_array_schema(),
+        },
+        [
+            "draft_version_id",
+            "opening_read",
+            "noticed_evidence",
+            "missed_evidence",
+            "reader_state",
+            "blind_spots",
+        ],
+    )
+
+
+def minimal_reread_reread_trace_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "draft_version_id": {"type": "string"},
+            "opening_reread": {"type": "string"},
+            "changed_opening_words": _string_array_schema(),
+            "supporting_nodes": _string_array_schema(),
+            "supporting_passages": _string_array_schema(),
+            "reader_state": _free_object_schema(),
+            "cycle_used": _string_array_schema(),
+        },
+        [
+            "draft_version_id",
+            "opening_reread",
+            "changed_opening_words",
+            "supporting_nodes",
+            "supporting_passages",
+            "reader_state",
+            "cycle_used",
+        ],
+    )
+
+
+def minimal_reread_failure_diagnosis_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "failure_id": {"type": "string"},
+            "diagnosed_failure": {"type": "string"},
+            "evidence": _free_object_schema(),
+            "severity": {"type": "string"},
+            "repair_requirement": {"type": "string"},
+        },
+        ["failure_id", "diagnosed_failure", "evidence", "severity", "repair_requirement"],
+    )
+
+
+def minimal_reread_intervention_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "intervention_id": {"type": "string"},
+            "targets_failure_id": {"type": "string"},
+            "operation": {"type": "string"},
+            "target_passage": {"type": "string"},
+            "replacement_strategy": _string_array_schema(),
+            "affected_graph_nodes": _string_array_schema(),
+            "expected_effect": {"type": "string"},
+        },
+        [
+            "intervention_id",
+            "targets_failure_id",
+            "operation",
+            "target_passage",
+            "replacement_strategy",
+            "affected_graph_nodes",
+            "expected_effect",
+        ],
+    )
+
+
+def minimal_reread_recomposed_draft_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "version_id": {"type": "string"},
+            "source_version_id": {"type": "string"},
+            "intervention_id": {"type": "string"},
+            "text": {"type": "string"},
+            "change_log": _string_array_schema(),
+        },
+        ["version_id", "source_version_id", "intervention_id", "text", "change_log"],
+    )
+
+
+def minimal_reread_counterfactual_result_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "counterfactual_id": {"type": "string"},
+            "tested_condition": {"type": "string"},
+            "baseline_version_id": {"type": "string"},
+            "intervention_version_id": {"type": "string"},
+            "predicted_without_intervention": _free_object_schema(),
+            "predicted_with_intervention": _free_object_schema(),
+            "delta": _free_object_schema(),
+            "intervention_id": {"type": "string"},
+            "uses_previous_reread_trace_confidence": {"type": "number"},
+        },
+        [
+            "counterfactual_id",
+            "tested_condition",
+            "baseline_version_id",
+            "intervention_version_id",
+            "predicted_without_intervention",
+            "predicted_with_intervention",
+            "delta",
+            "intervention_id",
+            "uses_previous_reread_trace_confidence",
+        ],
+    )
+
+
+def minimal_reread_irreducibility_report_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "load_bearing_elements": {
+                "type": "array",
+                "items": _object_schema(
+                    {
+                        "element": {"type": "string"},
+                        "why_irreducible": {"type": "string"},
+                    },
+                    ["element", "why_irreducible"],
+                ),
+            },
+            "germ_afterimage_dependency": _free_object_schema(),
+            "counterfactual_delta": _free_object_schema(),
+            "verdict": {"type": "string"},
+        },
+        [
+            "load_bearing_elements",
+            "germ_afterimage_dependency",
+            "counterfactual_delta",
+            "verdict",
+        ],
+    )
+
+
+def minimal_reread_gate_report_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "gate_name": {"type": "string"},
+            "passed": {"type": "boolean"},
+            "blocking_defects": _string_array_schema(),
+            "gate_scores": _free_object_schema(),
+            "summary_verdict": {"type": "string"},
+        },
+        ["gate_name", "passed", "blocking_defects", "gate_scores", "summary_verdict"],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -299,6 +639,30 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return abi_ear_refined_invention_json_schema()
     if schema == ABI_EAR_REREAD_TRACE_SCHEMA:
         return abi_ear_reread_trace_json_schema()
+    if schema == REREAD_FORMAL_PROBLEM_SCHEMA:
+        return minimal_reread_formal_problem_json_schema()
+    if schema == REREAD_GERM_AFTERIMAGE_PAIR_SCHEMA:
+        return minimal_reread_germ_afterimage_pair_json_schema()
+    if schema == REREAD_CONSEQUENCE_GRAPH_SCHEMA:
+        return minimal_reread_consequence_graph_json_schema()
+    if schema == REREAD_DRAFT_VERSION_SCHEMA:
+        return minimal_reread_draft_version_json_schema()
+    if schema == REREAD_FIRST_READ_TRACE_SCHEMA:
+        return minimal_reread_first_read_trace_json_schema()
+    if schema == REREAD_REREAD_TRACE_SCHEMA:
+        return minimal_reread_reread_trace_json_schema()
+    if schema == REREAD_FAILURE_DIAGNOSIS_SCHEMA:
+        return minimal_reread_failure_diagnosis_json_schema()
+    if schema == REREAD_INTERVENTION_SCHEMA:
+        return minimal_reread_intervention_json_schema()
+    if schema == REREAD_RECOMPOSED_DRAFT_SCHEMA:
+        return minimal_reread_recomposed_draft_json_schema()
+    if schema == REREAD_COUNTERFACTUAL_RESULT_SCHEMA:
+        return minimal_reread_counterfactual_result_json_schema()
+    if schema == REREAD_IRREDUCIBILITY_REPORT_SCHEMA:
+        return minimal_reread_irreducibility_report_json_schema()
+    if schema == REREAD_GATE_REPORT_SCHEMA:
+        return minimal_reread_gate_report_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -326,6 +690,30 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_abi_ear_refined_invention(payload)
     if schema == ABI_EAR_REREAD_TRACE_SCHEMA:
         return _validate_abi_ear_reread_trace(payload)
+    if schema == REREAD_FORMAL_PROBLEM_SCHEMA:
+        return _validate_reread_formal_problem(payload)
+    if schema == REREAD_GERM_AFTERIMAGE_PAIR_SCHEMA:
+        return _validate_reread_germ_afterimage_pair(payload)
+    if schema == REREAD_CONSEQUENCE_GRAPH_SCHEMA:
+        return _validate_reread_consequence_graph(payload)
+    if schema == REREAD_DRAFT_VERSION_SCHEMA:
+        return _validate_reread_draft_version(payload)
+    if schema == REREAD_FIRST_READ_TRACE_SCHEMA:
+        return _validate_reread_first_read_trace(payload)
+    if schema == REREAD_REREAD_TRACE_SCHEMA:
+        return _validate_reread_reread_trace(payload)
+    if schema == REREAD_FAILURE_DIAGNOSIS_SCHEMA:
+        return _validate_reread_failure_diagnosis(payload)
+    if schema == REREAD_INTERVENTION_SCHEMA:
+        return _validate_reread_intervention(payload)
+    if schema == REREAD_RECOMPOSED_DRAFT_SCHEMA:
+        return _validate_reread_recomposed_draft(payload)
+    if schema == REREAD_COUNTERFACTUAL_RESULT_SCHEMA:
+        return _validate_reread_counterfactual_result(payload)
+    if schema == REREAD_IRREDUCIBILITY_REPORT_SCHEMA:
+        return _validate_reread_irreducibility_report(payload)
+    if schema == REREAD_GATE_REPORT_SCHEMA:
+        return _validate_reread_gate_report(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -494,6 +882,238 @@ def _validate_abi_ear_reread_trace(payload: dict[str, Any]) -> dict[str, Any]:
         "supporting_lines_or_passages": payload["supporting_lines_or_passages"],
         "reread_gain_estimate": float(payload["reread_gain_estimate"]),
         "unsupported_claims": payload["unsupported_claims"],
+    }
+
+
+def _validate_reread_formal_problem(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("benchmark_input", "problem_statement"):
+        _require_type(payload, key, str)
+    for key in ("initial_reader_state", "target_reader_state"):
+        _require_type(payload, key, dict)
+    for key in ("success_conditions", "forbidden_shortcuts"):
+        _require_string_list(payload, key)
+    return {
+        "benchmark_input": payload["benchmark_input"],
+        "problem_statement": payload["problem_statement"],
+        "initial_reader_state": payload["initial_reader_state"],
+        "target_reader_state": payload["target_reader_state"],
+        "success_conditions": payload["success_conditions"],
+        "forbidden_shortcuts": payload["forbidden_shortcuts"],
+    }
+
+
+def _validate_reread_germ_afterimage_pair(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("germ", "afterimage"):
+        _require_type(payload, key, str)
+    _require_type(payload, "reader_state_delta", dict)
+    _require_string_list(payload, "load_bearing_words")
+    return {
+        "germ": payload["germ"],
+        "afterimage": payload["afterimage"],
+        "reader_state_delta": payload["reader_state_delta"],
+        "load_bearing_words": payload["load_bearing_words"],
+    }
+
+
+def _validate_reread_consequence_graph(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("problem_statement", "germ", "structural_claim"):
+        _require_type(payload, key, str)
+    _require_type(payload, "nodes", list)
+    _require_type(payload, "edges", list)
+    _require_string_list(payload, "cycle")
+    nodes = [
+        _validate_object(node, f"nodes[{index}]", ("id", "label", "kind"))
+        for index, node in enumerate(payload["nodes"])
+    ]
+    edges = [
+        _validate_object(edge, f"edges[{index}]", ("from", "to", "relation"))
+        for index, edge in enumerate(payload["edges"])
+    ]
+    return {
+        "problem_statement": payload["problem_statement"],
+        "germ": payload["germ"],
+        "nodes": nodes,
+        "edges": edges,
+        "cycle": payload["cycle"],
+        "structural_claim": payload["structural_claim"],
+    }
+
+
+def _validate_reread_draft_version(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("version_id", "text", "intended_afterimage", "known_weakness"):
+        _require_type(payload, key, str)
+    _require_string_list(payload, "used_graph_nodes")
+    return {
+        "version_id": payload["version_id"],
+        "used_graph_nodes": payload["used_graph_nodes"],
+        "text": payload["text"],
+        "intended_afterimage": payload["intended_afterimage"],
+        "known_weakness": payload["known_weakness"],
+    }
+
+
+def _validate_reread_first_read_trace(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("draft_version_id", "opening_read"):
+        _require_type(payload, key, str)
+    for key in ("noticed_evidence", "missed_evidence", "blind_spots"):
+        _require_string_list(payload, key)
+    _require_type(payload, "reader_state", dict)
+    return {
+        "draft_version_id": payload["draft_version_id"],
+        "opening_read": payload["opening_read"],
+        "noticed_evidence": payload["noticed_evidence"],
+        "missed_evidence": payload["missed_evidence"],
+        "reader_state": payload["reader_state"],
+        "blind_spots": payload["blind_spots"],
+    }
+
+
+def _validate_reread_reread_trace(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("draft_version_id", "opening_reread"):
+        _require_type(payload, key, str)
+    for key in ("changed_opening_words", "supporting_nodes", "supporting_passages", "cycle_used"):
+        _require_string_list(payload, key)
+    _require_type(payload, "reader_state", dict)
+    return {
+        "draft_version_id": payload["draft_version_id"],
+        "opening_reread": payload["opening_reread"],
+        "changed_opening_words": payload["changed_opening_words"],
+        "supporting_nodes": payload["supporting_nodes"],
+        "supporting_passages": payload["supporting_passages"],
+        "reader_state": payload["reader_state"],
+        "cycle_used": payload["cycle_used"],
+    }
+
+
+def _validate_reread_failure_diagnosis(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("failure_id", "diagnosed_failure", "severity", "repair_requirement"):
+        _require_type(payload, key, str)
+    _require_type(payload, "evidence", dict)
+    return {
+        "failure_id": payload["failure_id"],
+        "diagnosed_failure": payload["diagnosed_failure"],
+        "evidence": payload["evidence"],
+        "severity": payload["severity"],
+        "repair_requirement": payload["repair_requirement"],
+    }
+
+
+def _validate_reread_intervention(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "intervention_id",
+        "targets_failure_id",
+        "operation",
+        "target_passage",
+        "expected_effect",
+    ):
+        _require_type(payload, key, str)
+    for key in ("replacement_strategy", "affected_graph_nodes"):
+        _require_string_list(payload, key)
+    return {
+        "intervention_id": payload["intervention_id"],
+        "targets_failure_id": payload["targets_failure_id"],
+        "operation": payload["operation"],
+        "target_passage": payload["target_passage"],
+        "replacement_strategy": payload["replacement_strategy"],
+        "affected_graph_nodes": payload["affected_graph_nodes"],
+        "expected_effect": payload["expected_effect"],
+    }
+
+
+def _validate_reread_recomposed_draft(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("version_id", "source_version_id", "intervention_id", "text"):
+        _require_type(payload, key, str)
+    _require_string_list(payload, "change_log")
+    return {
+        "version_id": payload["version_id"],
+        "source_version_id": payload["source_version_id"],
+        "intervention_id": payload["intervention_id"],
+        "text": payload["text"],
+        "change_log": payload["change_log"],
+    }
+
+
+def _validate_reread_counterfactual_result(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "counterfactual_id",
+        "tested_condition",
+        "baseline_version_id",
+        "intervention_version_id",
+        "intervention_id",
+    ):
+        _require_type(payload, key, str)
+    for key in ("predicted_without_intervention", "predicted_with_intervention", "delta"):
+        _require_type(payload, key, dict)
+    _require_number(payload, "uses_previous_reread_trace_confidence")
+    delta = payload["delta"]
+    if "targeted_failure_reduced" not in delta:
+        raise ModelValidationError("delta.targeted_failure_reduced is required")
+    if not isinstance(delta["targeted_failure_reduced"], bool):
+        raise ModelValidationError("delta.targeted_failure_reduced must be bool")
+    return {
+        "counterfactual_id": payload["counterfactual_id"],
+        "tested_condition": payload["tested_condition"],
+        "baseline_version_id": payload["baseline_version_id"],
+        "intervention_version_id": payload["intervention_version_id"],
+        "predicted_without_intervention": payload["predicted_without_intervention"],
+        "predicted_with_intervention": payload["predicted_with_intervention"],
+        "delta": payload["delta"],
+        "intervention_id": payload["intervention_id"],
+        "uses_previous_reread_trace_confidence": float(
+            payload["uses_previous_reread_trace_confidence"]
+        ),
+    }
+
+
+def _validate_reread_irreducibility_report(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "load_bearing_elements", list)
+    load_bearing_elements = [
+        _validate_object(
+            element,
+            f"load_bearing_elements[{index}]",
+            ("element", "why_irreducible"),
+        )
+        for index, element in enumerate(payload["load_bearing_elements"])
+    ]
+    _require_type(payload, "germ_afterimage_dependency", dict)
+    _require_type(payload, "counterfactual_delta", dict)
+    _require_type(payload, "verdict", str)
+    return {
+        "load_bearing_elements": load_bearing_elements,
+        "germ_afterimage_dependency": payload["germ_afterimage_dependency"],
+        "counterfactual_delta": payload["counterfactual_delta"],
+        "verdict": payload["verdict"],
+    }
+
+
+def _validate_reread_gate_report(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "gate_name", str)
+    _require_type(payload, "passed", bool)
+    _require_string_list(payload, "blocking_defects")
+    _require_type(payload, "gate_scores", dict)
+    _require_type(payload, "summary_verdict", str)
+    return {
+        "gate_name": payload["gate_name"],
+        "passed": payload["passed"],
+        "blocking_defects": payload["blocking_defects"],
+        "gate_scores": payload["gate_scores"],
+        "summary_verdict": payload["summary_verdict"],
+    }
+
+
+def _schema_with_properties(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": required,
+    }
+
+
+def _free_object_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": True,
     }
 
 

@@ -11,7 +11,7 @@ from abi.model_driver import ModelClientError, WorkerRequest
 from abi.model_schemas import (
     ABI_EAR_FIELD_MODEL_SCHEMA,
     ABI_EAR_GERM_ANALYSIS_SCHEMA,
-    LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS,
+    LIVE_MODEL_WORKER_SCHEMAS,
     json_schema_for_worker_schema,
 )
 
@@ -69,7 +69,7 @@ class OpenAIResponsesClient:
 
 
 def _schema_for_request(request: WorkerRequest) -> dict[str, Any] | None:
-    if request.schema in LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS:
+    if request.schema in LIVE_MODEL_WORKER_SCHEMAS:
         return {
             "label": request.schema.name,
             "json_schema": json_schema_for_worker_schema(request.schema),
