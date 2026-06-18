@@ -240,3 +240,27 @@ The OpenAI path refuses unless explicitly opted in, and still requires
 The packet remains non-final, not human-validated, not finalization-eligible,
 and includes a finalization-readiness report showing the current run is still
 blocked by the `final_artifact` profile.
+
+## Phase 16 Pilot Artifact Set
+
+Phase 16 prepares a source-frozen pilot artifact set for future validation
+without collecting human data, making validation claims, or passing final gates.
+The fake path requires no API key:
+
+```powershell
+.\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
+```
+
+The OpenAI path refuses unless explicitly opted in, and still requires
+`OPENAI_API_KEY` before any live model path could run:
+
+```powershell
+.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source
+.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source --allow-live-model --max-model-calls 36
+```
+
+The packet writes source filenames and hashes, a non-final Abi candidate
+reference, fake/fixture baselines in fake mode, a strongest-rival slot that does
+not satisfy the strongest-rival gate, a private neutral-label map, and a blinded
+reader bundle. Private source directories under `inputs/private/` are ignored by
+git.

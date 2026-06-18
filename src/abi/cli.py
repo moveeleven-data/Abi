@@ -50,6 +50,11 @@ from abi.modules.production_run import (
     PRODUCTION_RUN_MAX_MODEL_CALLS_DEFAULT,
     run_production_live_demo,
 )
+from abi.modules.pilot_artifact_set import (
+    PILOT_ARTIFACT_SET_CLIENTS,
+    PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT,
+    run_pilot_artifact_set,
+)
 from abi.modules.reread import run_reread_demo
 from abi.packets import read_json_file
 
@@ -231,6 +236,41 @@ def build_parser() -> argparse.ArgumentParser:
         default=FINAL_ARTIFACT_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for final-artifact workers.",
     )
+    pilot_parser = subparsers.add_parser(
+        "pilot",
+        help="Prepare pilot validation artifact sets",
+    )
+    pilot_subparsers = pilot_parser.add_subparsers(
+        dest="pilot_command",
+        required=True,
+    )
+    pilot_artifact_set_parser = pilot_subparsers.add_parser(
+        "artifact-set",
+        help="Build a source-frozen pilot artifact set",
+    )
+    pilot_artifact_set_parser.add_argument(
+        "--client",
+        choices=PILOT_ARTIFACT_SET_CLIENTS,
+        required=True,
+        help="Pilot artifact-set client path to use.",
+    )
+    pilot_artifact_set_parser.add_argument(
+        "--source-dir",
+        type=Path,
+        required=True,
+        help="Directory containing frozen source files for the pilot set.",
+    )
+    pilot_artifact_set_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow the OpenAI path to make live model calls.",
+    )
+    pilot_artifact_set_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for pilot artifact-set workers.",
+    )
     calibration_parser = subparsers.add_parser(
         "calibration",
         help="Run deterministic human calibration commands",
@@ -359,6 +399,14 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_final_artifact_packet(
             config,
             client_name=args.client,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
+    if args.command == "pilot" and args.pilot_command == "artifact-set":
+        return _cmd_pilot_artifact_set(
+            config,
+            client_name=args.client,
+            source_dir=args.source_dir,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
         )
@@ -577,6 +625,25 @@ def _cmd_final_artifact_packet(
     result = run_final_artifact_packet(
         config,
         client_name=client_name,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_pilot_artifact_set(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    source_dir: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_pilot_artifact_set(
+        config,
+        client_name=client_name,
+        source_dir=source_dir,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
     )

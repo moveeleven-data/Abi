@@ -15,6 +15,7 @@ db/*.sqlite
 db/*.sqlite-*
 runs/*
 outputs/*
+inputs/private/
 
 !runs/.gitkeep
 !outputs/.gitkeep
