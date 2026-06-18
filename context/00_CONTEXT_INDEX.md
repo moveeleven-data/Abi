@@ -192,3 +192,24 @@ For Phase 8, read:
 15. context/plans/PHASE_8_LIVE_ABI_EAR_PACKET.md
 
 Phase 8 implements the guarded live Abi Ear packet pipeline only.
+
+## Phase 9 reads:
+
+For Phase 9, read:
+
+1. AGENTS.md
+2. context/00_ARCHITECTURE_FREEZE.md
+3. context/00_CONTEXT_INDEX.md
+4. context/01_PROJECT_BRIEF.md
+5. context/02_ENGINEERING_CONTRACT.md
+6. context/04_ABI_REREAD_CORE_SPEC.md
+7. context/05_FAIL_CLOSED_CONTROLLER_SPEC.md
+8. context/06_DATA_MODEL.md
+9. context/08_GATES_AND_EVALUATION.md
+10. context/11_MODEL_READINESS_CONSOLIDATION_SPEC.md
+11. context/12_MODEL_DRIVER_FAKE_CLIENT_SPEC.md
+12. context/15_LIVE_ABI_EAR_PACKET_SPEC.md
+13. context/16_LIVE_MINIMAL_REREAD_LOOP_SPEC.md
+14. context/plans/PHASE_9_LIVE_MINIMAL_REREAD_LOOP.md
+
+Phase 9 implements the guarded live Minimal Reread loop only.
