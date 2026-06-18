@@ -162,3 +162,24 @@ The OpenAI path refuses unless explicitly opted in, and still requires
 .\.venv\Scripts\abi.exe reread live-demo --client openai
 .\.venv\Scripts\abi.exe reread live-demo --client openai --allow-live-model --max-model-calls 12
 ```
+
+## Phase 10 Controlled Production Run
+
+Phase 10 composes the production harness, guarded live Abi Ear packet, and
+guarded live Minimal Reread packet into a controlled source-to-artifact
+production packet. The fake path requires no API key:
+
+```powershell
+.\.venv\Scripts\abi.exe production live-demo --client fake
+```
+
+The OpenAI path refuses unless explicitly opted in, and still requires
+`OPENAI_API_KEY` before any client call:
+
+```powershell
+.\.venv\Scripts\abi.exe production live-demo --client openai
+.\.venv\Scripts\abi.exe production live-demo --client openai --allow-live-model --max-model-calls 24
+```
+
+The candidate artifact is marked non-final, not human-validated, and not
+finalization-eligible.

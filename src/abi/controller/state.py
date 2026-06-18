@@ -19,6 +19,7 @@ PHASE4_PRODUCTION_HARNESS_ACTIVE_PHASE = "phase4_production_harness"
 PHASE5_HUMAN_CALIBRATION_ACTIVE_PHASE = "phase5_human_calibration"
 PHASE8_LIVE_ABI_EAR_PACKET_ACTIVE_PHASE = "phase8_live_abi_ear_packet"
 PHASE9_LIVE_MINIMAL_REREAD_ACTIVE_PHASE = "phase9_live_minimal_reread"
+PHASE10_PRODUCTION_RUN_ACTIVE_PHASE = "phase10_source_to_artifact_production_run"
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,11 @@ from abi.modules.live_reread import (
     run_live_reread_packet_demo,
 )
 from abi.modules.production_harness import run_production_harness_demo
+from abi.modules.production_run import (
+    PRODUCTION_RUN_CLIENTS,
+    PRODUCTION_RUN_MAX_MODEL_CALLS_DEFAULT,
+    run_production_live_demo,
+)
 from abi.modules.reread import run_reread_demo
 from abi.packets import read_json_file
 
@@ -96,6 +101,35 @@ def build_parser() -> argparse.ArgumentParser:
     harness_parser = subparsers.add_parser("harness", help="Run deterministic production harness commands")
     harness_subparsers = harness_parser.add_subparsers(dest="harness_command", required=True)
     harness_subparsers.add_parser("demo", help="Run the deterministic production harness scaffold")
+    production_parser = subparsers.add_parser(
+        "production",
+        help="Run controlled source-to-artifact production commands",
+    )
+    production_subparsers = production_parser.add_subparsers(
+        dest="production_command",
+        required=True,
+    )
+    production_live_parser = production_subparsers.add_parser(
+        "live-demo",
+        help="Run the guarded source-to-artifact production scaffold",
+    )
+    production_live_parser.add_argument(
+        "--client",
+        choices=PRODUCTION_RUN_CLIENTS,
+        required=True,
+        help="Production packet client path to use.",
+    )
+    production_live_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow the OpenAI path to make live model calls.",
+    )
+    production_live_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=PRODUCTION_RUN_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed across upstream live packets.",
+    )
     calibration_parser = subparsers.add_parser(
         "calibration",
         help="Run deterministic human calibration commands",
@@ -202,6 +236,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "harness" and args.harness_command == "demo":
         return _cmd_harness_demo(config)
+    if args.command == "production" and args.production_command == "live-demo":
+        return _cmd_production_live_demo(
+            config,
+            client_name=args.client,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
     if args.command == "calibration" and args.calibration_command == "demo":
         return _cmd_calibration_demo(config)
     if args.command == "controller" and args.controller_command == "status":
@@ -336,6 +377,23 @@ def _cmd_harness_demo(config: AbiConfig) -> int:
     result = run_production_harness_demo(config)
     print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
     return 0
+
+
+def _cmd_production_live_demo(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_production_live_demo(
+        config,
+        client_name=client_name,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
 
 
 def _cmd_calibration_demo(config: AbiConfig) -> int:

@@ -44,6 +44,7 @@ def test_source_uses_no_model_or_api_client_imports():
         Path("src/abi/openai_adapter.py"),
         Path("src/abi/modules/live_abi_ear.py"),
         Path("src/abi/modules/live_reread.py"),
+        Path("src/abi/modules/production_run.py"),
     }
 
     for path in Path("src/abi").rglob("*.py"):
