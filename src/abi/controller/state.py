@@ -14,6 +14,7 @@ from abi.ids import run_id as make_run_id
 ACTIVE_STATUSES = ("initialized", "active")
 PHASE0_ACTIVE_PHASE = "phase0"
 PHASE1_ABI_EAR_ACTIVE_PHASE = "phase1_abi_ear"
+PHASE2_MINIMAL_REREAD_ACTIVE_PHASE = "phase2_minimal_reread"
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ from abi.controller.finalization import check_finalization
 from abi.controller.state import ensure_active_run, get_latest_run
 from abi.db import connect, get_counts, initialize_database
 from abi.modules.abi_ear import run_abi_ear_demo
+from abi.modules.reread import run_reread_demo
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     ear_parser = subparsers.add_parser("ear", help="Run deterministic Abi Ear commands")
     ear_subparsers = ear_parser.add_subparsers(dest="ear_command", required=True)
     ear_subparsers.add_parser("demo", help="Run the deterministic Abi Ear benchmark")
+    reread_parser = subparsers.add_parser("reread", help="Run deterministic minimal reread commands")
+    reread_subparsers = reread_parser.add_subparsers(dest="reread_command", required=True)
+    reread_subparsers.add_parser("demo", help="Run the deterministic minimal reread benchmark")
     return parser
 
 
@@ -45,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_finalize(config)
     if args.command == "ear" and args.ear_command == "demo":
         return _cmd_ear_demo(config)
+    if args.command == "reread" and args.reread_command == "demo":
+        return _cmd_reread_demo(config)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -101,6 +107,12 @@ def _cmd_finalize(config: AbiConfig) -> int:
 
 def _cmd_ear_demo(config: AbiConfig) -> int:
     result = run_abi_ear_demo(config)
+    print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_reread_demo(config: AbiConfig) -> int:
+    result = run_reread_demo(config)
     print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
     return 0
 

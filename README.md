@@ -32,3 +32,16 @@ Run it with:
 The command writes JSON artifacts under `runs/<run_id>/abi_ear/<packet_id>/`
 and registers each artifact in SQLite through the Phase 0 artifact registry. It
 does not make model calls or API calls.
+
+## Phase 2 Minimal Reread Demo
+
+Phase 2 adds a deterministic local minimal reread loop. Run it with:
+
+```powershell
+.\.venv\Scripts\abi.exe reread demo
+```
+
+The command ensures a deterministic Abi Ear packet exists, writes JSON artifacts
+under `runs/<run_id>/reread/<packet_id>/`, registers every artifact in SQLite,
+and leaves finalization fail-closed unless the required Phase 0 finalization
+gates are satisfied.
