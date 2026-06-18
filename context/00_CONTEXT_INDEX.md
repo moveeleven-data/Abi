@@ -334,3 +334,23 @@ For Phase 15, read:
 10. context/plans/PHASE_15_REAL_VALIDATION_PROTOCOL.md
 
 Phase 15 defines the real validation protocol only.
+
+## Phase 16 reads:
+
+For Phase 16, read:
+
+1. AGENTS.md
+2. README.md
+3. docs/phase14_operator_handoff/operator_handoff.md
+4. docs/phase15_real_validation_protocol/validation_protocol.md
+5. docs/phase15_real_validation_protocol/human_reader_protocol.md
+6. docs/phase15_real_validation_protocol/baseline_protocol.md
+7. docs/phase15_real_validation_protocol/raw_model_baseline_protocol.md
+8. docs/phase15_real_validation_protocol/strongest_rival_protocol.md
+9. docs/phase15_real_validation_protocol/blind_reread_task.md
+10. docs/phase15_real_validation_protocol/live_run_budget_plan.md
+11. docs/phase15_real_validation_protocol/evidence_to_gate_mapping.md
+12. context/23_FIRST_REAL_CANDIDATE_SET_SPEC.md
+13. context/plans/PHASE_16_FIRST_REAL_CANDIDATE_SET.md
+
+Phase 16 implements the pilot artifact-set generator only.
