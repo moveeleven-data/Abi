@@ -11,6 +11,12 @@ from abi.artifacts import artifact_to_dict, get_artifact, list_all_artifacts
 from abi.config import AbiConfig
 from abi.controller.control import inspect_active_run
 from abi.controller.finalization import check_finalization
+from abi.controller.policy import (
+    DEFAULT_FINALIZATION_PROFILE,
+    GATE_PROFILE_NAMES,
+    gate_catalog_to_dict,
+)
+from abi.controller.release_readiness import evaluate_release_readiness
 from abi.controller.state import ensure_active_run, get_latest_run, get_run, list_runs, run_to_dict
 from abi.db import connect, get_counts, initialize_database
 from abi.live_model import LIVE_WORKERS, run_live_abi_ear_worker
@@ -54,7 +60,34 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("init", help="Create Phase 0 folders, database, and an active run")
     subparsers.add_parser("status", help="Report current Phase 0 state")
-    subparsers.add_parser("finalize", help="Run fail-closed finalization checks")
+    finalize_parser = subparsers.add_parser("finalize", help="Run fail-closed finalization checks")
+    finalize_parser.add_argument(
+        "--profile",
+        choices=GATE_PROFILE_NAMES,
+        default=None,
+        help="Optional named finalization gate profile to evaluate.",
+    )
+    gate_parser = subparsers.add_parser("gate", help="Inspect gate profiles and catalog")
+    gate_subparsers = gate_parser.add_subparsers(dest="gate_command", required=True)
+    gate_subparsers.add_parser("list", help="List known gates and required profiles")
+    finalization_parser = subparsers.add_parser(
+        "finalization",
+        help="Inspect profile-aware finalization readiness",
+    )
+    finalization_subparsers = finalization_parser.add_subparsers(
+        dest="finalization_command",
+        required=True,
+    )
+    finalization_status_parser = finalization_subparsers.add_parser(
+        "status",
+        help="Emit a release-readiness report for a gate profile",
+    )
+    finalization_status_parser.add_argument(
+        "--profile",
+        choices=GATE_PROFILE_NAMES,
+        default=DEFAULT_FINALIZATION_PROFILE,
+        help="Gate profile to evaluate.",
+    )
     ear_parser = subparsers.add_parser("ear", help="Run deterministic Abi Ear commands")
     ear_subparsers = ear_parser.add_subparsers(dest="ear_command", required=True)
     ear_subparsers.add_parser("demo", help="Run the deterministic Abi Ear benchmark")
@@ -249,7 +282,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         return _cmd_status(config)
     if args.command == "finalize":
-        return _cmd_finalize(config)
+        return _cmd_finalize(config, profile=args.profile)
+    if args.command == "gate" and args.gate_command == "list":
+        return _cmd_gate_list()
+    if args.command == "finalization" and args.finalization_command == "status":
+        return _cmd_finalization_status(config, profile=args.profile)
     if args.command == "ear" and args.ear_command == "demo":
         return _cmd_ear_demo(config)
     if args.command == "ear" and args.ear_command == "live-demo":
@@ -348,7 +385,7 @@ def _cmd_status(config: AbiConfig) -> int:
     return 0
 
 
-def _cmd_finalize(config: AbiConfig) -> int:
+def _cmd_finalize(config: AbiConfig, *, profile: str | None = None) -> int:
     initialize_database(config)
     with connect(config.db_path) as connection:
         latest_run = get_latest_run(connection)
@@ -362,10 +399,45 @@ def _cmd_finalize(config: AbiConfig) -> int:
             }
             print(json.dumps(payload, indent=2, sort_keys=True))
             return 1
-        report = check_finalization(connection, run_id=latest_run.id)
+        report = check_finalization(connection, run_id=latest_run.id, profile=profile)
 
     print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     return 1 if report.refused else 0
+
+
+def _cmd_gate_list() -> int:
+    print(json.dumps(gate_catalog_to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_finalization_status(config: AbiConfig, *, profile: str) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        latest_run = get_latest_run(connection)
+        if latest_run is None:
+            payload = {
+                "run_id": None,
+                "profile": profile,
+                "eligible": False,
+                "missing_gates": [],
+                "failed_gates": [],
+                "blocking_defects": {},
+                "fixture_only_blockers": [],
+                "non_final_blockers": [],
+                "artifact_blockers": [],
+                "blockers": ["no run exists"],
+                "recommended_next_action": "run abi init before finalization checks",
+                "message": "Finalization status unavailable; no run exists.",
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return 0
+        report = evaluate_release_readiness(
+            connection,
+            run_id=latest_run.id,
+            profile=profile,
+        )
+    print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    return 0
 
 
 def _cmd_ear_demo(config: AbiConfig) -> int:

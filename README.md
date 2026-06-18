@@ -201,3 +201,20 @@ The OpenAI path refuses unless explicitly opted in, and still requires
 .\.venv\Scripts\abi.exe evaluation demo --client openai
 .\.venv\Scripts\abi.exe evaluation demo --client openai --allow-live-model --max-model-calls 12
 ```
+
+## Phase 12 Finalization Gate Policy
+
+Phase 12 adds named gate profiles and release-readiness reports. These commands
+emit JSON and do not generate a final artifact:
+
+```powershell
+.\.venv\Scripts\abi.exe gate list
+.\.venv\Scripts\abi.exe finalization status
+.\.venv\Scripts\abi.exe finalization status --profile final_artifact
+.\.venv\Scripts\abi.exe finalize --profile final_artifact
+```
+
+The `final_artifact` profile refuses fixture/candidate state until a real final
+artifact packet, non-fixture evidence, strongest-rival and raw-model baseline
+comparisons, hostile audit, real validation gate, and final operator approval
+are present.
