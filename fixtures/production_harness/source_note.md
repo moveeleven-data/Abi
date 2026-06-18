@@ -1,5 +1,7 @@
-The artifact should begin from a concrete ordinary object and make the ending change the beginning.
+# Table Benchmark Source Note
 
-The reader should not be told the theory first. The reader should encounter fragments, pressure, contradiction, and return.
+The table remains the benchmark object because it is ordinary enough to resist
+ornament and stable enough to carry causal pressure.
 
-The work should avoid generic mystical language, decorative symbolism, and thesis-summary closure.
+The production harness should preserve the sentence's small room, the unseen
+night, and the morning verification without importing a larger plot.

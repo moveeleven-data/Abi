@@ -1,7 +1,8 @@
-Symbolic abiogenesis means a symbolic system emerges from a germ.
+# Reread Theory Fragment
 
-For Abi, the machine process, artifact process, and reader process should share one pattern:
+A successful Abi artifact makes the opening sentence change its force after the
+reader has crossed the artifact once.
 
-germ -> differentiation -> separation -> pressure -> crisis -> joining -> reread transformation.
-
-The reader is not merely an evaluator. The reader is the final substrate in which the artwork instantiates itself.
+The source kernel should track claims, motifs, images, and risks separately so
+later production work can compose from explicit lineage rather than hidden
+context.

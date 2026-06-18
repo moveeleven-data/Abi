@@ -59,3 +59,15 @@ Phase 3 adds a policy-driven fail-closed controller surface:
 The controller commands inspect the active run, evaluate the required
 finalization gates through policy, and emit structured decisions or blocker
 reports. Finalization remains controller-owned and fail-closed.
+
+## Phase 4 Production Harness Demo
+
+Phase 4 adds a deterministic local production harness scaffold. Run it with:
+
+```powershell
+.\.venv\Scripts\abi.exe harness demo
+```
+
+The command reads fixture material from `fixtures/production_harness/`, writes
+JSON artifacts under `runs/<run_id>/harness/<packet_id>/`, registers every
+artifact in SQLite, and keeps finalization policy-driven and fail-closed.
