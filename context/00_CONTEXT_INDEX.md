@@ -295,3 +295,25 @@ For Phase 13, read:
 13. context/plans/PHASE_13_FINAL_ARTIFACT_AND_PAPER_PACKET.md
 
 Phase 13 implements the final-artifact candidate and paper packet scaffold only.
+
+## Phase 14 reads:
+
+For Phase 14, read:
+
+1. AGENTS.md
+2. README.md
+3. context/00_ARCHITECTURE_FREEZE.md
+4. context/00_CONTEXT_INDEX.md
+5. context/01_PROJECT_BRIEF.md
+6. context/02_ENGINEERING_CONTRACT.md
+7. context/05_FAIL_CLOSED_CONTROLLER_SPEC.md
+8. context/06_DATA_MODEL.md
+9. context/08_GATES_AND_EVALUATION.md
+10. context/17_SOURCE_TO_ARTIFACT_PRODUCTION_RUN_SPEC.md
+11. context/18_EVALUATION_BASELINES_SPEC.md
+12. context/19_FINALIZATION_GATE_POLICY_V2_SPEC.md
+13. context/20_FINAL_ARTIFACT_AND_PAPER_PACKET_SPEC.md
+14. context/21_REPO_AUDIT_OPERATOR_HANDOFF_SPEC.md
+15. context/plans/PHASE_14_REPO_AUDIT_OPERATOR_HANDOFF.md
+
+Phase 14 performs repo audit and operator handoff only.
