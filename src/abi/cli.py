@@ -18,6 +18,11 @@ from abi.model_calls import get_model_call, list_model_calls, model_call_to_dict
 from abi.model_driver import run_model_driver_demo
 from abi.modules.abi_ear import run_abi_ear_demo
 from abi.modules.human_calibration import run_human_calibration_demo
+from abi.modules.live_abi_ear import (
+    LIVE_ABI_EAR_CLIENTS,
+    LIVE_ABI_EAR_MAX_MODEL_CALLS_DEFAULT,
+    run_live_abi_ear_packet_demo,
+)
 from abi.modules.production_harness import run_production_harness_demo
 from abi.modules.reread import run_reread_demo
 from abi.packets import read_json_file
@@ -38,6 +43,27 @@ def build_parser() -> argparse.ArgumentParser:
     ear_parser = subparsers.add_parser("ear", help="Run deterministic Abi Ear commands")
     ear_subparsers = ear_parser.add_subparsers(dest="ear_command", required=True)
     ear_subparsers.add_parser("demo", help="Run the deterministic Abi Ear benchmark")
+    ear_live_parser = ear_subparsers.add_parser(
+        "live-demo",
+        help="Run the guarded live Abi Ear packet pipeline",
+    )
+    ear_live_parser.add_argument(
+        "--client",
+        choices=LIVE_ABI_EAR_CLIENTS,
+        required=True,
+        help="Packet model client to use.",
+    )
+    ear_live_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow the OpenAI client to make live model calls.",
+    )
+    ear_live_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=LIVE_ABI_EAR_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for the packet.",
+    )
     reread_parser = subparsers.add_parser("reread", help="Run deterministic minimal reread commands")
     reread_subparsers = reread_parser.add_subparsers(dest="reread_command", required=True)
     reread_subparsers.add_parser("demo", help="Run the deterministic minimal reread benchmark")
@@ -132,6 +158,13 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_finalize(config)
     if args.command == "ear" and args.ear_command == "demo":
         return _cmd_ear_demo(config)
+    if args.command == "ear" and args.ear_command == "live-demo":
+        return _cmd_ear_live_demo(
+            config,
+            client_name=args.client,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
     if args.command == "reread" and args.reread_command == "demo":
         return _cmd_reread_demo(config)
     if args.command == "harness" and args.harness_command == "demo":
@@ -224,6 +257,23 @@ def _cmd_ear_demo(config: AbiConfig) -> int:
     result = run_abi_ear_demo(config)
     print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
     return 0
+
+
+def _cmd_ear_live_demo(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_live_abi_ear_packet_demo(
+        config,
+        client_name=client_name,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
 
 
 def _cmd_reread_demo(config: AbiConfig) -> int:

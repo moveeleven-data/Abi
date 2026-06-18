@@ -1,4 +1,4 @@
-"""Isolated OpenAI live adapter for the Phase 7A guarded worker."""
+"""Isolated OpenAI live adapter for guarded workers."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from abi.model_driver import ModelClientError, WorkerRequest
 from abi.model_schemas import (
     ABI_EAR_FIELD_MODEL_SCHEMA,
     ABI_EAR_GERM_ANALYSIS_SCHEMA,
-    abi_ear_field_model_json_schema,
-    abi_ear_germ_analysis_json_schema,
+    LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS,
+    json_schema_for_worker_schema,
 )
 
 
@@ -69,19 +69,21 @@ class OpenAIResponsesClient:
 
 
 def _schema_for_request(request: WorkerRequest) -> dict[str, Any] | None:
-    if request.schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
+    if request.schema in LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS:
         return {
-            "label": "Abi Ear germ analysis",
-            "json_schema": abi_ear_germ_analysis_json_schema(),
-            "prompt_builder": _build_germ_analysis_prompt,
-        }
-    if request.schema == ABI_EAR_FIELD_MODEL_SCHEMA:
-        return {
-            "label": "Abi Ear field model",
-            "json_schema": abi_ear_field_model_json_schema(),
-            "prompt_builder": _build_field_model_prompt,
+            "label": request.schema.name,
+            "json_schema": json_schema_for_worker_schema(request.schema),
+            "prompt_builder": _prompt_builder_for_schema(request.schema),
         }
     return None
+
+
+def _prompt_builder_for_schema(schema: object) -> object:
+    if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
+        return _build_germ_analysis_prompt
+    if schema == ABI_EAR_FIELD_MODEL_SCHEMA:
+        return _build_field_model_prompt
+    return _build_live_packet_prompt
 
 
 def _build_germ_analysis_prompt(germ_text: str) -> str:
@@ -96,6 +98,15 @@ def _build_field_model_prompt(germ_text: str) -> str:
     return (
         "Build a compact Abi Ear field model for this germ sentence using the requested "
         "schema. Include only structural lists and a scale ceiling; do not compose prose. "
+        "Germ sentence:\n"
+        f"{germ_text}"
+    )
+
+
+def _build_live_packet_prompt(germ_text: str) -> str:
+    return (
+        "Produce the requested Abi Ear packet component as compact structured JSON. "
+        "Stay within the supplied schema and use fixture-level benchmark reasoning only. "
         "Germ sentence:\n"
         f"{germ_text}"
     )

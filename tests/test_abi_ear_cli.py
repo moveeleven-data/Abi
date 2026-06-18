@@ -42,6 +42,7 @@ def test_source_uses_no_model_or_api_client_imports():
     live_adapter_paths = {
         Path("src/abi/live_model.py"),
         Path("src/abi/openai_adapter.py"),
+        Path("src/abi/modules/live_abi_ear.py"),
     }
 
     for path in Path("src/abi").rglob("*.py"):

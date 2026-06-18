@@ -128,3 +128,20 @@ Install optional live dependencies only for a manual live smoke test:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[live]"
 ```
+
+## Phase 8 Guarded Live Abi Ear Packet
+
+Phase 8 adds a guarded live-packet scaffold without replacing the deterministic
+Abi Ear demo. The fake packet path requires no API key:
+
+```powershell
+.\.venv\Scripts\abi.exe ear live-demo --client fake
+```
+
+The OpenAI packet path refuses unless explicitly opted in, and still requires
+`OPENAI_API_KEY` before any client call:
+
+```powershell
+.\.venv\Scripts\abi.exe ear live-demo --client openai
+.\.venv\Scripts\abi.exe ear live-demo --client openai --allow-live-model --max-model-calls 8
+```

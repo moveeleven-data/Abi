@@ -65,6 +65,7 @@ class WorkerRequest:
     lineage_id: str | None = MODEL_DRIVER_LINEAGE_ID
     parent_ids: list[str] = field(default_factory=list)
     fixture_only: bool | None = True
+    output_dir: str | None = None
 
     def input_hash(self) -> str:
         return sha256_text(
@@ -167,7 +168,10 @@ class ModelDriver:
             request.schema.version,
             created_at,
         )
-        call_dir = self.config.run_dir(request.run_id) / "model_calls" / call_id
+        if request.output_dir is None:
+            call_dir = self.config.run_dir(request.run_id) / "model_calls" / call_id
+        else:
+            call_dir = Path(request.output_dir) / "model_calls" / call_id
         call_dir.mkdir(parents=True, exist_ok=True)
         raw_output_path = call_dir / "raw_output.txt"
         input_hash = request.input_hash()
