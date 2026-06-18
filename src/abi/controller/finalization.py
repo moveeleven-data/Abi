@@ -1,11 +1,12 @@
-"""Fail-closed finalization checks for Phase 0."""
+"""Policy-driven fail-closed finalization checks."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import sqlite3
 
-from abi.controller.gates import REQUIRED_PHASE0_GATES, GateRecord, required_gate_records
+from abi.controller.gates import REQUIRED_PHASE0_GATES
+from abi.controller.policy import DEFAULT_FINALIZATION_POLICY, GatePolicy, evaluate_gate_policy
 
 
 @dataclass(frozen=True)
@@ -32,19 +33,20 @@ def check_finalization(
     run_id: str,
     required_gates: tuple[str, ...] = REQUIRED_PHASE0_GATES,
     lineage_id: str | None = None,
+    policy: GatePolicy | None = None,
 ) -> FinalizationReport:
-    gate_map = required_gate_records(
-        connection,
-        run_id=run_id,
+    gate_policy = policy or GatePolicy(
+        name=DEFAULT_FINALIZATION_POLICY.name,
         required_gates=required_gates,
         lineage_id=lineage_id,
     )
-    missing_gates = [gate_name for gate_name, gate in gate_map.items() if gate is None]
-    failed_gates = [
-        gate_name
-        for gate_name, gate in gate_map.items()
-        if gate is not None and _gate_blocks_finalization(gate)
-    ]
+    evaluation = evaluate_gate_policy(
+        connection,
+        run_id=run_id,
+        policy=gate_policy,
+    )
+    missing_gates = evaluation.missing_gates
+    failed_gates = _legacy_failed_gates(evaluation.failed_gates, evaluation.blocking_defects)
 
     if missing_gates or failed_gates:
         details = []
@@ -69,5 +71,12 @@ def check_finalization(
     )
 
 
-def _gate_blocks_finalization(gate: GateRecord) -> bool:
-    return not gate.passed or bool(gate.blocking_defects)
+def _legacy_failed_gates(
+    failed_gates: list[str],
+    blocking_defects: dict[str, list[str]],
+) -> list[str]:
+    legacy_failed = list(failed_gates)
+    legacy_failed.extend(
+        gate_name for gate_name in blocking_defects if gate_name not in legacy_failed
+    )
+    return legacy_failed

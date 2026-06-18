@@ -45,3 +45,17 @@ The command ensures a deterministic Abi Ear packet exists, writes JSON artifacts
 under `runs/<run_id>/reread/<packet_id>/`, registers every artifact in SQLite,
 and leaves finalization fail-closed unless the required Phase 0 finalization
 gates are satisfied.
+
+## Phase 3 Controller Commands
+
+Phase 3 adds a policy-driven fail-closed controller surface:
+
+```powershell
+.\.venv\Scripts\abi.exe controller status
+.\.venv\Scripts\abi.exe controller blockers
+.\.venv\Scripts\abi.exe controller demo
+```
+
+The controller commands inspect the active run, evaluate the required
+finalization gates through policy, and emit structured decisions or blocker
+reports. Finalization remains controller-owned and fail-closed.

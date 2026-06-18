@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 from abi.config import AbiConfig
+from abi.controller.control import inspect_active_run
 from abi.controller.finalization import check_finalization
 from abi.controller.state import ensure_active_run, get_latest_run
 from abi.db import connect, get_counts, initialize_database
@@ -33,6 +34,14 @@ def build_parser() -> argparse.ArgumentParser:
     reread_parser = subparsers.add_parser("reread", help="Run deterministic minimal reread commands")
     reread_subparsers = reread_parser.add_subparsers(dest="reread_command", required=True)
     reread_subparsers.add_parser("demo", help="Run the deterministic minimal reread benchmark")
+    controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
+    controller_subparsers = controller_parser.add_subparsers(
+        dest="controller_command",
+        required=True,
+    )
+    controller_subparsers.add_parser("status", help="Emit structured controller decision status")
+    controller_subparsers.add_parser("blockers", help="Emit structured controller blocker report")
+    controller_subparsers.add_parser("demo", help="Inspect or create a run and show refusal decision")
     return parser
 
 
@@ -51,6 +60,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_ear_demo(config)
     if args.command == "reread" and args.reread_command == "demo":
         return _cmd_reread_demo(config)
+    if args.command == "controller" and args.controller_command == "status":
+        return _cmd_controller_status(config)
+    if args.command == "controller" and args.controller_command == "blockers":
+        return _cmd_controller_blockers(config)
+    if args.command == "controller" and args.controller_command == "demo":
+        return _cmd_controller_demo(config)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -114,6 +129,44 @@ def _cmd_ear_demo(config: AbiConfig) -> int:
 def _cmd_reread_demo(config: AbiConfig) -> int:
     result = run_reread_demo(config)
     print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_controller_status(config: AbiConfig) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        decision = inspect_active_run(connection)
+    if decision is None:
+        payload = {
+            "decision": None,
+            "message": "No active run exists.",
+        }
+    else:
+        payload = decision.to_dict()
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_controller_blockers(config: AbiConfig) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        decision = inspect_active_run(connection)
+    if decision is None:
+        payload = {
+            "blocker_report": None,
+            "message": "No active run exists.",
+        }
+    else:
+        payload = decision.blocker_report.to_dict()
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_controller_demo(config: AbiConfig) -> int:
+    ensure_active_run(config)
+    with connect(config.db_path) as connection:
+        decision = inspect_active_run(connection)
+    print(json.dumps(decision.to_dict(), indent=2, sort_keys=True))
     return 0
 
 
