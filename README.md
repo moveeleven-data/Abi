@@ -96,3 +96,14 @@ Artifact and run registry inspection:
 .\.venv\Scripts\abi.exe run show <run_id>
 .\.venv\Scripts\abi.exe run latest
 ```
+
+## Phase 6B Fake Model Driver
+
+Phase 6B adds a sealed fake-client model-driver layer for structured-output
+validation. It does not make live model calls.
+
+```powershell
+.\.venv\Scripts\abi.exe model-driver demo
+.\.venv\Scripts\abi.exe model-call list
+.\.venv\Scripts\abi.exe model-call show <model_call_id>
+```

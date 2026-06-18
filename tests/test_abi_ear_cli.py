@@ -38,7 +38,6 @@ def test_source_uses_no_model_or_api_client_imports():
         "api_key",
         "chat.completions",
         "responses.create",
-        "model_driver",
     }
 
     for path in Path("src/abi").rglob("*.py"):

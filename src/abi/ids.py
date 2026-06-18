@@ -47,3 +47,22 @@ def gate_id(run_id_value: str, gate_name: str, lineage_id: str | None = None) ->
             "gate_name": gate_name,
         },
     )
+
+
+def model_call_id(
+    run_id_value: str,
+    worker_role: str,
+    schema_name: str,
+    schema_version: str,
+    created_at: str,
+) -> str:
+    return stable_id(
+        "model_call",
+        {
+            "run_id": run_id_value,
+            "worker_role": worker_role,
+            "schema_name": schema_name,
+            "schema_version": schema_version,
+            "created_at": created_at,
+        },
+    )

@@ -52,9 +52,35 @@ CREATE TABLE IF NOT EXISTS gates (
     UNIQUE (run_id, lineage_id, gate_name)
 );
 
+CREATE TABLE IF NOT EXISTS model_calls (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    worker_role TEXT NOT NULL,
+    prompt_contract_id TEXT NOT NULL,
+    input_artifact_ids_json TEXT NOT NULL,
+    input_packet_path TEXT,
+    input_hash TEXT NOT NULL,
+    schema_name TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    raw_output_path TEXT,
+    parsed_output_artifact_id TEXT,
+    status TEXT NOT NULL,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    cost_micros INTEGER,
+    FOREIGN KEY (run_id) REFERENCES runs(id),
+    FOREIGN KEY (parsed_output_artifact_id) REFERENCES artifacts(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id);
 CREATE INDEX IF NOT EXISTS idx_gates_run_id ON gates(run_id);
+CREATE INDEX IF NOT EXISTS idx_model_calls_run_id ON model_calls(run_id);
 """
 
 

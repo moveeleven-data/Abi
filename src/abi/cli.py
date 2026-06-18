@@ -13,6 +13,8 @@ from abi.controller.control import inspect_active_run
 from abi.controller.finalization import check_finalization
 from abi.controller.state import ensure_active_run, get_latest_run, get_run, list_runs, run_to_dict
 from abi.db import connect, get_counts, initialize_database
+from abi.model_calls import get_model_call, list_model_calls, model_call_to_dict
+from abi.model_driver import run_model_driver_demo
 from abi.modules.abi_ear import run_abi_ear_demo
 from abi.modules.human_calibration import run_human_calibration_demo
 from abi.modules.production_harness import run_production_harness_demo
@@ -72,6 +74,32 @@ def build_parser() -> argparse.ArgumentParser:
     run_show_parser = run_subparsers.add_parser("show", help="Show one run")
     run_show_parser.add_argument("run_id", help="Run ID")
     run_subparsers.add_parser("latest", help="Show the latest run")
+    model_driver_parser = subparsers.add_parser(
+        "model-driver",
+        help="Run sealed fake-client model-driver commands",
+    )
+    model_driver_subparsers = model_driver_parser.add_subparsers(
+        dest="model_driver_command",
+        required=True,
+    )
+    model_driver_demo_parser = model_driver_subparsers.add_parser(
+        "demo",
+        help="Run the fake-client structured-output demo",
+    )
+    model_driver_demo_parser.add_argument(
+        "--mode",
+        choices=("valid", "minimal", "invalid_json", "malformed", "failure"),
+        default="valid",
+        help="Fake client mode.",
+    )
+    model_call_parser = subparsers.add_parser("model-call", help="Inspect model call records")
+    model_call_subparsers = model_call_parser.add_subparsers(
+        dest="model_call_command",
+        required=True,
+    )
+    model_call_subparsers.add_parser("list", help="List model call records")
+    model_call_show_parser = model_call_subparsers.add_parser("show", help="Show one model call")
+    model_call_show_parser.add_argument("model_call_id", help="Model call ID")
     return parser
 
 
@@ -110,6 +138,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run_show(config, args.run_id)
     if args.command == "run" and args.run_command == "latest":
         return _cmd_run_latest(config)
+    if args.command == "model-driver" and args.model_driver_command == "demo":
+        return _cmd_model_driver_demo(config, args.mode)
+    if args.command == "model-call" and args.model_call_command == "list":
+        return _cmd_model_call_list(config)
+    if args.command == "model-call" and args.model_call_command == "show":
+        return _cmd_model_call_show(config, args.model_call_id)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -295,6 +329,36 @@ def _cmd_run_latest(config: AbiConfig) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 1
     print(json.dumps({"run": run_to_dict(run)}, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_model_driver_demo(config: AbiConfig, mode: str) -> int:
+    result = run_model_driver_demo(config, mode=mode)
+    print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
+    return 0 if result.accepted else 1
+
+
+def _cmd_model_call_list(config: AbiConfig) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        records = list_model_calls(connection)
+    payload = {"model_calls": [model_call_to_dict(record) for record in records]}
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_model_call_show(config: AbiConfig, model_call_id: str) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        record = get_model_call(connection, model_call_id)
+    if record is None:
+        payload = {
+            "model_call": None,
+            "message": f"Model call not found: {model_call_id}",
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 1
+    print(json.dumps({"model_call": model_call_to_dict(record)}, indent=2, sort_keys=True))
     return 0
 
 

@@ -37,6 +37,7 @@ def build_artifact_envelope(
     created_by: str,
     payload: object,
     fixture_only: bool | None = None,
+    model_call_id: str | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": PACKET_SCHEMA_VERSION,
@@ -46,7 +47,7 @@ def build_artifact_envelope(
         "parent_ids": list(parent_ids),
         "created_by": created_by,
         "fixture_only": fixture_only,
-        "model_call_id": None,
+        "model_call_id": model_call_id,
         "payload": payload,
     }
 
@@ -61,6 +62,7 @@ class PacketWriter:
         lineage_id: str | None,
         created_by: str,
         fixture_only: bool | None = None,
+        model_call_id: str | None = None,
     ) -> None:
         self.connection = connection
         self.run_id = run_id
@@ -68,6 +70,7 @@ class PacketWriter:
         self.lineage_id = lineage_id
         self.created_by = created_by
         self.fixture_only = fixture_only
+        self.model_call_id = model_call_id
         self.packet_dir.mkdir(parents=True, exist_ok=True)
 
     def write_artifact(
@@ -85,6 +88,7 @@ class PacketWriter:
             parent_ids=parent_id_values,
             created_by=self.created_by,
             fixture_only=self.fixture_only,
+            model_call_id=self.model_call_id,
             payload=payload,
         )
         path.write_text(_canonical_json(envelope), encoding="utf-8", newline="\n")
