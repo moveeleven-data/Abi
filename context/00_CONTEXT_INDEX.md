@@ -96,3 +96,20 @@ For Phase 5, read:
 10. context/plans/PHASE_5_HUMAN_CALIBRATION.md
 
 Phase 5 implements the deterministic Human Calibration / Paper-Grade Evaluation scaffold only.
+
+## Phase 6A-lite reads:
+
+For Phase 6A-lite, read:
+
+1. AGENTS.md
+2. context/00_ARCHITECTURE_FREEZE.md
+3. context/00_CONTEXT_INDEX.md
+4. context/01_PROJECT_BRIEF.md
+5. context/02_ENGINEERING_CONTRACT.md
+6. context/05_FAIL_CLOSED_CONTROLLER_SPEC.md
+7. context/06_DATA_MODEL.md
+8. context/08_GATES_AND_EVALUATION.md
+9. context/11_MODEL_READINESS_CONSOLIDATION_SPEC.md
+10. context/plans/PHASE_6A_LITE_MODEL_READINESS.md
+
+Phase 6A-lite implements narrow model-readiness consolidation only.
