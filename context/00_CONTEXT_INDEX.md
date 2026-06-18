@@ -317,3 +317,20 @@ For Phase 14, read:
 15. context/plans/PHASE_14_REPO_AUDIT_OPERATOR_HANDOFF.md
 
 Phase 14 performs repo audit and operator handoff only.
+
+## Phase 15 reads:
+
+For Phase 15, read:
+
+1. AGENTS.md
+2. README.md
+3. docs/phase14_operator_handoff/operator_handoff.md
+4. docs/phase14_operator_handoff/audit_report.md
+5. docs/phase14_operator_handoff/known_blockers.md
+6. docs/phase14_operator_handoff/next_validation_roadmap.md
+7. context/19_FINALIZATION_GATE_POLICY_V2_SPEC.md
+8. context/20_FINAL_ARTIFACT_AND_PAPER_PACKET_SPEC.md
+9. context/22_REAL_VALIDATION_PROTOCOL_SPEC.md
+10. context/plans/PHASE_15_REAL_VALIDATION_PROTOCOL.md
+
+Phase 15 defines the real validation protocol only.
