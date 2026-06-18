@@ -39,6 +39,10 @@ def test_source_uses_no_model_or_api_client_imports():
         "chat.completions",
         "responses.create",
     }
+    live_adapter_paths = {
+        Path("src/abi/live_model.py"),
+        Path("src/abi/openai_adapter.py"),
+    }
 
     for path in Path("src/abi").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
@@ -51,6 +55,8 @@ def test_source_uses_no_model_or_api_client_imports():
                 imported_roots.add(node.module.split(".", maxsplit=1)[0])
 
         assert not (imported_roots & forbidden_import_roots), path
+        if path in live_adapter_paths:
+            continue
         lowered = source.lower()
         for marker in forbidden_source_markers:
             assert marker not in lowered, path

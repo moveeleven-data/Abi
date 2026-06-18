@@ -13,6 +13,7 @@ from abi.controller.control import inspect_active_run
 from abi.controller.finalization import check_finalization
 from abi.controller.state import ensure_active_run, get_latest_run, get_run, list_runs, run_to_dict
 from abi.db import connect, get_counts, initialize_database
+from abi.live_model import LIVE_WORKER_ABI_EAR_GERM_ANALYSIS, run_live_abi_ear_germ_analysis
 from abi.model_calls import get_model_call, list_model_calls, model_call_to_dict
 from abi.model_driver import run_model_driver_demo
 from abi.modules.abi_ear import run_abi_ear_demo
@@ -92,6 +93,21 @@ def build_parser() -> argparse.ArgumentParser:
         default="valid",
         help="Fake client mode.",
     )
+    model_driver_live_parser = model_driver_subparsers.add_parser(
+        "live-demo",
+        help="Run the guarded live Abi Ear germ-analysis worker",
+    )
+    model_driver_live_parser.add_argument(
+        "--worker",
+        choices=(LIVE_WORKER_ABI_EAR_GERM_ANALYSIS,),
+        required=True,
+        help="Live worker to run.",
+    )
+    model_driver_live_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow the command to make a live model call.",
+    )
     model_call_parser = subparsers.add_parser("model-call", help="Inspect model call records")
     model_call_subparsers = model_call_parser.add_subparsers(
         dest="model_call_command",
@@ -140,6 +156,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run_latest(config)
     if args.command == "model-driver" and args.model_driver_command == "demo":
         return _cmd_model_driver_demo(config, args.mode)
+    if args.command == "model-driver" and args.model_driver_command == "live-demo":
+        return _cmd_model_driver_live_demo(
+            config,
+            worker=args.worker,
+            allow_live_model=args.allow_live_model,
+        )
     if args.command == "model-call" and args.model_call_command == "list":
         return _cmd_model_call_list(config)
     if args.command == "model-call" and args.model_call_command == "show":
@@ -336,6 +358,21 @@ def _cmd_model_driver_demo(config: AbiConfig, mode: str) -> int:
     result = run_model_driver_demo(config, mode=mode)
     print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
     return 0 if result.accepted else 1
+
+
+def _cmd_model_driver_live_demo(
+    config: AbiConfig,
+    *,
+    worker: str,
+    allow_live_model: bool,
+) -> int:
+    result = run_live_abi_ear_germ_analysis(
+        config,
+        worker=worker,
+        allow_live_model=allow_live_model,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
 
 
 def _cmd_model_call_list(config: AbiConfig) -> int:

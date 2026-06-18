@@ -30,6 +30,34 @@ ABI_EAR_GERM_ANALYSIS_SCHEMA = WorkerSchema(
 )
 
 
+def abi_ear_germ_analysis_json_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "germ_text": {"type": "string"},
+            "word_forces": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "word": {"type": "string"},
+                        "force": {"type": "string"},
+                    },
+                    "required": ["word", "force"],
+                },
+            },
+            "fertility_score": {"type": "number"},
+            "risks": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["germ_text", "word_forces", "fertility_score", "risks"],
+    }
+
+
 def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) -> dict[str, Any]:
     try:
         payload = json.loads(raw_output)

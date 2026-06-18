@@ -15,6 +15,9 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
+live = [
+    "openai>=2",
+]
 
 [project.scripts]
 abi = "abi.cli:main"

@@ -1,4 +1,4 @@
-"""Sealed fake-client model driver for Phase 6B structured outputs."""
+"""Sealed model driver for fake and guarded live structured outputs."""
 
 from __future__ import annotations
 
@@ -45,7 +45,11 @@ class ModelClient(Protocol):
         """Return raw structured output text or raise a client failure."""
 
 
-class FakeModelClientError(RuntimeError):
+class ModelClientError(RuntimeError):
+    """Raised by model clients to record client_failed calls."""
+
+
+class FakeModelClientError(ModelClientError):
     """Raised by the fake client to simulate client failure."""
 
 
@@ -170,7 +174,7 @@ class ModelDriver:
 
         try:
             raw_output = self.client.generate(request)
-        except FakeModelClientError as error:
+        except ModelClientError as error:
             failure_path = call_dir / "client_failure.json"
             failure_path.write_text(
                 _canonical_json({"error_message": str(error), "status": MODEL_CALL_CLIENT_FAILED}),
