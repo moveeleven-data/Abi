@@ -28,3 +28,21 @@ For Phase 1, read:
 10. context/plans/PHASE_1_ABI_EAR.md
 
 Phase 1 implements Abi Ear v1 with deterministic/stub workers only.
+
+## Phase 2 reads:
+
+For Phase 2, read:
+
+1. AGENTS.md
+2. context/00_ARCHITECTURE_FREEZE.md
+3. context/00_CONTEXT_INDEX.md
+4. context/01_PROJECT_BRIEF.md
+5. context/02_ENGINEERING_CONTRACT.md
+6. context/03_ABI_EAR_V1_SPEC.md
+7. context/04_ABI_REREAD_CORE_SPEC.md
+8. context/06_DATA_MODEL.md
+9. context/07_PROMPT_CONTRACTS.md
+10. context/08_GATES_AND_EVALUATION.md
+11. context/plans/PHASE_2_MINIMAL_REREAD.md
+
+Phase 2 implements Minimal Abi Reread with deterministic/stub workers only.
