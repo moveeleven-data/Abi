@@ -1,0 +1,25 @@
+{
+  "fixture_only": true,
+  "not_real_validation": true,
+  "reader_id": "fixture_reader_eval_001",
+  "protocol": "evaluation_trace_fixture_v1",
+  "candidate_label": "candidate_A",
+  "first_read": {
+    "literal_memory": ["table", "morning", "stillness", "return"],
+    "opening_interpretation": "A plain statement of persistence with mild unease.",
+    "retained_images": ["table", "morning light"],
+    "attention_drops": [],
+    "confusion_points": []
+  },
+  "reread": {
+    "changed_opening_interpretation": "The opening now reads as a germ for return without erasure.",
+    "changed_words": ["still", "morning"],
+    "details_that_gained_force": ["table", "surface", "remaining"],
+    "unsupported_depth_flags": []
+  },
+  "comparison": {
+    "preferred_label": "candidate_A",
+    "confidence": 0.65,
+    "reason": "Fixture comparison says candidate A has stronger opening transformation than the baseline."
+  }
+}
