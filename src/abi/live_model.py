@@ -9,13 +9,21 @@ import os
 from abi.config import AbiConfig
 from abi.controller.state import ensure_active_run
 from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
-from abi.model_schemas import ABI_EAR_GERM_ANALYSIS_SCHEMA, WorkerRole
+from abi.model_schemas import (
+    ABI_EAR_FIELD_MODEL_SCHEMA,
+    ABI_EAR_GERM_ANALYSIS_SCHEMA,
+    WorkerRole,
+    WorkerSchema,
+)
 
 
 LIVE_WORKER_ABI_EAR_GERM_ANALYSIS = "abi_ear_germ_analysis"
+LIVE_WORKER_ABI_EAR_FIELD_MODEL = "abi_ear_field_model"
+LIVE_WORKERS = (
+    LIVE_WORKER_ABI_EAR_GERM_ANALYSIS,
+    LIVE_WORKER_ABI_EAR_FIELD_MODEL,
+)
 LIVE_MODEL_DEFAULT = "gpt-5.5"
-LIVE_LINEAGE_ID = "phase7a_live_abi_ear_germ_analysis"
-LIVE_PROMPT_CONTRACT_ID = "phase7a.live.abi_ear_germ_analysis"
 LIVE_ABI_EAR_GERM_TEXT = "The table is still there in the morning."
 OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 ABI_OPENAI_MODEL_ENV = "ABI_OPENAI_MODEL"
@@ -28,7 +36,34 @@ class LiveModelCommandResult:
     driver_result: ModelDriverResult | None = None
 
 
-def run_live_abi_ear_germ_analysis(
+@dataclass(frozen=True)
+class LiveWorkerSpec:
+    worker: str
+    worker_role: WorkerRole
+    schema: WorkerSchema
+    lineage_id: str
+    prompt_contract_id: str
+
+
+LIVE_WORKER_SPECS = {
+    LIVE_WORKER_ABI_EAR_GERM_ANALYSIS: LiveWorkerSpec(
+        worker=LIVE_WORKER_ABI_EAR_GERM_ANALYSIS,
+        worker_role=WorkerRole.ABI_EAR_GERM_ANALYZER,
+        schema=ABI_EAR_GERM_ANALYSIS_SCHEMA,
+        lineage_id="phase7a_live_abi_ear_germ_analysis",
+        prompt_contract_id="phase7a.live.abi_ear_germ_analysis",
+    ),
+    LIVE_WORKER_ABI_EAR_FIELD_MODEL: LiveWorkerSpec(
+        worker=LIVE_WORKER_ABI_EAR_FIELD_MODEL,
+        worker_role=WorkerRole.ABI_EAR_FIELD_MODEL_BUILDER,
+        schema=ABI_EAR_FIELD_MODEL_SCHEMA,
+        lineage_id="phase7b_live_abi_ear_field_model",
+        prompt_contract_id="phase7b.live.abi_ear_field_model",
+    ),
+}
+
+
+def run_live_abi_ear_worker(
     config: AbiConfig,
     *,
     allow_live_model: bool,
@@ -37,7 +72,8 @@ def run_live_abi_ear_germ_analysis(
     model: str | None = None,
     client_factory: Callable[[str], ModelClient] | None = None,
 ) -> LiveModelCommandResult:
-    if worker != LIVE_WORKER_ABI_EAR_GERM_ANALYSIS:
+    worker_spec = LIVE_WORKER_SPECS.get(worker)
+    if worker_spec is None:
         return _refusal(
             worker=worker,
             model=model,
@@ -66,11 +102,11 @@ def run_live_abi_ear_germ_analysis(
     client = factory(configured_model)
     request = WorkerRequest(
         run_id=run.id,
-        worker_role=WorkerRole.ABI_EAR_GERM_ANALYZER,
-        prompt_contract_id=LIVE_PROMPT_CONTRACT_ID,
-        schema=ABI_EAR_GERM_ANALYSIS_SCHEMA,
+        worker_role=worker_spec.worker_role,
+        prompt_contract_id=worker_spec.prompt_contract_id,
+        schema=worker_spec.schema,
         input_text=LIVE_ABI_EAR_GERM_TEXT,
-        lineage_id=LIVE_LINEAGE_ID,
+        lineage_id=worker_spec.lineage_id,
         fixture_only=False,
     )
     result = ModelDriver(config=config, client=client).run(request)
@@ -88,6 +124,25 @@ def run_live_abi_ear_germ_analysis(
         exit_code=0 if result.accepted else 1,
         payload=payload,
         driver_result=result,
+    )
+
+
+def run_live_abi_ear_germ_analysis(
+    config: AbiConfig,
+    *,
+    allow_live_model: bool,
+    worker: str = LIVE_WORKER_ABI_EAR_GERM_ANALYSIS,
+    api_key: str | None = None,
+    model: str | None = None,
+    client_factory: Callable[[str], ModelClient] | None = None,
+) -> LiveModelCommandResult:
+    return run_live_abi_ear_worker(
+        config,
+        allow_live_model=allow_live_model,
+        worker=worker,
+        api_key=api_key,
+        model=model,
+        client_factory=client_factory,
     )
 
 

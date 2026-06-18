@@ -116,12 +116,14 @@ by deterministic demos and refuses unless explicitly opted in:
 ```powershell
 .\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_germ_analysis
 .\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_germ_analysis --allow-live-model
+.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_field_model
+.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_field_model --allow-live-model
 ```
 
-The first command refuses before any client call. The second command also
-requires `OPENAI_API_KEY`. The live model defaults to `gpt-5.5` and may be
-overridden with `ABI_OPENAI_MODEL`. Install optional live dependencies only for
-a manual live smoke test:
+The commands without `--allow-live-model` refuse before any client call. The
+commands with `--allow-live-model` also require `OPENAI_API_KEY`. The live
+model defaults to `gpt-5.5` and may be overridden with `ABI_OPENAI_MODEL`.
+Install optional live dependencies only for a manual live smoke test:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[live]"

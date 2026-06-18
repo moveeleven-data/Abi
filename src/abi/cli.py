@@ -13,7 +13,7 @@ from abi.controller.control import inspect_active_run
 from abi.controller.finalization import check_finalization
 from abi.controller.state import ensure_active_run, get_latest_run, get_run, list_runs, run_to_dict
 from abi.db import connect, get_counts, initialize_database
-from abi.live_model import LIVE_WORKER_ABI_EAR_GERM_ANALYSIS, run_live_abi_ear_germ_analysis
+from abi.live_model import LIVE_WORKERS, run_live_abi_ear_worker
 from abi.model_calls import get_model_call, list_model_calls, model_call_to_dict
 from abi.model_driver import run_model_driver_demo
 from abi.modules.abi_ear import run_abi_ear_demo
@@ -99,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     model_driver_live_parser.add_argument(
         "--worker",
-        choices=(LIVE_WORKER_ABI_EAR_GERM_ANALYSIS,),
+        choices=LIVE_WORKERS,
         required=True,
         help="Live worker to run.",
     )
@@ -366,7 +366,7 @@ def _cmd_model_driver_live_demo(
     worker: str,
     allow_live_model: bool,
 ) -> int:
-    result = run_live_abi_ear_germ_analysis(
+    result = run_live_abi_ear_worker(
         config,
         worker=worker,
         allow_live_model=allow_live_model,
