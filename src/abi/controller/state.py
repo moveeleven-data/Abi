@@ -13,6 +13,7 @@ from abi.ids import run_id as make_run_id
 
 ACTIVE_STATUSES = ("initialized", "active")
 PHASE0_ACTIVE_PHASE = "phase0"
+PHASE1_ABI_EAR_ACTIVE_PHASE = "phase1_abi_ear"
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,17 @@ def get_latest_run(connection: sqlite3.Connection) -> RunRecord | None:
         """
     ).fetchone()
     return row_to_run(row) if row is not None else None
+
+
+def set_active_phase(connection: sqlite3.Connection, run_id: str, active_phase: str) -> None:
+    connection.execute(
+        """
+        UPDATE runs
+        SET active_phase = ?
+        WHERE id = ?
+        """,
+        (active_phase, run_id),
+    )
 
 
 def row_to_run(row: sqlite3.Row) -> RunRecord:

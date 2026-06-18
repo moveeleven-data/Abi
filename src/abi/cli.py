@@ -1,4 +1,4 @@
-"""Command line interface for Abi Phase 0."""
+"""Command line interface for Abi."""
 
 from __future__ import annotations
 
@@ -11,10 +11,11 @@ from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
 from abi.controller.state import ensure_active_run, get_latest_run
 from abi.db import connect, get_counts, initialize_database
+from abi.modules.abi_ear import run_abi_ear_demo
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="abi", description="Abi Phase 0 infrastructure CLI")
+    parser = argparse.ArgumentParser(prog="abi", description="Abi infrastructure CLI")
     parser.add_argument(
         "--root",
         type=Path,
@@ -25,6 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init", help="Create Phase 0 folders, database, and an active run")
     subparsers.add_parser("status", help="Report current Phase 0 state")
     subparsers.add_parser("finalize", help="Run fail-closed finalization checks")
+    ear_parser = subparsers.add_parser("ear", help="Run deterministic Abi Ear commands")
+    ear_subparsers = ear_parser.add_subparsers(dest="ear_command", required=True)
+    ear_subparsers.add_parser("demo", help="Run the deterministic Abi Ear benchmark")
     return parser
 
 
@@ -39,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_status(config)
     if args.command == "finalize":
         return _cmd_finalize(config)
+    if args.command == "ear" and args.ear_command == "demo":
+        return _cmd_ear_demo(config)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -91,6 +97,12 @@ def _cmd_finalize(config: AbiConfig) -> int:
 
     print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     return 1 if report.refused else 0
+
+
+def _cmd_ear_demo(config: AbiConfig) -> int:
+    result = run_abi_ear_demo(config)
+    print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
