@@ -46,3 +46,19 @@ For Phase 2, read:
 11. context/plans/PHASE_2_MINIMAL_REREAD.md
 
 Phase 2 implements Minimal Abi Reread with deterministic/stub workers only.
+
+## Phase 3 reads:
+
+For Phase 3, read:
+
+1. AGENTS.md
+2. context/00_ARCHITECTURE_FREEZE.md
+3. context/00_CONTEXT_INDEX.md
+4. context/01_PROJECT_BRIEF.md
+5. context/02_ENGINEERING_CONTRACT.md
+6. context/05_FAIL_CLOSED_CONTROLLER_SPEC.md
+7. context/06_DATA_MODEL.md
+8. context/08_GATES_AND_EVALUATION.md
+9. context/plans/PHASE_3_FAIL_CLOSED_CONTROLLER.md
+
+Phase 3 implements the fail-closed controller expansion only.
