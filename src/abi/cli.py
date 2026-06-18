@@ -13,6 +13,7 @@ from abi.controller.finalization import check_finalization
 from abi.controller.state import ensure_active_run, get_latest_run
 from abi.db import connect, get_counts, initialize_database
 from abi.modules.abi_ear import run_abi_ear_demo
+from abi.modules.human_calibration import run_human_calibration_demo
 from abi.modules.production_harness import run_production_harness_demo
 from abi.modules.reread import run_reread_demo
 
@@ -38,6 +39,15 @@ def build_parser() -> argparse.ArgumentParser:
     harness_parser = subparsers.add_parser("harness", help="Run deterministic production harness commands")
     harness_subparsers = harness_parser.add_subparsers(dest="harness_command", required=True)
     harness_subparsers.add_parser("demo", help="Run the deterministic production harness scaffold")
+    calibration_parser = subparsers.add_parser(
+        "calibration",
+        help="Run deterministic human calibration commands",
+    )
+    calibration_subparsers = calibration_parser.add_subparsers(
+        dest="calibration_command",
+        required=True,
+    )
+    calibration_subparsers.add_parser("demo", help="Run the deterministic calibration scaffold")
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -66,6 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_reread_demo(config)
     if args.command == "harness" and args.harness_command == "demo":
         return _cmd_harness_demo(config)
+    if args.command == "calibration" and args.calibration_command == "demo":
+        return _cmd_calibration_demo(config)
     if args.command == "controller" and args.controller_command == "status":
         return _cmd_controller_status(config)
     if args.command == "controller" and args.controller_command == "blockers":
@@ -140,6 +152,12 @@ def _cmd_reread_demo(config: AbiConfig) -> int:
 
 def _cmd_harness_demo(config: AbiConfig) -> int:
     result = run_production_harness_demo(config)
+    print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_calibration_demo(config: AbiConfig) -> int:
+    result = run_human_calibration_demo(config)
     print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
     return 0
 

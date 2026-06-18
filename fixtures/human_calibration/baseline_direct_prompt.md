@@ -1,5 +1,9 @@
-# Baseline Direct Prompt Fixture
+# Fixture Baseline Direct Prompt
 
-This is a deterministic fixture baseline, not a real model output.
+This fixture baseline represents a deterministic comparison target only. It is
+not real validation, not a live survey result, and not production generation.
 
-The table remains in the morning, and this shows that things endure despite absence. The speaker learns that return is possible because the object stayed in place. The table becomes a symbol of memory and continuity.
+Baseline text:
+
+The table is still there in the morning because it symbolizes memory. The room
+is quiet, and the reader understands that the table means permanence.

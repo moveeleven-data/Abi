@@ -71,3 +71,16 @@ Phase 4 adds a deterministic local production harness scaffold. Run it with:
 The command reads fixture material from `fixtures/production_harness/`, writes
 JSON artifacts under `runs/<run_id>/harness/<packet_id>/`, registers every
 artifact in SQLite, and keeps finalization policy-driven and fail-closed.
+
+## Phase 5 Human Calibration Demo
+
+Phase 5 adds a deterministic local human-calibration scaffold. Run it with:
+
+```powershell
+.\.venv\Scripts\abi.exe calibration demo
+```
+
+The command reads fixture material from `fixtures/human_calibration/`, writes
+JSON artifacts under `runs/<run_id>/calibration/<packet_id>/`, registers every
+artifact in SQLite, and marks all outputs as fixture data rather than real
+human validation.

@@ -16,6 +16,7 @@ PHASE0_ACTIVE_PHASE = "phase0"
 PHASE1_ABI_EAR_ACTIVE_PHASE = "phase1_abi_ear"
 PHASE2_MINIMAL_REREAD_ACTIVE_PHASE = "phase2_minimal_reread"
 PHASE4_PRODUCTION_HARNESS_ACTIVE_PHASE = "phase4_production_harness"
+PHASE5_HUMAN_CALIBRATION_ACTIVE_PHASE = "phase5_human_calibration"
 
 
 @dataclass(frozen=True)
