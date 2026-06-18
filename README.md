@@ -183,3 +183,21 @@ The OpenAI path refuses unless explicitly opted in, and still requires
 
 The candidate artifact is marked non-final, not human-validated, and not
 finalization-eligible.
+
+## Phase 11 Evaluation Baselines
+
+Phase 11 evaluates a production candidate against fixture/fake baselines and a
+fixture human trace without making final-artifact, phase-shift, or real human
+validation claims. The fake path requires no API key:
+
+```powershell
+.\.venv\Scripts\abi.exe evaluation demo --client fake
+```
+
+The OpenAI path refuses unless explicitly opted in, and still requires
+`OPENAI_API_KEY` before any client call:
+
+```powershell
+.\.venv\Scripts\abi.exe evaluation demo --client openai
+.\.venv\Scripts\abi.exe evaluation demo --client openai --allow-live-model --max-model-calls 12
+```

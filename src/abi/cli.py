@@ -17,6 +17,11 @@ from abi.live_model import LIVE_WORKERS, run_live_abi_ear_worker
 from abi.model_calls import get_model_call, list_model_calls, model_call_to_dict
 from abi.model_driver import run_model_driver_demo
 from abi.modules.abi_ear import run_abi_ear_demo
+from abi.modules.evaluation import (
+    EVALUATION_CLIENTS,
+    EVALUATION_MAX_MODEL_CALLS_DEFAULT,
+    run_evaluation_demo,
+)
 from abi.modules.human_calibration import run_human_calibration_demo
 from abi.modules.live_abi_ear import (
     LIVE_ABI_EAR_CLIENTS,
@@ -130,6 +135,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=PRODUCTION_RUN_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed across upstream live packets.",
     )
+    evaluation_parser = subparsers.add_parser(
+        "evaluation",
+        help="Run evaluation and baseline comparison commands",
+    )
+    evaluation_subparsers = evaluation_parser.add_subparsers(
+        dest="evaluation_command",
+        required=True,
+    )
+    evaluation_demo_parser = evaluation_subparsers.add_parser(
+        "demo",
+        help="Run the guarded evaluation and baseline comparison scaffold",
+    )
+    evaluation_demo_parser.add_argument(
+        "--client",
+        choices=EVALUATION_CLIENTS,
+        required=True,
+        help="Evaluation model client path to use.",
+    )
+    evaluation_demo_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow the OpenAI path to make live model calls.",
+    )
+    evaluation_demo_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=EVALUATION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for evaluation workers.",
+    )
     calibration_parser = subparsers.add_parser(
         "calibration",
         help="Run deterministic human calibration commands",
@@ -238,6 +272,13 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_harness_demo(config)
     if args.command == "production" and args.production_command == "live-demo":
         return _cmd_production_live_demo(
+            config,
+            client_name=args.client,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
+    if args.command == "evaluation" and args.evaluation_command == "demo":
+        return _cmd_evaluation_demo(
             config,
             client_name=args.client,
             allow_live_model=args.allow_live_model,
@@ -387,6 +428,23 @@ def _cmd_production_live_demo(
     max_model_calls: int,
 ) -> int:
     result = run_production_live_demo(
+        config,
+        client_name=client_name,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_evaluation_demo(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_evaluation_demo(
         config,
         client_name=client_name,
         allow_live_model=allow_live_model,

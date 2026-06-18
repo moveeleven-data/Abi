@@ -33,6 +33,8 @@ class WorkerRole(str, Enum):
     REREAD_COUNTERFACTUAL_EVALUATOR = "reread_counterfactual_evaluator"
     REREAD_IRREDUCIBILITY_REPORTER = "reread_irreducibility_reporter"
     REREAD_GATE_EVALUATOR = "reread_gate_evaluator"
+    EVALUATION_BASELINE_SUMMARIZER = "evaluation_baseline_summarizer"
+    EVALUATION_COMPARISON_REPORTER = "evaluation_comparison_reporter"
 
 
 @dataclass(frozen=True)
@@ -188,7 +190,28 @@ LIVE_MINIMAL_REREAD_MODEL_SCHEMAS = (
     REREAD_GATE_REPORT_SCHEMA,
 )
 
-LIVE_MODEL_WORKER_SCHEMAS = LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
+EVALUATION_BEST_OF_N_BASELINE_SCHEMA = WorkerSchema(
+    name="EvaluationBestOfNBaselineSummaryModelOutput",
+    version="1",
+    artifact_type="evaluation_best_of_n_baseline_summary",
+)
+
+EVALUATION_BASELINE_COMPARISON_REPORT_SCHEMA = WorkerSchema(
+    name="EvaluationBaselineComparisonReportModelOutput",
+    version="1",
+    artifact_type="evaluation_baseline_comparison_report",
+)
+
+EVALUATION_MODEL_SCHEMAS = (
+    EVALUATION_BEST_OF_N_BASELINE_SCHEMA,
+    EVALUATION_BASELINE_COMPARISON_REPORT_SCHEMA,
+)
+
+LIVE_MODEL_WORKER_SCHEMAS = (
+    LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
+    + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
+    + EVALUATION_MODEL_SCHEMAS
+)
 
 
 def abi_ear_germ_analysis_json_schema() -> dict[str, Any]:
@@ -622,6 +645,70 @@ def minimal_reread_gate_report_json_schema() -> dict[str, Any]:
     )
 
 
+def evaluation_best_of_n_baseline_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "baseline_set_id": {"type": "string"},
+            "fixture_only": {"type": "boolean"},
+            "not_real_validation": {"type": "boolean"},
+            "generated_by": {"type": "string"},
+            "n": {"type": "integer"},
+            "baseline_candidates": {
+                "type": "array",
+                "items": _object_schema(
+                    {
+                        "id": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "known_limit": {"type": "string"},
+                    },
+                    ["id", "summary", "known_limit"],
+                ),
+            },
+            "selected_baseline_id": {"type": "string"},
+            "selection_rationale": {"type": "string"},
+            "risks": _string_array_schema(),
+        },
+        [
+            "baseline_set_id",
+            "fixture_only",
+            "not_real_validation",
+            "generated_by",
+            "n",
+            "baseline_candidates",
+            "selected_baseline_id",
+            "selection_rationale",
+            "risks",
+        ],
+    )
+
+
+def evaluation_baseline_comparison_report_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "comparison_id": {"type": "string"},
+            "fixture_only": {"type": "boolean"},
+            "not_real_validation": {"type": "boolean"},
+            "candidate_id": {"type": "string"},
+            "baseline_ids": _string_array_schema(),
+            "observed_reader_state_delta": _free_object_schema(),
+            "comparison_summary": {"type": "string"},
+            "claims_not_made": _string_array_schema(),
+            "risks": _string_array_schema(),
+        },
+        [
+            "comparison_id",
+            "fixture_only",
+            "not_real_validation",
+            "candidate_id",
+            "baseline_ids",
+            "observed_reader_state_delta",
+            "comparison_summary",
+            "claims_not_made",
+            "risks",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -663,6 +750,10 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return minimal_reread_irreducibility_report_json_schema()
     if schema == REREAD_GATE_REPORT_SCHEMA:
         return minimal_reread_gate_report_json_schema()
+    if schema == EVALUATION_BEST_OF_N_BASELINE_SCHEMA:
+        return evaluation_best_of_n_baseline_json_schema()
+    if schema == EVALUATION_BASELINE_COMPARISON_REPORT_SCHEMA:
+        return evaluation_baseline_comparison_report_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -714,6 +805,10 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_reread_irreducibility_report(payload)
     if schema == REREAD_GATE_REPORT_SCHEMA:
         return _validate_reread_gate_report(payload)
+    if schema == EVALUATION_BEST_OF_N_BASELINE_SCHEMA:
+        return _validate_evaluation_best_of_n_baseline(payload)
+    if schema == EVALUATION_BASELINE_COMPARISON_REPORT_SCHEMA:
+        return _validate_evaluation_baseline_comparison_report(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -1098,6 +1193,69 @@ def _validate_reread_gate_report(payload: dict[str, Any]) -> dict[str, Any]:
         "blocking_defects": payload["blocking_defects"],
         "gate_scores": payload["gate_scores"],
         "summary_verdict": payload["summary_verdict"],
+    }
+
+
+def _validate_evaluation_best_of_n_baseline(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "baseline_set_id", str)
+    _require_type(payload, "fixture_only", bool)
+    _require_type(payload, "not_real_validation", bool)
+    _require_type(payload, "generated_by", str)
+    _require_integer(payload, "n")
+    _require_type(payload, "baseline_candidates", list)
+    _require_type(payload, "selected_baseline_id", str)
+    _require_type(payload, "selection_rationale", str)
+    _require_string_list(payload, "risks")
+    if not payload["not_real_validation"]:
+        raise ModelValidationError("not_real_validation must be true for evaluation baselines")
+    candidates = [
+        _validate_object(candidate, f"baseline_candidates[{index}]", ("id", "summary", "known_limit"))
+        for index, candidate in enumerate(payload["baseline_candidates"])
+    ]
+    if payload["selected_baseline_id"] not in {candidate["id"] for candidate in candidates}:
+        raise ModelValidationError("selected_baseline_id must match a baseline candidate")
+    return {
+        "baseline_set_id": payload["baseline_set_id"],
+        "fixture_only": payload["fixture_only"],
+        "not_real_validation": payload["not_real_validation"],
+        "generated_by": payload["generated_by"],
+        "n": int(payload["n"]),
+        "baseline_candidates": candidates,
+        "selected_baseline_id": payload["selected_baseline_id"],
+        "selection_rationale": payload["selection_rationale"],
+        "risks": payload["risks"],
+    }
+
+
+def _validate_evaluation_baseline_comparison_report(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "comparison_id", str)
+    _require_type(payload, "fixture_only", bool)
+    _require_type(payload, "not_real_validation", bool)
+    _require_type(payload, "candidate_id", str)
+    _require_string_list(payload, "baseline_ids")
+    _require_type(payload, "observed_reader_state_delta", dict)
+    _require_type(payload, "comparison_summary", str)
+    _require_string_list(payload, "claims_not_made")
+    _require_string_list(payload, "risks")
+    if not payload["not_real_validation"]:
+        raise ModelValidationError("not_real_validation must be true for evaluation reports")
+    for required_claim in (
+        "no phase-shift claim",
+        "no real human validation claim",
+        "no final artifact claim",
+    ):
+        if required_claim not in payload["claims_not_made"]:
+            raise ModelValidationError(f"claims_not_made must include {required_claim}")
+    return {
+        "comparison_id": payload["comparison_id"],
+        "fixture_only": payload["fixture_only"],
+        "not_real_validation": payload["not_real_validation"],
+        "candidate_id": payload["candidate_id"],
+        "baseline_ids": payload["baseline_ids"],
+        "observed_reader_state_delta": payload["observed_reader_state_delta"],
+        "comparison_summary": payload["comparison_summary"],
+        "claims_not_made": payload["claims_not_made"],
+        "risks": payload["risks"],
     }
 
 
