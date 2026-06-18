@@ -170,3 +170,25 @@ For Phase 7B, read:
 13. context/plans/PHASE_7B_LIVE_ABI_EAR_FIELD_MODEL.md
 
 Phase 7B implements one guarded live Abi Ear field-model worker only.
+
+## Phase 8 reads:
+
+For Phase 8, read:
+
+1. AGENTS.md
+2. context/00_ARCHITECTURE_FREEZE.md
+3. context/00_CONTEXT_INDEX.md
+4. context/01_PROJECT_BRIEF.md
+5. context/02_ENGINEERING_CONTRACT.md
+6. context/03_ABI_EAR_V1_SPEC.md
+7. context/05_FAIL_CLOSED_CONTROLLER_SPEC.md
+8. context/06_DATA_MODEL.md
+9. context/08_GATES_AND_EVALUATION.md
+10. context/11_MODEL_READINESS_CONSOLIDATION_SPEC.md
+11. context/12_MODEL_DRIVER_FAKE_CLIENT_SPEC.md
+12. context/13_FIRST_LIVE_WORKER_SPEC.md
+13. context/14_LIVE_FIELD_MODEL_WORKER_SPEC.md
+14. context/15_LIVE_ABI_EAR_PACKET_SPEC.md
+15. context/plans/PHASE_8_LIVE_ABI_EAR_PACKET.md
+
+Phase 8 implements the guarded live Abi Ear packet pipeline only.
