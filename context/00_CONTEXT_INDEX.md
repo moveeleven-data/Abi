@@ -275,3 +275,23 @@ For Phase 12, read:
 12. context/plans/PHASE_12_FINALIZATION_GATE_POLICY_V2.md
 
 Phase 12 upgrades finalization gate policy only.
+
+## Phase 13 reads:
+
+For Phase 13, read:
+
+1. AGENTS.md
+2. context/00_ARCHITECTURE_FREEZE.md
+3. context/00_CONTEXT_INDEX.md
+4. context/01_PROJECT_BRIEF.md
+5. context/02_ENGINEERING_CONTRACT.md
+6. context/05_FAIL_CLOSED_CONTROLLER_SPEC.md
+7. context/06_DATA_MODEL.md
+8. context/08_GATES_AND_EVALUATION.md
+9. context/17_SOURCE_TO_ARTIFACT_PRODUCTION_RUN_SPEC.md
+10. context/18_EVALUATION_BASELINES_SPEC.md
+11. context/19_FINALIZATION_GATE_POLICY_V2_SPEC.md
+12. context/20_FINAL_ARTIFACT_AND_PAPER_PACKET_SPEC.md
+13. context/plans/PHASE_13_FINAL_ARTIFACT_AND_PAPER_PACKET.md
+
+Phase 13 implements the final-artifact candidate and paper packet scaffold only.
