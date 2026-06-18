@@ -150,3 +150,23 @@ For Phase 7A, read:
 12. context/plans/PHASE_7A_LIVE_ABI_EAR_GERM_ANALYSIS.md
 
 Phase 7A implements one guarded live Abi Ear germ-analysis worker only.
+
+## Phase 7B reads:
+
+For Phase 7B, read:
+
+1. AGENTS.md
+2. context/00_ARCHITECTURE_FREEZE.md
+3. context/00_CONTEXT_INDEX.md
+4. context/01_PROJECT_BRIEF.md
+5. context/02_ENGINEERING_CONTRACT.md
+6. context/05_FAIL_CLOSED_CONTROLLER_SPEC.md
+7. context/06_DATA_MODEL.md
+8. context/08_GATES_AND_EVALUATION.md
+9. context/11_MODEL_READINESS_CONSOLIDATION_SPEC.md
+10. context/12_MODEL_DRIVER_FAKE_CLIENT_SPEC.md
+11. context/13_FIRST_LIVE_WORKER_SPEC.md
+12. context/14_LIVE_FIELD_MODEL_WORKER_SPEC.md
+13. context/plans/PHASE_7B_LIVE_ABI_EAR_FIELD_MODEL.md
+
+Phase 7B implements one guarded live Abi Ear field-model worker only.
