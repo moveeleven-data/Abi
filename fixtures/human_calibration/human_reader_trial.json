@@ -1,0 +1,27 @@
+{
+  "fixture": true,
+  "reader_id": "fixture_reader_001",
+  "protocol": "human_calibration_protocol_v1",
+  "artifact_label": "candidate_A",
+  "first_read": {
+    "literal_memory": ["table", "morning", "dust", "return"],
+    "opening_interpretation": "A plain domestic fact with unease.",
+    "retained_images": ["table", "dust under the table"],
+    "predictions": ["the table may become evidence of something that happened overnight"],
+    "attention_drops": [],
+    "confusion_points": [],
+    "overexplicit_points": []
+  },
+  "reread": {
+    "changed_opening_interpretation": "The opening now reads less as a report and more as a germ of persistence after attempted erasure.",
+    "changed_words": ["still", "morning"],
+    "details_that_gained_force": ["dust", "underside", "return"],
+    "details_that_felt_fake": [],
+    "paraphrase_loss": "The summary preserves the idea of return but loses the pressure of the object remaining."
+  },
+  "blind_preference": {
+    "preferred_label": "candidate_A",
+    "confidence": 0.72,
+    "reason": "The opening changed more after the ending than in the baseline."
+  }
+}
