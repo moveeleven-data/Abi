@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -38,13 +38,13 @@ Create an evaluation packet around a candidate artifact produced by the source-t
 The evaluation packet should represent:
 
 candidate artifact
-→ baseline artifacts
-→ blind comparison
-→ reader-state transition comparison
-→ human-trace import or fixture trace
-→ baseline comparison report
-→ evaluation gate report
-→ evaluation packet
+â†’ baseline artifacts
+â†’ blind comparison
+â†’ reader-state transition comparison
+â†’ human-trace import or fixture trace
+â†’ baseline comparison report
+â†’ evaluation gate report
+â†’ evaluation packet
 
 The purpose is to make comparison and reader-state evidence first-class before any final artifact or paper claim.
 
@@ -381,6 +381,6 @@ Phase 11 implements evaluation, baselines, and human-trace import only.
 print("Phase 11 Evaluation/Baselines context files created.")
 print("Next:")
 print("  git status")
-print("  git add context fixtures setup_phase11_context.py")
+print("  git add context fixtures tools/setup_context_scripts/setup_phase11_context.py")
 print('  git commit -m "Add Phase 11 evaluation baselines frozen context"')
 print("  git push")

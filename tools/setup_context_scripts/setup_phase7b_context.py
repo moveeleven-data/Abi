@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -274,6 +274,6 @@ Phase 7B implements one guarded live Abi Ear field-model worker only.
 print("Phase 7B Live Abi Ear Field Model context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase7b_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase7b_context.py")
 print('  git commit -m "Add Phase 7B live Abi Ear field model frozen context"')
 print("  git push")

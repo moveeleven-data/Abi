@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -277,6 +277,6 @@ Phase 7A implements one guarded live Abi Ear germ-analysis worker only.
 print("Phase 7A First Live Worker context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase7a_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase7a_context.py")
 print('  git commit -m "Add Phase 7A live Abi Ear germ analysis frozen context"')
 print("  git push")

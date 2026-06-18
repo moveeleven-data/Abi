@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -276,6 +276,6 @@ Phase 4 implements the deterministic Production Harness scaffold only.
 print("Phase 4 Production Harness context files created.")
 print("Next:")
 print("  git status")
-print("  git add context fixtures setup_phase4_context.py")
+print("  git add context fixtures tools/setup_context_scripts/setup_phase4_context.py")
 print('  git commit -m "Add Phase 4 Production Harness frozen context"')
 print("  git push")

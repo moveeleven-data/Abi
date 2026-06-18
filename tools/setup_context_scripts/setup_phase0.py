@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import subprocess
 import sys
 
@@ -187,7 +187,7 @@ A symbolic abiogenesis machine produces a symbolic abiogenesis artifact by under
 
 Core equation:
 
-Artwork = Artifact + ΔReaderState
+Artwork = Artifact + Î”ReaderState
 
 Phase 0 does not implement the reader loop. Phase 0 implements the infrastructure needed to support it later.
 
@@ -210,9 +210,9 @@ SQLite is the initial external state store.
 ## Core future loop
 
 reader-state trace
-→ diagnosed failure
-→ targeted intervention
-→ counterfactual proof
+â†’ diagnosed failure
+â†’ targeted intervention
+â†’ counterfactual proof
 
 Phase 0 must preserve the finalization invariant even before the creative loop exists.
 

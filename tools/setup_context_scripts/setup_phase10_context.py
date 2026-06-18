@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -36,13 +36,13 @@ This is not a human-calibrated production claim.
 Connect existing subsystems into one controlled production pipeline:
 
 source material
-→ production harness packet
-→ selected germ / target effect
-→ live Abi Ear packet
-→ live Minimal Reread packet
-→ candidate artifact packet
-→ production run report
-→ gate report
+â†’ production harness packet
+â†’ selected germ / target effect
+â†’ live Abi Ear packet
+â†’ live Minimal Reread packet
+â†’ candidate artifact packet
+â†’ production run report
+â†’ gate report
 
 The phase should prove that Abi can move from source-like material to a candidate artifact packet while preserving artifact lineage, model-call records, guard behavior, and fail-closed finalization.
 
@@ -327,6 +327,6 @@ Phase 10 implements the controlled source-to-artifact production run only.
 print("Phase 10 Source-to-Artifact Production Run context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase10_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase10_context.py")
 print('  git commit -m "Add Phase 10 source-to-artifact production run frozen context"')
 print("  git push")

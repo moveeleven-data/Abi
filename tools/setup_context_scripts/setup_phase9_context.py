@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -34,9 +34,9 @@ Produce a complete Minimal Reread packet from the benchmark germ and/or a live A
 The phase must demonstrate the core Abi loop in live-shaped form:
 
 reader-state trace
-→ diagnosed failure
-→ targeted intervention
-→ counterfactual proof
+â†’ diagnosed failure
+â†’ targeted intervention
+â†’ counterfactual proof
 
 ## Inputs
 
@@ -301,6 +301,6 @@ Phase 9 implements the guarded live Minimal Reread loop only.
 print("Phase 9 Live Minimal Reread Loop context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase9_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase9_context.py")
 print('  git commit -m "Add Phase 9 live Minimal Reread loop frozen context"')
 print("  git push")

@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -285,6 +285,6 @@ Phase 13 implements the final-artifact candidate and paper packet scaffold only.
 print("Phase 13 Final Artifact + Paper Packet context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase13_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase13_context.py")
 print('  git commit -m "Add Phase 13 final artifact paper packet frozen context"')
 print("  git push")

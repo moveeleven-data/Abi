@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -49,9 +49,9 @@ The purpose is to make the reader a first-class substrate in the repo, not just 
 
 ## Core principle
 
-Artwork = Artifact + ΔReaderState
+Artwork = Artifact + Î”ReaderState
 
-Phase 5 must represent ΔReaderState explicitly.
+Phase 5 must represent Î”ReaderState explicitly.
 
 The calibration scaffold should test whether the artifact caused a reader-state transformation, not merely whether the reader liked the text.
 
@@ -367,6 +367,6 @@ Phase 5 implements the deterministic Human Calibration / Paper-Grade Evaluation 
 print("Phase 5 Human Calibration context files created.")
 print("Next:")
 print("  git status")
-print("  git add context fixtures setup_phase5_context.py")
+print("  git add context fixtures tools/setup_context_scripts/setup_phase5_context.py")
 print('  git commit -m "Add Phase 5 Human Calibration frozen context"')
 print("  git push")

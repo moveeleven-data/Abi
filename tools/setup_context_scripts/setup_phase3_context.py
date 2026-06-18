@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -304,6 +304,6 @@ Phase 3 implements the fail-closed controller expansion only.
 print("Phase 3 Fail-Closed Controller context files created.")
 print("Next:")
 print("  git status")
-print("  git add AGENTS.md context setup_phase3_context.py")
+print("  git add AGENTS.md context tools/setup_context_scripts/setup_phase3_context.py")
 print('  git commit -m "Add Phase 3 Fail-Closed Controller frozen context"')
 print("  git push")

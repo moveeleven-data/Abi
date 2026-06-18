@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -276,6 +276,6 @@ Phase 8 implements the guarded live Abi Ear packet pipeline only.
 print("Phase 8 Live Abi Ear Packet context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase8_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase8_context.py")
 print('  git commit -m "Add Phase 8 live Abi Ear packet frozen context"')
 print("  git push")

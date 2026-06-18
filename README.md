@@ -1,93 +1,66 @@
 # Project Abi
 
-Abi v0.1 is a Self-Isomorphic Causal Reread Compiler.
+Abi v0.1 is a Self-Isomorphic Causal Reread Compiler scaffold. The repository is currently an evidence-ready research harness, not a proven writing system and not a final artifact.
 
-Phase 0 implements infrastructure only:
+The runtime centers on a fail-closed controller, immutable JSON artifacts, SQLite-backed state, guarded model-call surfaces, and finalization gates. Demos and fake-client paths are for engineering verification unless a future protocol explicitly collects real evidence.
 
-- CLI
-- SQLite
-- run folders
-- artifact registry
-- gates
-- fail-closed finalization refusal
-- tests
+## Project Status
 
-No creative generation or model calls exist in Phase 0.
+- Current implemented surface: infrastructure through the first pilot artifact-set scaffold.
+- Current validation status: no real human validation has run.
+- Current finalization status: `final_artifact` remains ineligible and must refuse.
+- Current artifact status: candidates remain non-final, not human-validated, not finalization-eligible, and no-phase-shift-claim.
+- Current OpenAI status: guarded paths exist, but no live call runs unless explicitly opted in.
 
-## Phase 1 Abi Ear Demo
+## Quickstart
 
-Phase 1 adds a deterministic local Abi Ear benchmark pipeline. It uses the fixed
-input:
+Install locally:
 
-```text
-The table is still there in the morning.
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Run it with:
+Run the basic checks:
+
+```powershell
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\abi.exe status
+.\.venv\Scripts\abi.exe finalization status --profile final_artifact
+```
+
+Expected finalization behavior:
+
+```powershell
+.\.venv\Scripts\abi.exe finalize --profile final_artifact
+```
+
+That command should refuse until real final-artifact evidence exists.
+
+## Current Capabilities
+
+Deterministic local demos:
 
 ```powershell
 .\.venv\Scripts\abi.exe ear demo
-```
-
-The command writes JSON artifacts under `runs/<run_id>/abi_ear/<packet_id>/`
-and registers each artifact in SQLite through the Phase 0 artifact registry. It
-does not make model calls or API calls.
-
-## Phase 2 Minimal Reread Demo
-
-Phase 2 adds a deterministic local minimal reread loop. Run it with:
-
-```powershell
 .\.venv\Scripts\abi.exe reread demo
-```
-
-The command ensures a deterministic Abi Ear packet exists, writes JSON artifacts
-under `runs/<run_id>/reread/<packet_id>/`, registers every artifact in SQLite,
-and leaves finalization fail-closed unless the required Phase 0 finalization
-gates are satisfied.
-
-## Phase 3 Controller Commands
-
-Phase 3 adds a policy-driven fail-closed controller surface:
-
-```powershell
-.\.venv\Scripts\abi.exe controller status
-.\.venv\Scripts\abi.exe controller blockers
-.\.venv\Scripts\abi.exe controller demo
-```
-
-The controller commands inspect the active run, evaluate the required
-finalization gates through policy, and emit structured decisions or blocker
-reports. Finalization remains controller-owned and fail-closed.
-
-## Phase 4 Production Harness Demo
-
-Phase 4 adds a deterministic local production harness scaffold. Run it with:
-
-```powershell
 .\.venv\Scripts\abi.exe harness demo
-```
-
-The command reads fixture material from `fixtures/production_harness/`, writes
-JSON artifacts under `runs/<run_id>/harness/<packet_id>/`, registers every
-artifact in SQLite, and keeps finalization policy-driven and fail-closed.
-
-## Phase 5 Human Calibration Demo
-
-Phase 5 adds a deterministic local human-calibration scaffold. Run it with:
-
-```powershell
 .\.venv\Scripts\abi.exe calibration demo
 ```
 
-The command reads fixture material from `fixtures/human_calibration/`, writes
-JSON artifacts under `runs/<run_id>/calibration/<packet_id>/`, registers every
-artifact in SQLite, and marks all outputs as fixture data rather than real
-human validation.
+Fake-client and scaffold packets:
 
-## Inspection Commands
+```powershell
+.\.venv\Scripts\abi.exe model-driver demo
+.\.venv\Scripts\abi.exe ear live-demo --client fake
+.\.venv\Scripts\abi.exe reread live-demo --client fake
+.\.venv\Scripts\abi.exe production live-demo --client fake
+.\.venv\Scripts\abi.exe evaluation demo --client fake
+.\.venv\Scripts\abi.exe final-artifact packet --client fake
+.\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
+```
 
-Artifact and run registry inspection:
+Inspection commands:
 
 ```powershell
 .\.venv\Scripts\abi.exe artifact list
@@ -95,172 +68,104 @@ Artifact and run registry inspection:
 .\.venv\Scripts\abi.exe run list
 .\.venv\Scripts\abi.exe run show <run_id>
 .\.venv\Scripts\abi.exe run latest
-```
-
-## Phase 6B Fake Model Driver
-
-Phase 6B adds a sealed fake-client model-driver layer for structured-output
-validation. It does not make live model calls.
-
-```powershell
-.\.venv\Scripts\abi.exe model-driver demo
 .\.venv\Scripts\abi.exe model-call list
 .\.venv\Scripts\abi.exe model-call show <model_call_id>
 ```
 
-## Phase 7A Guarded Live Worker
+Controller and gate inspection:
 
-Phase 7A adds one guarded live worker for Abi Ear germ analysis. It is not used
-by deterministic demos and refuses unless explicitly opted in:
+```powershell
+.\.venv\Scripts\abi.exe controller status
+.\.venv\Scripts\abi.exe controller blockers
+.\.venv\Scripts\abi.exe controller demo
+.\.venv\Scripts\abi.exe gate list
+.\.venv\Scripts\abi.exe finalization status
+.\.venv\Scripts\abi.exe finalization status --profile final_artifact
+```
+
+## Current Non-Claims
+
+Do not claim from this repo state that:
+
+- Abi produces phase-shift-level writing.
+- Abi has passed real human validation.
+- Abi has beaten strong baselines.
+- Abi has passed hostile final audit.
+- Abi is paper-ready.
+- Any generated candidate is a final artifact.
+
+Fixture and fake-client outputs are engineering artifacts. They cannot satisfy final-artifact gates.
+
+## Guarded OpenAI Usage
+
+OpenAI-backed commands refuse unless `--allow-live-model` is passed. Commands that pass that flag also require `OPENAI_API_KEY`. The default live model is code-defined and can be overridden with `ABI_OPENAI_MODEL`.
+
+Examples that refuse without opt-in:
 
 ```powershell
 .\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_germ_analysis
-.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_germ_analysis --allow-live-model
 .\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_field_model
-.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_field_model --allow-live-model
+.\.venv\Scripts\abi.exe ear live-demo --client openai
+.\.venv\Scripts\abi.exe reread live-demo --client openai
+.\.venv\Scripts\abi.exe production live-demo --client openai
+.\.venv\Scripts\abi.exe evaluation demo --client openai
+.\.venv\Scripts\abi.exe final-artifact packet --client openai
+.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source
 ```
 
-The commands without `--allow-live-model` refuse before any client call. The
-commands with `--allow-live-model` also require `OPENAI_API_KEY`. The live
-model defaults to `gpt-5.5` and may be overridden with `ABI_OPENAI_MODEL`.
-Install optional live dependencies only for a manual live smoke test:
+Opt-in examples:
+
+```powershell
+.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_germ_analysis --allow-live-model
+.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_field_model --allow-live-model
+.\.venv\Scripts\abi.exe ear live-demo --client openai --allow-live-model --max-model-calls 8
+.\.venv\Scripts\abi.exe reread live-demo --client openai --allow-live-model --max-model-calls 12
+.\.venv\Scripts\abi.exe production live-demo --client openai --allow-live-model --max-model-calls 24
+.\.venv\Scripts\abi.exe evaluation demo --client openai --allow-live-model --max-model-calls 12
+.\.venv\Scripts\abi.exe final-artifact packet --client openai --allow-live-model --max-model-calls 8
+.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source --allow-live-model --max-model-calls 36
+```
+
+Install optional live dependencies only for an intentional manual live smoke test:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[live]"
 ```
 
-## Phase 8 Guarded Live Abi Ear Packet
+## Private Source Material Warning
 
-Phase 8 adds a guarded live-packet scaffold without replacing the deterministic
-Abi Ear demo. The fake packet path requires no API key:
+The repository may be public. Do not commit private source material.
 
-```powershell
-.\.venv\Scripts\abi.exe ear live-demo --client fake
+Use ignored local paths for private source files:
+
+```text
+inputs/private/
 ```
 
-The OpenAI packet path refuses unless explicitly opted in, and still requires
-`OPENAI_API_KEY` before any client call:
+The pilot artifact-set command hashes source files and records filenames. It must not copy private source content into tracked docs.
 
-```powershell
-.\.venv\Scripts\abi.exe ear live-demo --client openai
-.\.venv\Scripts\abi.exe ear live-demo --client openai --allow-live-model --max-model-calls 8
+## Validation Roadmap
+
+The next real work is evidence, not new claims:
+
+1. Freeze source material and artifact-set rules.
+2. Select or import a real strongest rival under protocol rules.
+3. Generate or import non-fixture baselines with stored prompts, budgets, and model-call records.
+4. Run a small human-reader pilot only after task wording, exclusion rules, blindness rules, and scoring are locked.
+5. Run hostile audit before any final-artifact gate is considered.
+6. Keep `final_artifact` finalization fail-closed until all required evidence is reviewed.
+
+## Where To Find Docs
+
+- [Docs index](docs/INDEX.md)
+- [Phase 14 operator handoff](docs/phase14_operator_handoff/operator_handoff.md)
+- [Phase 15 validation protocol](docs/phase15_real_validation_protocol/validation_protocol.md)
+- [Known blockers](docs/phase14_operator_handoff/known_blockers.md)
+- [Fresh clone verification](docs/phase14_operator_handoff/fresh_clone_verification.md)
+- [Frozen context specs](context/README.md)
+
+Setup context scripts live under:
+
+```text
+tools/setup_context_scripts/
 ```
-
-## Phase 9 Guarded Live Minimal Reread
-
-Phase 9 adds a guarded live-shaped Minimal Reread packet without replacing the
-deterministic reread demo. The fake path requires no API key:
-
-```powershell
-.\.venv\Scripts\abi.exe reread live-demo --client fake
-```
-
-The OpenAI path refuses unless explicitly opted in, and still requires
-`OPENAI_API_KEY` before any client call:
-
-```powershell
-.\.venv\Scripts\abi.exe reread live-demo --client openai
-.\.venv\Scripts\abi.exe reread live-demo --client openai --allow-live-model --max-model-calls 12
-```
-
-## Phase 10 Controlled Production Run
-
-Phase 10 composes the production harness, guarded live Abi Ear packet, and
-guarded live Minimal Reread packet into a controlled source-to-artifact
-production packet. The fake path requires no API key:
-
-```powershell
-.\.venv\Scripts\abi.exe production live-demo --client fake
-```
-
-The OpenAI path refuses unless explicitly opted in, and still requires
-`OPENAI_API_KEY` before any client call:
-
-```powershell
-.\.venv\Scripts\abi.exe production live-demo --client openai
-.\.venv\Scripts\abi.exe production live-demo --client openai --allow-live-model --max-model-calls 24
-```
-
-The candidate artifact is marked non-final, not human-validated, and not
-finalization-eligible.
-
-## Phase 11 Evaluation Baselines
-
-Phase 11 evaluates a production candidate against fixture/fake baselines and a
-fixture human trace without making final-artifact, phase-shift, or real human
-validation claims. The fake path requires no API key:
-
-```powershell
-.\.venv\Scripts\abi.exe evaluation demo --client fake
-```
-
-The OpenAI path refuses unless explicitly opted in, and still requires
-`OPENAI_API_KEY` before any client call:
-
-```powershell
-.\.venv\Scripts\abi.exe evaluation demo --client openai
-.\.venv\Scripts\abi.exe evaluation demo --client openai --allow-live-model --max-model-calls 12
-```
-
-## Phase 12 Finalization Gate Policy
-
-Phase 12 adds named gate profiles and release-readiness reports. These commands
-emit JSON and do not generate a final artifact:
-
-```powershell
-.\.venv\Scripts\abi.exe gate list
-.\.venv\Scripts\abi.exe finalization status
-.\.venv\Scripts\abi.exe finalization status --profile final_artifact
-.\.venv\Scripts\abi.exe finalize --profile final_artifact
-```
-
-The `final_artifact` profile refuses fixture/candidate state until a real final
-artifact packet, non-fixture evidence, strongest-rival and raw-model baseline
-comparisons, hostile audit, real validation gate, and final operator approval
-are present.
-
-## Phase 13 Final Artifact Packet
-
-Phase 13 builds a final-artifact candidate and paper/report packet scaffold. It
-does not finalize the project, mark final gates passed, claim phase shift, or
-claim real human validation. The fake path requires no API key:
-
-```powershell
-.\.venv\Scripts\abi.exe final-artifact packet --client fake
-```
-
-The OpenAI path refuses unless explicitly opted in, and still requires
-`OPENAI_API_KEY` before any live model path could run:
-
-```powershell
-.\.venv\Scripts\abi.exe final-artifact packet --client openai
-.\.venv\Scripts\abi.exe final-artifact packet --client openai --allow-live-model --max-model-calls 8
-```
-
-The packet remains non-final, not human-validated, not finalization-eligible,
-and includes a finalization-readiness report showing the current run is still
-blocked by the `final_artifact` profile.
-
-## Phase 16 Pilot Artifact Set
-
-Phase 16 prepares a source-frozen pilot artifact set for future validation
-without collecting human data, making validation claims, or passing final gates.
-The fake path requires no API key:
-
-```powershell
-.\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
-```
-
-The OpenAI path refuses unless explicitly opted in, and still requires
-`OPENAI_API_KEY` before any live model path could run:
-
-```powershell
-.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source
-.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source --allow-live-model --max-model-calls 36
-```
-
-The packet writes source filenames and hashes, a non-final Abi candidate
-reference, fake/fixture baselines in fake mode, a strongest-rival slot that does
-not satisfy the strongest-rival gate, a private neutral-label map, and a blinded
-reader bundle. Private source directories under `inputs/private/` are ignored by
-git.

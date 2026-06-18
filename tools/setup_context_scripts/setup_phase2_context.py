@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -52,9 +52,9 @@ All outputs must be deterministic.
 ## Core loop
 
 reader-state trace
-→ diagnosed failure
-→ targeted intervention
-→ counterfactual proof
+â†’ diagnosed failure
+â†’ targeted intervention
+â†’ counterfactual proof
 
 This loop must exist structurally even with deterministic stub content.
 
@@ -134,9 +134,9 @@ Implement the smallest deterministic reread compiler loop.
 Phase 2 should prove the architecture can represent:
 
 reader-state trace
-→ diagnosed failure
-→ targeted intervention
-→ counterfactual proof
+â†’ diagnosed failure
+â†’ targeted intervention
+â†’ counterfactual proof
 
 without model calls.
 
@@ -270,6 +270,6 @@ Phase 2 implements Minimal Abi Reread with deterministic/stub workers only.
 print("Phase 2 Minimal Abi Reread context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase2_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase2_context.py")
 print('  git commit -m "Add Phase 2 Minimal Reread frozen context"')
 print("  git push")

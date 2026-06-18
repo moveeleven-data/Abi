@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -257,6 +257,6 @@ Phase 14 performs repo audit and operator handoff only.
 print("Phase 14 Repo Audit + Operator Handoff context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase14_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase14_context.py")
 print('  git commit -m "Add Phase 14 repo audit operator handoff frozen context"')
 print("  git push")

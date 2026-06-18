@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path.cwd()
 
@@ -277,6 +277,6 @@ Phase 12 upgrades finalization gate policy only.
 print("Phase 12 Finalization Gate Policy v2 context files created.")
 print("Next:")
 print("  git status")
-print("  git add context setup_phase12_context.py")
+print("  git add context tools/setup_context_scripts/setup_phase12_context.py")
 print('  git commit -m "Add Phase 12 finalization gate policy frozen context"')
 print("  git push")
