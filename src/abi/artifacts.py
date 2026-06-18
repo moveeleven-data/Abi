@@ -118,6 +118,30 @@ def list_artifacts(connection: sqlite3.Connection, run_id: str) -> list[Artifact
     return [row_to_artifact(row) for row in rows]
 
 
+def list_all_artifacts(connection: sqlite3.Connection) -> list[ArtifactRecord]:
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM artifacts
+        ORDER BY created_at, id
+        """
+    ).fetchall()
+    return [row_to_artifact(row) for row in rows]
+
+
+def artifact_to_dict(artifact: ArtifactRecord) -> dict[str, object]:
+    return {
+        "id": artifact.id,
+        "run_id": artifact.run_id,
+        "lineage_id": artifact.lineage_id,
+        "type": artifact.type,
+        "path": artifact.path,
+        "hash": artifact.hash,
+        "created_at": artifact.created_at,
+        "parent_ids": list(artifact.parent_ids),
+    }
+
+
 def row_to_artifact(row: sqlite3.Row) -> ArtifactRecord:
     return ArtifactRecord(
         id=row["id"],

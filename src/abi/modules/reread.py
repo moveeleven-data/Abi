@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
-from pathlib import Path
-import sqlite3
 
-from abi.artifacts import ArtifactRecord, get_artifact, register_artifact
+from abi.artifacts import ArtifactRecord
 from abi.config import AbiConfig
 from abi.controller.gates import GateRecord, record_gate
 from abi.controller.state import PHASE2_MINIMAL_REREAD_ACTIVE_PHASE, set_active_phase
 from abi.db import connect
-from abi.hashing import sha256_file
-from abi.ids import artifact_id as make_artifact_id
 from abi.modules.abi_ear import BENCHMARK_INPUT, build_benchmark_payloads, run_abi_ear_demo
+from abi.packets import PacketWriter, create_packet_dir
 
 
 REREAD_LINEAGE_ID = "minimal_reread_v1_benchmark"
@@ -66,8 +62,7 @@ class RereadRunResult:
 def run_reread_demo(config: AbiConfig) -> RereadRunResult:
     abi_ear_result = run_abi_ear_demo(config)
     run_id = abi_ear_result.run_id
-    output_dir = _next_packet_dir(config.run_dir(run_id) / "reread")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = create_packet_dir(config.run_dir(run_id) / "reread")
 
     payloads = build_reread_payloads(build_benchmark_payloads(BENCHMARK_INPUT))
     artifacts: dict[str, ArtifactRecord] = {}
@@ -75,125 +70,97 @@ def run_reread_demo(config: AbiConfig) -> RereadRunResult:
 
     with connect(config.db_path) as connection:
         set_active_phase(connection, run_id, PHASE2_MINIMAL_REREAD_ACTIVE_PHASE)
-        artifacts["reread_formal_problem"] = _write_and_register(
-            connection,
+        writer = PacketWriter(
+            connection=connection,
             run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_formal_problem",
-            payload=payloads["reread_formal_problem"],
+            packet_dir=output_dir,
+            lineage_id=REREAD_LINEAGE_ID,
+            created_by="minimal_reread_v1_stub",
+            fixture_only=False,
+        )
+        artifacts["reread_formal_problem"] = writer.write_artifact(
+            "reread_formal_problem",
+            payloads["reread_formal_problem"],
             parent_ids=[abi_ear_packet_artifact_id],
         )
-        artifacts["reread_germ_afterimage_pair"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_germ_afterimage_pair",
-            payload=payloads["reread_germ_afterimage_pair"],
+        artifacts["reread_germ_afterimage_pair"] = writer.write_artifact(
+            "reread_germ_afterimage_pair",
+            payloads["reread_germ_afterimage_pair"],
             parent_ids=[
                 abi_ear_packet_artifact_id,
                 artifacts["reread_formal_problem"].id,
             ],
         )
-        artifacts["reread_consequence_graph"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_consequence_graph",
-            payload=payloads["reread_consequence_graph"],
+        artifacts["reread_consequence_graph"] = writer.write_artifact(
+            "reread_consequence_graph",
+            payloads["reread_consequence_graph"],
             parent_ids=[
                 artifacts["reread_formal_problem"].id,
                 artifacts["reread_germ_afterimage_pair"].id,
             ],
         )
-        artifacts["reread_draft_version"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_draft_version",
-            payload=payloads["reread_draft_version"],
+        artifacts["reread_draft_version"] = writer.write_artifact(
+            "reread_draft_version",
+            payloads["reread_draft_version"],
             parent_ids=[
                 artifacts["reread_germ_afterimage_pair"].id,
                 artifacts["reread_consequence_graph"].id,
             ],
         )
-        artifacts["reread_first_read_trace"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_first_read_trace",
-            payload=payloads["reread_first_read_trace"],
+        artifacts["reread_first_read_trace"] = writer.write_artifact(
+            "reread_first_read_trace",
+            payloads["reread_first_read_trace"],
             parent_ids=[artifacts["reread_draft_version"].id],
         )
-        artifacts["reread_reread_trace"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_reread_trace",
-            payload=payloads["reread_reread_trace"],
+        artifacts["reread_reread_trace"] = writer.write_artifact(
+            "reread_reread_trace",
+            payloads["reread_reread_trace"],
             parent_ids=[
                 artifacts["reread_draft_version"].id,
                 artifacts["reread_germ_afterimage_pair"].id,
             ],
         )
-        artifacts["reread_failure_diagnosis"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_failure_diagnosis",
-            payload=payloads["reread_failure_diagnosis"],
+        artifacts["reread_failure_diagnosis"] = writer.write_artifact(
+            "reread_failure_diagnosis",
+            payloads["reread_failure_diagnosis"],
             parent_ids=[
                 artifacts["reread_first_read_trace"].id,
                 artifacts["reread_reread_trace"].id,
             ],
         )
-        artifacts["reread_intervention"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_intervention",
-            payload=payloads["reread_intervention"],
+        artifacts["reread_intervention"] = writer.write_artifact(
+            "reread_intervention",
+            payloads["reread_intervention"],
             parent_ids=[artifacts["reread_failure_diagnosis"].id],
         )
-        artifacts["reread_recomposed_draft"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_recomposed_draft",
-            payload=payloads["reread_recomposed_draft"],
+        artifacts["reread_recomposed_draft"] = writer.write_artifact(
+            "reread_recomposed_draft",
+            payloads["reread_recomposed_draft"],
             parent_ids=[
                 artifacts["reread_draft_version"].id,
                 artifacts["reread_intervention"].id,
             ],
         )
-        artifacts["reread_counterfactual_result"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_counterfactual_result",
-            payload=payloads["reread_counterfactual_result"],
+        artifacts["reread_counterfactual_result"] = writer.write_artifact(
+            "reread_counterfactual_result",
+            payloads["reread_counterfactual_result"],
             parent_ids=[
                 artifacts["reread_draft_version"].id,
                 artifacts["reread_recomposed_draft"].id,
                 artifacts["reread_intervention"].id,
             ],
         )
-        artifacts["reread_irreducibility_report"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_irreducibility_report",
-            payload=payloads["reread_irreducibility_report"],
+        artifacts["reread_irreducibility_report"] = writer.write_artifact(
+            "reread_irreducibility_report",
+            payloads["reread_irreducibility_report"],
             parent_ids=[
                 artifacts["reread_counterfactual_result"].id,
                 artifacts["reread_germ_afterimage_pair"].id,
             ],
         )
-        artifacts["reread_gate_report"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_gate_report",
-            payload=payloads["reread_gate_report"],
+        artifacts["reread_gate_report"] = writer.write_artifact(
+            "reread_gate_report",
+            payloads["reread_gate_report"],
             parent_ids=[
                 artifacts["reread_formal_problem"].id,
                 artifacts["reread_counterfactual_result"].id,
@@ -209,12 +176,9 @@ def run_reread_demo(config: AbiConfig) -> RereadRunResult:
             blocking_defects=list(gate_report["blocking_defects"]),
             lineage_id=REREAD_LINEAGE_ID,
         )
-        artifacts["reread_packet"] = _write_and_register(
-            connection,
-            run_id=run_id,
-            output_dir=output_dir,
-            artifact_type="reread_packet",
-            payload=payloads["reread_packet"],
+        artifacts["reread_packet"] = writer.write_artifact(
+            "reread_packet",
+            payloads["reread_packet"],
             parent_ids=[
                 abi_ear_packet_artifact_id,
                 *[artifacts[artifact_type].id for artifact_type in REREAD_ARTIFACT_TYPES[:-1]],
@@ -668,67 +632,3 @@ def build_reread_packet_summary(
     }
 
 
-def _write_and_register(
-    connection: sqlite3.Connection,
-    *,
-    run_id: str,
-    output_dir: Path,
-    artifact_type: str,
-    payload: object,
-    parent_ids: list[str],
-) -> ArtifactRecord:
-    path = output_dir / f"{artifact_type}.json"
-    path.write_text(_canonical_json(payload), encoding="utf-8", newline="\n")
-    return _register_or_get_artifact(
-        connection,
-        run_id=run_id,
-        artifact_type=artifact_type,
-        path=path,
-        parent_ids=parent_ids,
-    )
-
-
-def _next_packet_dir(base_dir: Path) -> Path:
-    base_dir.mkdir(parents=True, exist_ok=True)
-    used_numbers = []
-    for child in base_dir.iterdir():
-        if child.is_dir() and child.name.startswith("packet_"):
-            suffix = child.name.removeprefix("packet_")
-            if suffix.isdecimal():
-                used_numbers.append(int(suffix))
-    next_number = max(used_numbers, default=0) + 1
-    return base_dir / f"packet_{next_number:04d}"
-
-
-def _register_or_get_artifact(
-    connection: sqlite3.Connection,
-    *,
-    run_id: str,
-    artifact_type: str,
-    path: Path,
-    parent_ids: list[str],
-) -> ArtifactRecord:
-    content_hash = sha256_file(path)
-    expected_id = make_artifact_id(
-        run_id,
-        artifact_type,
-        str(path),
-        content_hash,
-        parent_ids,
-        REREAD_LINEAGE_ID,
-    )
-    existing = get_artifact(connection, expected_id)
-    if existing is not None:
-        return existing
-    return register_artifact(
-        connection,
-        run_id=run_id,
-        artifact_type=artifact_type,
-        path=path,
-        lineage_id=REREAD_LINEAGE_ID,
-        parent_ids=parent_ids,
-    )
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, indent=2, sort_keys=True) + "\n"

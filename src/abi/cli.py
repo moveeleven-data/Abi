@@ -7,15 +7,17 @@ import json
 from pathlib import Path
 import sys
 
+from abi.artifacts import artifact_to_dict, get_artifact, list_all_artifacts
 from abi.config import AbiConfig
 from abi.controller.control import inspect_active_run
 from abi.controller.finalization import check_finalization
-from abi.controller.state import ensure_active_run, get_latest_run
+from abi.controller.state import ensure_active_run, get_latest_run, get_run, list_runs, run_to_dict
 from abi.db import connect, get_counts, initialize_database
 from abi.modules.abi_ear import run_abi_ear_demo
 from abi.modules.human_calibration import run_human_calibration_demo
 from abi.modules.production_harness import run_production_harness_demo
 from abi.modules.reread import run_reread_demo
+from abi.packets import read_json_file
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,6 +58,20 @@ def build_parser() -> argparse.ArgumentParser:
     controller_subparsers.add_parser("status", help="Emit structured controller decision status")
     controller_subparsers.add_parser("blockers", help="Emit structured controller blocker report")
     controller_subparsers.add_parser("demo", help="Inspect or create a run and show refusal decision")
+    artifact_parser = subparsers.add_parser("artifact", help="Inspect registered artifacts")
+    artifact_subparsers = artifact_parser.add_subparsers(
+        dest="artifact_command",
+        required=True,
+    )
+    artifact_subparsers.add_parser("list", help="List registered artifacts")
+    artifact_show_parser = artifact_subparsers.add_parser("show", help="Show one artifact")
+    artifact_show_parser.add_argument("artifact_id", help="Registered artifact ID")
+    run_parser = subparsers.add_parser("run", help="Inspect runs")
+    run_subparsers = run_parser.add_subparsers(dest="run_command", required=True)
+    run_subparsers.add_parser("list", help="List runs")
+    run_show_parser = run_subparsers.add_parser("show", help="Show one run")
+    run_show_parser.add_argument("run_id", help="Run ID")
+    run_subparsers.add_parser("latest", help="Show the latest run")
     return parser
 
 
@@ -84,6 +100,16 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_controller_blockers(config)
     if args.command == "controller" and args.controller_command == "demo":
         return _cmd_controller_demo(config)
+    if args.command == "artifact" and args.artifact_command == "list":
+        return _cmd_artifact_list(config)
+    if args.command == "artifact" and args.artifact_command == "show":
+        return _cmd_artifact_show(config, args.artifact_id)
+    if args.command == "run" and args.run_command == "list":
+        return _cmd_run_list(config)
+    if args.command == "run" and args.run_command == "show":
+        return _cmd_run_show(config, args.run_id)
+    if args.command == "run" and args.run_command == "latest":
+        return _cmd_run_latest(config)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -110,7 +136,7 @@ def _cmd_status(config: AbiConfig) -> int:
     payload = {
         "database_path": str(config.db_path),
         "run_count": counts["runs"],
-        "latest_run": latest_run.__dict__ if latest_run is not None else None,
+        "latest_run": run_to_dict(latest_run) if latest_run is not None else None,
         "artifact_count": counts["artifacts"],
         "gate_count": counts["gates"],
     }
@@ -197,6 +223,78 @@ def _cmd_controller_demo(config: AbiConfig) -> int:
     with connect(config.db_path) as connection:
         decision = inspect_active_run(connection)
     print(json.dumps(decision.to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_artifact_list(config: AbiConfig) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        artifacts = list_all_artifacts(connection)
+    payload = {"artifacts": [artifact_to_dict(artifact) for artifact in artifacts]}
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_artifact_show(config: AbiConfig, artifact_id: str) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        artifact = get_artifact(connection, artifact_id)
+    if artifact is None:
+        payload = {
+            "artifact": None,
+            "message": f"Artifact not found: {artifact_id}",
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 1
+
+    payload = {
+        "artifact": artifact_to_dict(artifact),
+        "content": None,
+    }
+    try:
+        payload["content"] = read_json_file(artifact.path)
+    except (OSError, json.JSONDecodeError):
+        payload["content"] = None
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_run_list(config: AbiConfig) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        runs = list_runs(connection)
+    payload = {"runs": [run_to_dict(run) for run in runs]}
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_run_show(config: AbiConfig, run_id: str) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        run = get_run(connection, run_id)
+    if run is None:
+        payload = {
+            "run": None,
+            "message": f"Run not found: {run_id}",
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 1
+    print(json.dumps({"run": run_to_dict(run)}, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_run_latest(config: AbiConfig) -> int:
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        run = get_latest_run(connection)
+    if run is None:
+        payload = {
+            "run": None,
+            "message": "No run exists.",
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 1
+    print(json.dumps({"run": run_to_dict(run)}, indent=2, sort_keys=True))
     return 0
 
 

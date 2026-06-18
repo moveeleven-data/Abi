@@ -119,6 +119,29 @@ def get_latest_run(connection: sqlite3.Connection) -> RunRecord | None:
     return row_to_run(row) if row is not None else None
 
 
+def get_run(connection: sqlite3.Connection, run_id: str) -> RunRecord | None:
+    row = connection.execute(
+        """
+        SELECT *
+        FROM runs
+        WHERE id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    return row_to_run(row) if row is not None else None
+
+
+def list_runs(connection: sqlite3.Connection) -> list[RunRecord]:
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM runs
+        ORDER BY created_at, id
+        """
+    ).fetchall()
+    return [row_to_run(row) for row in rows]
+
+
 def set_active_phase(connection: sqlite3.Connection, run_id: str, active_phase: str) -> None:
     connection.execute(
         """
@@ -128,6 +151,18 @@ def set_active_phase(connection: sqlite3.Connection, run_id: str, active_phase: 
         """,
         (active_phase, run_id),
     )
+
+
+def run_to_dict(run: RunRecord) -> dict[str, object]:
+    return {
+        "id": run.id,
+        "created_at": run.created_at,
+        "status": run.status,
+        "active_phase": run.active_phase,
+        "best_lineage_id": run.best_lineage_id,
+        "strongest_rival_lineage_id": run.strongest_rival_lineage_id,
+        "final_artifact_id": run.final_artifact_id,
+    }
 
 
 def row_to_run(row: sqlite3.Row) -> RunRecord:

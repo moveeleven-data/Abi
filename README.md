@@ -84,3 +84,15 @@ The command reads fixture material from `fixtures/human_calibration/`, writes
 JSON artifacts under `runs/<run_id>/calibration/<packet_id>/`, registers every
 artifact in SQLite, and marks all outputs as fixture data rather than real
 human validation.
+
+## Inspection Commands
+
+Artifact and run registry inspection:
+
+```powershell
+.\.venv\Scripts\abi.exe artifact list
+.\.venv\Scripts\abi.exe artifact show <artifact_id>
+.\.venv\Scripts\abi.exe run list
+.\.venv\Scripts\abi.exe run show <run_id>
+.\.venv\Scripts\abi.exe run latest
+```

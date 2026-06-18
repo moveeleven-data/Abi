@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
-from pathlib import Path
-import sqlite3
 
-from abi.artifacts import ArtifactRecord, get_artifact, register_artifact
+from abi.artifacts import ArtifactRecord
 from abi.config import AbiConfig
 from abi.controller.gates import GateRecord, record_gate
-from abi.controller.state import PHASE1_ABI_EAR_ACTIVE_PHASE, RunRecord, ensure_active_run
+from abi.controller.state import PHASE1_ABI_EAR_ACTIVE_PHASE, ensure_active_run
 from abi.controller.state import set_active_phase
 from abi.db import connect
-from abi.hashing import sha256_file
-from abi.ids import artifact_id as make_artifact_id
+from abi.packets import PacketWriter, create_packet_dir
 
 
 BENCHMARK_INPUT = "The table is still there in the morning."
@@ -62,112 +58,89 @@ class AbiEarRunResult:
 
 def run_abi_ear_demo(config: AbiConfig) -> AbiEarRunResult:
     run, _ = ensure_active_run(config)
-    output_dir = _next_packet_dir(config.run_dir(run.id) / "abi_ear")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = create_packet_dir(config.run_dir(run.id) / "abi_ear")
 
     payloads = build_benchmark_payloads(BENCHMARK_INPUT)
     artifacts: dict[str, ArtifactRecord] = {}
 
     with connect(config.db_path) as connection:
         set_active_phase(connection, run.id, PHASE1_ABI_EAR_ACTIVE_PHASE)
-        artifacts["abi_ear_germ_analysis"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_germ_analysis",
-            payload=payloads["abi_ear_germ_analysis"],
+        writer = PacketWriter(
+            connection=connection,
+            run_id=run.id,
+            packet_dir=output_dir,
+            lineage_id=ABI_EAR_LINEAGE_ID,
+            created_by="abi_ear_v1_stub",
+            fixture_only=False,
+        )
+        artifacts["abi_ear_germ_analysis"] = writer.write_artifact(
+            "abi_ear_germ_analysis",
+            payloads["abi_ear_germ_analysis"],
             parent_ids=[],
         )
-        artifacts["abi_ear_variants"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_variants",
-            payload=payloads["abi_ear_variants"],
+        artifacts["abi_ear_variants"] = writer.write_artifact(
+            "abi_ear_variants",
+            payloads["abi_ear_variants"],
             parent_ids=[artifacts["abi_ear_germ_analysis"].id],
         )
-        artifacts["abi_ear_field_model"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_field_model",
-            payload=payloads["abi_ear_field_model"],
+        artifacts["abi_ear_field_model"] = writer.write_artifact(
+            "abi_ear_field_model",
+            payloads["abi_ear_field_model"],
             parent_ids=[artifacts["abi_ear_germ_analysis"].id],
         )
-        artifacts["abi_ear_moves"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_moves",
-            payload=payloads["abi_ear_moves"],
+        artifacts["abi_ear_moves"] = writer.write_artifact(
+            "abi_ear_moves",
+            payloads["abi_ear_moves"],
             parent_ids=[
                 artifacts["abi_ear_germ_analysis"].id,
                 artifacts["abi_ear_field_model"].id,
             ],
         )
-        artifacts["abi_ear_ranked_move_sequence"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_ranked_move_sequence",
-            payload=payloads["abi_ear_ranked_move_sequence"],
+        artifacts["abi_ear_ranked_move_sequence"] = writer.write_artifact(
+            "abi_ear_ranked_move_sequence",
+            payloads["abi_ear_ranked_move_sequence"],
             parent_ids=[
                 artifacts["abi_ear_moves"].id,
                 artifacts["abi_ear_field_model"].id,
             ],
         )
-        artifacts["abi_ear_prose_inventions"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_prose_inventions",
-            payload=payloads["abi_ear_prose_inventions"],
+        artifacts["abi_ear_prose_inventions"] = writer.write_artifact(
+            "abi_ear_prose_inventions",
+            payloads["abi_ear_prose_inventions"],
             parent_ids=[
                 artifacts["abi_ear_field_model"].id,
                 artifacts["abi_ear_ranked_move_sequence"].id,
             ],
         )
-        artifacts["abi_ear_refined_invention"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_refined_invention",
-            payload=payloads["abi_ear_refined_invention"],
+        artifacts["abi_ear_refined_invention"] = writer.write_artifact(
+            "abi_ear_refined_invention",
+            payloads["abi_ear_refined_invention"],
             parent_ids=[
                 artifacts["abi_ear_prose_inventions"].id,
                 artifacts["abi_ear_ranked_move_sequence"].id,
             ],
         )
-        artifacts["abi_ear_reread_trace"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_reread_trace",
-            payload=payloads["abi_ear_reread_trace"],
+        artifacts["abi_ear_reread_trace"] = writer.write_artifact(
+            "abi_ear_reread_trace",
+            payloads["abi_ear_reread_trace"],
             parent_ids=[
                 artifacts["abi_ear_refined_invention"].id,
                 artifacts["abi_ear_germ_analysis"].id,
                 artifacts["abi_ear_field_model"].id,
             ],
         )
-        artifacts["abi_ear_ablation_report"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_ablation_report",
-            payload=payloads["abi_ear_ablation_report"],
+        artifacts["abi_ear_ablation_report"] = writer.write_artifact(
+            "abi_ear_ablation_report",
+            payloads["abi_ear_ablation_report"],
             parent_ids=[
                 artifacts["abi_ear_refined_invention"].id,
                 artifacts["abi_ear_ranked_move_sequence"].id,
                 artifacts["abi_ear_reread_trace"].id,
             ],
         )
-        artifacts["abi_ear_gate_report"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_gate_report",
-            payload=payloads["abi_ear_gate_report"],
+        artifacts["abi_ear_gate_report"] = writer.write_artifact(
+            "abi_ear_gate_report",
+            payloads["abi_ear_gate_report"],
             parent_ids=[
                 artifacts["abi_ear_germ_analysis"].id,
                 artifacts["abi_ear_variants"].id,
@@ -185,12 +158,9 @@ def run_abi_ear_demo(config: AbiConfig) -> AbiEarRunResult:
             blocking_defects=list(gate_report["blocking_defects"]),
             lineage_id=ABI_EAR_LINEAGE_ID,
         )
-        artifacts["abi_ear_packet"] = _write_and_register(
-            connection,
-            run=run,
-            output_dir=output_dir,
-            artifact_type="abi_ear_packet",
-            payload=payloads["abi_ear_packet"],
+        artifacts["abi_ear_packet"] = writer.write_artifact(
+            "abi_ear_packet",
+            payloads["abi_ear_packet"],
             parent_ids=[artifacts[artifact_type].id for artifact_type in ABI_EAR_ARTIFACT_TYPES[:-1]],
         )
 
@@ -774,72 +744,6 @@ def build_packet_summary(
         },
         "lineage_id": ABI_EAR_LINEAGE_ID,
     }
-
-
-def _write_and_register(
-    connection: sqlite3.Connection,
-    *,
-    run: RunRecord,
-    output_dir: Path,
-    artifact_type: str,
-    payload: object,
-    parent_ids: list[str],
-) -> ArtifactRecord:
-    path = output_dir / f"{artifact_type}.json"
-    path.write_text(_canonical_json(payload), encoding="utf-8", newline="\n")
-    return _register_or_get_artifact(
-        connection,
-        run_id=run.id,
-        artifact_type=artifact_type,
-        path=path,
-        parent_ids=parent_ids,
-    )
-
-
-def _next_packet_dir(base_dir: Path) -> Path:
-    base_dir.mkdir(parents=True, exist_ok=True)
-    used_numbers = []
-    for child in base_dir.iterdir():
-        if child.is_dir() and child.name.startswith("packet_"):
-            suffix = child.name.removeprefix("packet_")
-            if suffix.isdecimal():
-                used_numbers.append(int(suffix))
-    next_number = max(used_numbers, default=0) + 1
-    return base_dir / f"packet_{next_number:04d}"
-
-
-def _register_or_get_artifact(
-    connection: sqlite3.Connection,
-    *,
-    run_id: str,
-    artifact_type: str,
-    path: Path,
-    parent_ids: list[str],
-) -> ArtifactRecord:
-    content_hash = sha256_file(path)
-    expected_id = make_artifact_id(
-        run_id,
-        artifact_type,
-        str(path),
-        content_hash,
-        parent_ids,
-        ABI_EAR_LINEAGE_ID,
-    )
-    existing = get_artifact(connection, expected_id)
-    if existing is not None:
-        return existing
-    return register_artifact(
-        connection,
-        run_id=run_id,
-        artifact_type=artifact_type,
-        path=path,
-        lineage_id=ABI_EAR_LINEAGE_ID,
-        parent_ids=parent_ids,
-    )
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def _predicted_delta_for_move(move_id: str) -> str:

@@ -75,8 +75,16 @@ def test_reread_demo_registers_all_artifacts_and_parent_ids(tmp_path):
         )
         assert artifact_path == str(path)
         assert path.is_file()
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload == result.payloads[artifact_type]
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        assert envelope["schema_version"] == "1"
+        assert envelope["artifact_type"] == artifact_type
+        assert envelope["run_id"] == result.run_id
+        assert envelope["lineage_id"] == "minimal_reread_v1_benchmark"
+        assert envelope["parent_ids"] == reread_artifacts[artifact_type].parent_ids
+        assert envelope["created_by"] == "minimal_reread_v1_stub"
+        assert envelope["fixture_only"] is False
+        assert envelope["model_call_id"] is None
+        assert envelope["payload"] == result.payloads[artifact_type]
 
 
 def test_reread_demo_packet_directory_is_unique_per_invocation(tmp_path):

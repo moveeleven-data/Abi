@@ -67,8 +67,16 @@ def test_abi_ear_demo_registers_all_artifacts_and_parent_ids(tmp_path):
         )
         assert artifact_path == str(path)
         assert path.is_file()
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload == result.payloads[artifact_type]
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        assert envelope["schema_version"] == "1"
+        assert envelope["artifact_type"] == artifact_type
+        assert envelope["run_id"] == result.run_id
+        assert envelope["lineage_id"] == "abi_ear_v1_benchmark"
+        assert envelope["parent_ids"] == artifacts_by_type[artifact_type].parent_ids
+        assert envelope["created_by"] == "abi_ear_v1_stub"
+        assert envelope["fixture_only"] is False
+        assert envelope["model_call_id"] is None
+        assert envelope["payload"] == result.payloads[artifact_type]
 
 
 def test_abi_ear_demo_does_not_overwrite_previous_registered_paths(tmp_path):
