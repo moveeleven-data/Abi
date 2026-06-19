@@ -29,6 +29,8 @@ from abi.model_schemas import (
     FORENSIC_GROUNDING_READER_SCHEMA,
     HOSTILE_INTERNAL_READER_SCHEMA,
     INTERNAL_FAILURE_DIAGNOSIS_SCHEMA,
+    INTERNAL_FAILURE_TYPES,
+    INTERNAL_HOSTILE_RISK_FAILURE_TYPE_MAP,
     INTERNAL_READER_LAB_MODEL_SCHEMAS,
     INTERNAL_REREAD_READER_SCHEMA,
     INTERNAL_RIVAL_COMPARISON_SCHEMA,
@@ -758,6 +760,9 @@ def _prompt_for_worker(
             }
             for text in subject.texts
         ]
+    if worker.schema == INTERNAL_FAILURE_DIAGNOSIS_SCHEMA:
+        prompt["allowed_internal_failure_types"] = list(INTERNAL_FAILURE_TYPES)
+        prompt["hostile_risk_failure_type_map"] = dict(INTERNAL_HOSTILE_RISK_FAILURE_TYPE_MAP)
     return _canonical_json(prompt)
 
 
@@ -987,6 +992,17 @@ def _fake_model_failure_payload(prior_payloads: dict[str, dict[str, Any]]) -> di
                 "rival_stronger_local_embodiment",
                 "rival pressure remains unresolved by internal comparison",
                 ["internal_rival_comparison"],
+            )
+        )
+    if any(
+        attack.get("risk_type") == "thesis_replacing_artifact"
+        for attack in hostile.get("attacks", [])
+    ):
+        failures.append(
+            _failure(
+                "thesis_replacing_artifact",
+                "hostile reader flags thesis replacing artifact pressure",
+                ["hostile_reader_report"],
             )
         )
     if hostile["blocking_risks"]:
@@ -1919,6 +1935,7 @@ def _handle_for_failure(failure_type: str) -> str:
         "fake_depth": "tie claimed pressure to exact object behavior",
         "rival_stronger_local_embodiment": "borrow no text; increase local specificity",
         "cadence_or_register_damage": "lower abstract cadence near opening",
+        "thesis_replacing_artifact": "restore image pressure before thesis-like explanation",
     }
     return handles.get(failure_type, "adjust the smallest causal handle")
 

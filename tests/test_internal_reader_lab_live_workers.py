@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from abi.artifacts import list_artifacts
 from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
@@ -9,8 +11,14 @@ from abi.db import connect
 from abi.model_calls import MODEL_CALL_SUCCESS, MODEL_CALL_VALIDATION_FAILED, list_model_calls
 from abi.model_schemas import (
     FORENSIC_GROUNDING_READER_SCHEMA,
+    INTERNAL_FAILURE_DIAGNOSIS_SCHEMA,
+    INTERNAL_FAILURE_TYPES,
+    INTERNAL_HOSTILE_RISK_FAILURE_TYPE_MAP,
     INTERNAL_READER_LAB_MODEL_SCHEMAS,
+    ModelValidationError,
     json_schema_for_worker_schema,
+    normalize_internal_failure_type,
+    parse_and_validate_structured_output,
 )
 from abi.modules.internal_reader_lab import (
     FakeInternalReaderLabModelClient,
@@ -54,6 +62,28 @@ def write_sources(root: Path) -> Path:
 
 def read_payload(path: str) -> dict[str, object]:
     return json.loads(Path(path).read_text(encoding="utf-8"))["payload"]
+
+
+def internal_failure_payload(*failure_types: str) -> dict[str, object]:
+    return {
+        "failure_types_present": list(failure_types),
+        "failures": [
+            {
+                "failure_type": failure_type,
+                "diagnosis": f"{failure_type} blocks the current candidate.",
+                "evidence_artifacts": ["hostile_reader_report"],
+                "severity": "blocking",
+            }
+            for failure_type in failure_types
+        ],
+        "requires_recomposition": True,
+        "reread_gain_estimate": {
+            "score": 0.4,
+            "scale": "0_to_1",
+            "not_human_score": True,
+        },
+        "not_human_data": True,
+    }
 
 
 def build_pilot_packet(
@@ -148,6 +178,72 @@ def test_internal_reader_lab_nested_array_item_schemas_are_strict_objects():
     assert gate_item["required"] == ["gate_name", "passed", "blocking_defects", "record"]
 
 
+def test_internal_failure_schema_enum_matches_canonical_validator():
+    schema = json_schema_for_worker_schema(INTERNAL_FAILURE_DIAGNOSIS_SCHEMA)
+    types_enum = schema["properties"]["failure_types_present"]["items"]["enum"]
+    failure_enum = schema["properties"]["failures"]["items"]["properties"]["failure_type"]["enum"]
+    assert tuple(types_enum) == INTERNAL_FAILURE_TYPES
+    assert tuple(failure_enum) == INTERNAL_FAILURE_TYPES
+
+    payload = internal_failure_payload(*INTERNAL_FAILURE_TYPES)
+    parsed = parse_and_validate_structured_output(
+        json.dumps(payload),
+        INTERNAL_FAILURE_DIAGNOSIS_SCHEMA,
+    )
+
+    assert tuple(parsed["failure_types_present"]) == INTERNAL_FAILURE_TYPES
+    assert [failure["failure_type"] for failure in parsed["failures"]] == list(
+        INTERNAL_FAILURE_TYPES
+    )
+
+
+def test_internal_failure_taxonomy_accepts_thesis_replacing_artifact():
+    payload = internal_failure_payload("thesis_replacing_artifact")
+
+    parsed = parse_and_validate_structured_output(
+        json.dumps(payload),
+        INTERNAL_FAILURE_DIAGNOSIS_SCHEMA,
+    )
+
+    assert parsed["failure_types_present"] == ["thesis_replacing_artifact"]
+    assert parsed["failures"][0]["failure_type"] == "thesis_replacing_artifact"
+
+
+def test_internal_failure_taxonomy_maps_known_hostile_terms_only():
+    assert normalize_internal_failure_type("overexplanation") == "overexplained"
+    assert normalize_internal_failure_type("scaffold_leakage") == "thesis_replacing_artifact"
+    assert normalize_internal_failure_type("wrong_register") == "cadence_or_register_damage"
+    assert normalize_internal_failure_type("accidental_comedy") == "wrong_scale"
+    assert normalize_internal_failure_type("cliche_contamination") == "unlicensed_field"
+    assert normalize_internal_failure_type("pasted_ending") == "motif_returns_unchanged"
+    assert normalize_internal_failure_type("unearned_cosmic_scale") == "wrong_scale"
+    assert set(INTERNAL_HOSTILE_RISK_FAILURE_TYPE_MAP).issuperset(
+        {
+            "fake_depth",
+            "overexplanation",
+            "scaffold_leakage",
+            "wrong_register",
+            "accidental_comedy",
+            "cliche_contamination",
+            "thesis_replacing_artifact",
+            "pasted_ending",
+            "unearned_cosmic_scale",
+        }
+    )
+
+
+def test_internal_failure_taxonomy_rejects_arbitrary_types():
+    with pytest.raises(ModelValidationError):
+        normalize_internal_failure_type("totally_random_scanner_label")
+
+    payload = internal_failure_payload("totally_random_scanner_label")
+    with pytest.raises(ModelValidationError):
+        parse_and_validate_structured_output(
+            json.dumps(payload),
+            INTERNAL_FAILURE_DIAGNOSIS_SCHEMA,
+        )
+
+
 def test_stubbed_openai_internal_reader_lab_creates_model_artifacts(tmp_path):
     config, pilot_payload = build_pilot_packet(tmp_path, with_rival=True)
     clients: list[FakeInternalReaderLabModelClient] = []
@@ -231,8 +327,10 @@ def test_stubbed_openai_internal_reader_lab_creates_model_artifacts(tmp_path):
 
     stream = read_payload(result.payload["artifact_paths"]["internal_stream_reader_trace"])
     reread = read_payload(result.payload["artifact_paths"]["internal_reread_reader_trace"])
+    diagnosis = read_payload(result.payload["artifact_paths"]["internal_failure_diagnosis"])
     assert stream["not_human_data"] is True
     assert reread["not_human_data"] is True
+    assert "thesis_replacing_artifact" in diagnosis["failure_types_present"]
 
     assert final_report.refused is True
     combined_blockers = " ".join(final_report.missing_gates + final_report.failed_gates)

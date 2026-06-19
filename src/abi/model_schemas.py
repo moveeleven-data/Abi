@@ -243,6 +243,44 @@ PILOT_MODEL_SCHEMAS = (
     PILOT_RAW_MODEL_BASELINE_SCHEMA,
 )
 
+INTERNAL_FAILURE_TYPES = (
+    "underplanted",
+    "overexplained",
+    "fake_depth",
+    "weak_bridge",
+    "wrong_scale",
+    "unlicensed_field",
+    "dead_detail",
+    "motif_returns_unchanged",
+    "low_crisis",
+    "rival_stronger_local_embodiment",
+    "paraphrase_capture",
+    "cadence_or_register_damage",
+    "thesis_replacing_artifact",
+)
+
+INTERNAL_FAILURE_TYPE_ALIASES = {
+    "overexplanation": "overexplained",
+    "scaffold_leakage": "thesis_replacing_artifact",
+    "wrong_register": "cadence_or_register_damage",
+    "accidental_comedy": "wrong_scale",
+    "cliche_contamination": "unlicensed_field",
+    "pasted_ending": "motif_returns_unchanged",
+    "unearned_cosmic_scale": "wrong_scale",
+}
+
+INTERNAL_HOSTILE_RISK_FAILURE_TYPE_MAP = {
+    "fake_depth": "fake_depth",
+    "overexplanation": "overexplained",
+    "scaffold_leakage": "thesis_replacing_artifact",
+    "wrong_register": "cadence_or_register_damage",
+    "accidental_comedy": "wrong_scale",
+    "cliche_contamination": "unlicensed_field",
+    "thesis_replacing_artifact": "thesis_replacing_artifact",
+    "pasted_ending": "motif_returns_unchanged",
+    "unearned_cosmic_scale": "wrong_scale",
+}
+
 INTERNAL_STREAM_READER_SCHEMA = WorkerSchema(
     name="InternalStreamReaderOutput",
     version="1",
@@ -987,10 +1025,21 @@ def _internal_score_schema() -> dict[str, Any]:
     )
 
 
+def _internal_failure_type_schema() -> dict[str, Any]:
+    return {"type": "string", "enum": list(INTERNAL_FAILURE_TYPES)}
+
+
+def _internal_failure_type_array_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": _internal_failure_type_schema(),
+    }
+
+
 def _internal_failure_schema() -> dict[str, Any]:
     return _object_schema(
         {
-            "failure_type": {"type": "string"},
+            "failure_type": _internal_failure_type_schema(),
             "diagnosis": {"type": "string"},
             "evidence_artifacts": _string_array_schema(),
             "severity": {"type": "string"},
@@ -1204,7 +1253,7 @@ def internal_rival_comparison_json_schema() -> dict[str, Any]:
 def internal_failure_diagnosis_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
-            "failure_types_present": _string_array_schema(),
+            "failure_types_present": _internal_failure_type_array_schema(),
             "failures": {"type": "array", "items": _internal_failure_schema()},
             "requires_recomposition": {"type": "boolean"},
             "reread_gain_estimate": _internal_reread_gain_schema(),
@@ -1446,6 +1495,14 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
     if schema == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA:
         return _validate_autonomous_candidate_gate_report(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
+
+
+def normalize_internal_failure_type(failure_type: str) -> str:
+    if failure_type in INTERNAL_FAILURE_TYPES:
+        return failure_type
+    if failure_type in INTERNAL_FAILURE_TYPE_ALIASES:
+        return INTERNAL_FAILURE_TYPE_ALIASES[failure_type]
+    raise ModelValidationError(f"unsupported internal failure type: {failure_type}")
 
 
 def _validate_abi_ear_germ_analysis(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2110,35 +2167,29 @@ def _validate_internal_rival_comparison(payload: dict[str, Any]) -> dict[str, An
 
 
 def _validate_internal_failure_diagnosis(payload: dict[str, Any]) -> dict[str, Any]:
-    allowed = {
-        "underplanted",
-        "overexplained",
-        "fake_depth",
-        "weak_bridge",
-        "wrong_scale",
-        "unlicensed_field",
-        "dead_detail",
-        "motif_returns_unchanged",
-        "low_crisis",
-        "rival_stronger_local_embodiment",
-        "paraphrase_capture",
-        "cadence_or_register_damage",
-    }
     _require_string_list(payload, "failure_types_present")
+    normalized_types = []
     for failure_type in payload["failure_types_present"]:
-        if failure_type not in allowed:
-            raise ModelValidationError(f"unsupported internal failure type: {failure_type}")
+        normalized_types.append(normalize_internal_failure_type(failure_type))
     _require_object_list(payload, "failures")
+    normalized_failures = []
     for index, failure in enumerate(payload["failures"]):
         failure_type = failure.get("failure_type")
-        if not isinstance(failure_type, str) or failure_type not in allowed:
-            raise ModelValidationError(f"failures[{index}].failure_type is unsupported")
+        if not isinstance(failure_type, str):
+            raise ModelValidationError(f"failures[{index}].failure_type must be a string")
+        try:
+            normalized_type = normalize_internal_failure_type(failure_type)
+        except ModelValidationError as error:
+            raise ModelValidationError(f"failures[{index}].failure_type is unsupported") from error
+        normalized_failure = dict(failure)
+        normalized_failure["failure_type"] = normalized_type
+        normalized_failures.append(normalized_failure)
     _require_type(payload, "requires_recomposition", bool)
     _require_type(payload, "reread_gain_estimate", dict)
     _require_true(payload, "not_human_data")
     return {
-        "failure_types_present": payload["failure_types_present"],
-        "failures": payload["failures"],
+        "failure_types_present": normalized_types,
+        "failures": normalized_failures,
         "requires_recomposition": payload["requires_recomposition"],
         "reread_gain_estimate": payload["reread_gain_estimate"],
         "not_human_data": True,
