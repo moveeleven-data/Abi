@@ -29,9 +29,11 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
     AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
+    AUTONOMOUS_REVISION_JUDGMENT_KEYS,
     AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA,
     AUTONOMOUS_REVISION_MODEL_SCHEMAS,
     AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
+    AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS,
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
     AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA,
     WorkerRole,
@@ -73,24 +75,6 @@ AUTONOMOUS_REVISION_ARTIFACT_TYPES = (
     "local_law_case_note",
     "autonomous_closed_loop_gate_report",
     "autonomous_closed_loop_packet",
-)
-AUTONOMOUS_REVISION_PROVENANCE_SOURCES = {
-    "original_candidate_text",
-    "revised_candidate_text",
-    "actual_ablation_variant",
-    "predicted_ablation_effect",
-    "strongest_rival_text",
-    "prior_reader_lab_evidence",
-}
-AUTONOMOUS_REVISION_JUDGMENT_KEYS = (
-    "reread_transformation_improved",
-    "opening_transformation_improved",
-    "local_embodiment_improved",
-    "overexplanation_decreased",
-    "fake_depth_risk_decreased",
-    "revised_candidate_became_more_schematic",
-    "rival_still_beats_candidate",
-    "another_revision_cycle_needed",
 )
 AUTONOMOUS_REVISION_PROMPT_CONTRACT_PREFIX = "autonomous.revision"
 AUTONOMOUS_REVISION_FAKE_MODEL_PROVIDER = "fake"
@@ -851,6 +835,19 @@ def _prompt_for_revision_worker(
         ],
         "not_human_data": True,
     }
+    if worker.schema == AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA:
+        prompt["allowed_provenance_source_tokens"] = list(
+            AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS
+        )
+        prompt["old_new_rival_provenance_contract"] = (
+            "judgment_provenance values must be arrays containing only exact tokens "
+            "from allowed_provenance_source_tokens. Do not put sentences, quotes, "
+            "summaries, or explanations in judgment_provenance."
+        )
+        prompt["old_new_rival_rationale_contract"] = (
+            "Put prose justification in judgment_rationale using the same judgment "
+            "keys. Rationale may explain the judgment, but provenance remains token-only."
+        )
     return _canonical_json(prompt)
 
 
@@ -1039,7 +1036,7 @@ def _validate_old_new_rival_provenance(
         unsupported = [
             source
             for source in sources
-            if source not in AUTONOMOUS_REVISION_PROVENANCE_SOURCES
+            if source not in AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS
         ]
         if unsupported:
             invalid.append(f"{key} has unsupported provenance: {unsupported}")
@@ -1054,7 +1051,7 @@ def _validate_old_new_rival_provenance(
     return {
         "judgment_count": len(AUTONOMOUS_REVISION_JUDGMENT_KEYS),
         "all_judgments_have_provenance": True,
-        "allowed_sources": sorted(AUTONOMOUS_REVISION_PROVENANCE_SOURCES),
+        "allowed_sources": sorted(AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS),
     }
 
 
@@ -1462,6 +1459,7 @@ def _fake_model_old_new_rival_payload(
             "Strongest rival pressure remains active and cannot be collapsed into a pass."
         ),
         "judgment_provenance": _default_judgment_provenance(rival_score is not None),
+        "judgment_rationale": _default_judgment_rationale(rival_score is not None),
         "not_human_data": True,
     }
 
@@ -1966,6 +1964,7 @@ def _build_old_new_rival_comparison(
         "comparison_basis": "deterministic fake internal comparison, not human data",
         "ablation_summary": ablation_comparison["summary"],
         "judgment_provenance": _default_judgment_provenance(rival is not None),
+        "judgment_rationale": _default_judgment_rationale(rival is not None),
         "fixture_only": True,
     }
 
@@ -2402,10 +2401,12 @@ def _default_judgment_provenance(strongest_rival_present: bool) -> dict[str, lis
             "revised_candidate_text",
             "predicted_ablation_effect",
             "prior_reader_lab_evidence",
+            "ablation_reread_comparison",
         ],
         "opening_transformation_improved": [
             "original_candidate_text",
             "revised_candidate_text",
+            "revision_diff_report",
         ],
         "local_embodiment_improved": [
             "original_candidate_text",
@@ -2418,21 +2419,67 @@ def _default_judgment_provenance(strongest_rival_present: bool) -> dict[str, lis
             "original_candidate_text",
             "revised_candidate_text",
             "prior_reader_lab_evidence",
+            "revision_diff_report",
         ],
         "fake_depth_risk_decreased": [
             "revised_candidate_text",
             "prior_reader_lab_evidence",
+            "ablation_reread_comparison",
         ],
         "revised_candidate_became_more_schematic": [
             "revised_candidate_text",
             "prior_reader_lab_evidence",
+            "revision_diff_report",
         ],
         "rival_still_beats_candidate": rival_sources,
         "another_revision_cycle_needed": [
             "revised_candidate_text",
+            "actual_ablation_variant",
+            "planned_ablation_probe",
             "predicted_ablation_effect",
             "prior_reader_lab_evidence",
         ],
+    }
+
+
+def _default_judgment_rationale(strongest_rival_present: bool) -> dict[str, str]:
+    rival_rationale = (
+        "The rival comparison remains active because the imported rival still supplies "
+        "local embodiment pressure against the revised candidate."
+        if strongest_rival_present
+        else "No imported rival is present, so the judgment leans on revised text and "
+        "prior internal reader-lab pressure."
+    )
+    return {
+        "reread_transformation_improved": (
+            "The revised text carries more reread pressure through concrete consequence, "
+            "but the ablation comparison still treats this as provisional."
+        ),
+        "opening_transformation_improved": (
+            "The opening is judged against the original and the diff report rather than "
+            "against a free-form impression."
+        ),
+        "local_embodiment_improved": (
+            "The local object-world is stronger when the revision keeps the room and "
+            "table as pressure-bearing evidence."
+        ),
+        "overexplanation_decreased": (
+            "The revision is credited only where it reduces explanatory declaration and "
+            "lets the domestic field carry the point."
+        ),
+        "fake_depth_risk_decreased": (
+            "Fake-depth risk is not treated as solved; the rationale notes pressure from "
+            "reader-lab evidence and ablation comparison."
+        ),
+        "revised_candidate_became_more_schematic": (
+            "The revised candidate is checked for schematic drift using the revision "
+            "diff and local-law note."
+        ),
+        "rival_still_beats_candidate": rival_rationale,
+        "another_revision_cycle_needed": (
+            "Another cycle remains necessary because ablation probes and prior reader "
+            "evidence do not yet prove the repair stable."
+        ),
     }
 
 

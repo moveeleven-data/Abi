@@ -1498,7 +1498,7 @@ def _revision_ablation_row_schema() -> dict[str, Any]:
     )
 
 
-_AUTONOMOUS_REVISION_JUDGMENT_KEYS = (
+AUTONOMOUS_REVISION_JUDGMENT_KEYS = (
     "reread_transformation_improved",
     "opening_transformation_improved",
     "local_embodiment_improved",
@@ -1509,14 +1509,36 @@ _AUTONOMOUS_REVISION_JUDGMENT_KEYS = (
     "another_revision_cycle_needed",
 )
 
+AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS = (
+    "original_candidate_text",
+    "revised_candidate_text",
+    "strongest_rival_text",
+    "direct_prompt_baseline_text",
+    "raw_model_baseline_text",
+    "actual_ablation_variant",
+    "planned_ablation_probe",
+    "predicted_ablation_effect",
+    "prior_reader_lab_evidence",
+    "revision_diff_report",
+    "ablation_reread_comparison",
+    "local_law_case_note",
+)
+
 
 def _revision_judgment_provenance_schema() -> dict[str, Any]:
     return _object_schema(
         {
-            key: _string_array_schema()
-            for key in _AUTONOMOUS_REVISION_JUDGMENT_KEYS
+            key: _provenance_token_array_schema()
+            for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS
         },
-        list(_AUTONOMOUS_REVISION_JUDGMENT_KEYS),
+        list(AUTONOMOUS_REVISION_JUDGMENT_KEYS),
+    )
+
+
+def _revision_judgment_rationale_schema() -> dict[str, Any]:
+    return _object_schema(
+        {key: {"type": "string"} for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS},
+        list(AUTONOMOUS_REVISION_JUDGMENT_KEYS),
     )
 
 
@@ -1713,6 +1735,7 @@ def autonomous_revision_old_new_rival_comparison_json_schema() -> dict[str, Any]
             "old_new_summary": {"type": "string"},
             "rival_pressure_summary": {"type": "string"},
             "judgment_provenance": _revision_judgment_provenance_schema(),
+            "judgment_rationale": _revision_judgment_rationale_schema(),
             "not_human_data": {"type": "boolean"},
         },
         [
@@ -1730,6 +1753,7 @@ def autonomous_revision_old_new_rival_comparison_json_schema() -> dict[str, Any]
             "old_new_summary",
             "rival_pressure_summary",
             "judgment_provenance",
+            "judgment_rationale",
             "not_human_data",
         ],
     )
@@ -2974,6 +2998,10 @@ def _validate_autonomous_revision_old_new_rival_comparison(
     judgment_provenance = _validate_revision_judgment_provenance(
         payload["judgment_provenance"]
     )
+    _require_type(payload, "judgment_rationale", dict)
+    judgment_rationale = _validate_revision_judgment_rationale(
+        payload["judgment_rationale"]
+    )
     _require_true(payload, "not_human_data")
     return {
         "reread_transformation_improved": payload["reread_transformation_improved"],
@@ -2992,6 +3020,7 @@ def _validate_autonomous_revision_old_new_rival_comparison(
         "old_new_summary": payload["old_new_summary"],
         "rival_pressure_summary": payload["rival_pressure_summary"],
         "judgment_provenance": judgment_provenance,
+        "judgment_rationale": judgment_rationale,
         "not_human_data": True,
     }
 
@@ -3106,16 +3135,9 @@ def _validate_ablation_row(payload: dict[str, Any], label: str) -> dict[str, obj
 
 
 def _validate_revision_judgment_provenance(payload: dict[str, Any]) -> dict[str, list[str]]:
-    allowed = {
-        "original_candidate_text",
-        "revised_candidate_text",
-        "actual_ablation_variant",
-        "predicted_ablation_effect",
-        "strongest_rival_text",
-        "prior_reader_lab_evidence",
-    }
+    allowed = set(AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS)
     validated = {}
-    for key in _AUTONOMOUS_REVISION_JUDGMENT_KEYS:
+    for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS:
         _require_string_list(payload, key, field_prefix="judgment_provenance.")
         if not payload[key]:
             raise ModelValidationError(f"judgment_provenance.{key} must not be empty")
@@ -3125,6 +3147,17 @@ def _validate_revision_judgment_provenance(payload: dict[str, Any]) -> dict[str,
                 f"judgment_provenance.{key} contains unsupported sources: {invalid}"
             )
         validated[key] = list(payload[key])
+    return validated
+
+
+def _validate_revision_judgment_rationale(payload: dict[str, Any]) -> dict[str, str]:
+    validated = {}
+    for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS:
+        _require_type(payload, key, str, field_prefix="judgment_rationale.")
+        rationale = payload[key].strip()
+        if not rationale:
+            raise ModelValidationError(f"judgment_rationale.{key} must not be empty")
+        validated[key] = rationale
     return validated
 
 
@@ -3157,6 +3190,16 @@ def _string_array_schema() -> dict[str, Any]:
     return {
         "type": "array",
         "items": {"type": "string"},
+    }
+
+
+def _provenance_token_array_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": {
+            "type": "string",
+            "enum": list(AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS),
+        },
     }
 
 

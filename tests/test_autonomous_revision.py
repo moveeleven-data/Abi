@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from abi.artifacts import list_artifacts
 from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
@@ -12,9 +14,14 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
     AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
+    AUTONOMOUS_REVISION_JUDGMENT_KEYS,
     AUTONOMOUS_REVISION_MODEL_SCHEMAS,
+    AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
+    AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS,
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
+    ModelValidationError,
     json_schema_for_worker_schema,
+    parse_and_validate_structured_output,
 )
 from abi.modules.autonomous_revision import (
     AUTONOMOUS_REVISION_ARTIFACT_TYPES,
@@ -159,6 +166,39 @@ def dump_json(payload: dict[str, object]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
+def valid_old_new_rival_payload() -> dict[str, object]:
+    provenance = {
+        key: ["original_candidate_text", "revised_candidate_text"]
+        for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS
+    }
+    provenance["rival_still_beats_candidate"] = [
+        "revised_candidate_text",
+        "strongest_rival_text",
+    ]
+    rationale = {
+        key: f"Rationale prose for {key} stays outside provenance sources."
+        for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS
+    }
+    return {
+        "reread_transformation_improved": True,
+        "opening_transformation_improved": True,
+        "local_embodiment_improved": True,
+        "overexplanation_decreased": True,
+        "fake_depth_risk_decreased": False,
+        "revised_candidate_became_more_schematic": False,
+        "strongest_rival_present": True,
+        "rival_still_beats_candidate": True,
+        "another_revision_cycle_needed": True,
+        "comparison_basis": "structured internal comparison, not human data",
+        "rival_pressure_preserved": True,
+        "old_new_summary": "The revised candidate improves but remains provisional.",
+        "rival_pressure_summary": "The rival remains active pressure.",
+        "judgment_provenance": provenance,
+        "judgment_rationale": rationale,
+        "not_human_data": True,
+    }
+
+
 class UnreportedMaterialChangeClient(FakeAutonomousRevisionModelClient):
     def generate(self, request):
         raw_output = super().generate(request)
@@ -242,6 +282,18 @@ class InvalidAblationComparisonClient(FakeAutonomousRevisionModelClient):
                 }
             )
             self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class InvalidOldNewRivalProvenanceClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA:
+            payload["judgment_provenance"]["reread_transformation_improved"].append(
+                "The revised closing remains image-led and therefore reads better."
+            )
             return dump_json(payload)
         return raw_output
 
@@ -524,6 +576,53 @@ def test_autonomous_revision_model_schemas_are_strict_objects():
     assert variant_item["additionalProperties"] is False
 
 
+def test_old_new_rival_provenance_schema_exposes_allowed_tokens():
+    schema = json_schema_for_worker_schema(
+        AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA
+    )
+    provenance = schema["properties"]["judgment_provenance"]
+    rationale = schema["properties"]["judgment_rationale"]
+
+    assert set(provenance["required"]) == set(AUTONOMOUS_REVISION_JUDGMENT_KEYS)
+    assert set(rationale["required"]) == set(AUTONOMOUS_REVISION_JUDGMENT_KEYS)
+    for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS:
+        token_schema = provenance["properties"][key]
+        assert token_schema["items"]["enum"] == list(
+            AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS
+        )
+        assert rationale["properties"][key]["type"] == "string"
+
+
+def test_old_new_rival_valid_provenance_and_rationale_pass_validation():
+    payload = valid_old_new_rival_payload()
+
+    parsed = parse_and_validate_structured_output(
+        dump_json(payload),
+        AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
+    )
+
+    assert parsed["judgment_provenance"]["rival_still_beats_candidate"] == [
+        "revised_candidate_text",
+        "strongest_rival_text",
+    ]
+    assert "stays outside provenance" in parsed["judgment_rationale"][
+        "reread_transformation_improved"
+    ]
+
+
+def test_old_new_rival_prose_in_provenance_fails_validation():
+    payload = valid_old_new_rival_payload()
+    payload["judgment_provenance"]["reread_transformation_improved"].append(
+        "The revised closing remains image-led and therefore reads better."
+    )
+
+    with pytest.raises(ModelValidationError, match="unsupported sources"):
+        parse_and_validate_structured_output(
+            dump_json(payload),
+            AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
+        )
+
+
 def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path):
     config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
     clients: list[FakeAutonomousRevisionModelClient] = []
@@ -646,6 +745,12 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     }
     assert "strongest_rival_text" in comparison["judgment_provenance"][
         "rival_still_beats_candidate"
+    ]
+    assert set(comparison["judgment_rationale"]) == set(
+        AUTONOMOUS_REVISION_JUDGMENT_KEYS
+    )
+    assert "revised text" in comparison["judgment_rationale"][
+        "reread_transformation_improved"
     ]
 
     local_law = read_payload(result.payload["artifact_paths"]["local_law_case_note"])
@@ -788,6 +893,64 @@ def test_stubbed_openai_invalid_ablation_alignment_fails_closed(tmp_path):
     assert result.payload["accepted"] is False
     assert "ablation_reread_comparison rows are not aligned" in result.payload["message"]
     assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
+
+
+def test_stubbed_openai_invalid_old_new_provenance_fails_closed(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(
+            clients,
+            InvalidOldNewRivalProvenanceClient,
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "model-call failure" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 7
+    failed_call = result.payload["model_calls"][-1]
+    assert (
+        failed_call["schema_name"]
+        == AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA.name
+    )
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "old_new_rival_comparison" not in result.payload["artifact_ids"]
+    assert "autonomous_closed_loop_gate_report" not in result.payload["artifact_ids"]
+    assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
+    assert result.payload["gate_report"] is None
+
+    with connect(config.db_path) as connection:
+        artifacts = list_artifacts(connection, result.payload["run_id"])
+        revision_calls = [
+            call
+            for call in list_model_calls(connection, run_id=result.payload["run_id"])
+            if call.prompt_contract_id.startswith("autonomous.revision.")
+        ]
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(revision_calls) == 7
+    revision_artifact_types = {
+        artifact.type
+        for artifact in artifacts
+        if artifact.type in AUTONOMOUS_REVISION_ARTIFACT_TYPES
+    }
+    assert "old_new_rival_comparison" not in revision_artifact_types
+    assert "autonomous_closed_loop_gate_report" not in revision_artifact_types
+    assert "autonomous_closed_loop_packet" not in revision_artifact_types
+    assert final_report.refused is True
 
 
 def test_stubbed_openai_autonomous_revision_invalid_output_fails_closed(tmp_path):

@@ -177,8 +177,10 @@ def _build_autonomous_revision_prompt(input_text: str) -> str:
         "Keep the recomposition bounded to the selected causal handle; do not rewrite "
         "the whole artifact. Preserve domestic object-world pressure, morning stillness, "
         "incremental patterning, quiet philosophical pressure, and strongest-rival "
-        "pressure. Do not claim finality, validation, phase shift, human evidence, or "
-        "paper readiness. Prompt packet:\n"
+        "pressure. For old/new rival comparison, use judgment_provenance only for exact "
+        "allowed source tokens supplied in the prompt packet; put explanatory prose in "
+        "judgment_rationale, never in provenance arrays. Do not claim finality, "
+        "validation, phase shift, human evidence, or paper readiness. Prompt packet:\n"
         f"{input_text}"
     )
 
