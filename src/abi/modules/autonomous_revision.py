@@ -635,7 +635,11 @@ def _run_live_autonomous_revision(
                 parent_ids=parent_ids,
                 fixture_only=fixture_only,
                 output_dir=str(output_dir),
-                parsed_payload_validator=_validator_for_revision_worker(worker, payloads),
+                parsed_payload_validator=_validator_for_revision_worker(
+                    subject,
+                    worker,
+                    payloads,
+                ),
             )
         )
         model_results.append(result)
@@ -843,6 +847,37 @@ def _prompt_for_revision_worker(
         ],
         "not_human_data": True,
     }
+    handle_payload = payloads.get(AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type)
+    if isinstance(handle_payload, dict) and worker.schema in (
+        AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
+        AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
+        AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
+        AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
+        AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
+        AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA,
+    ):
+        selected_target = {
+            "span_ref": handle_payload["span_ref"],
+            **_target_contract_from_handle(handle_payload),
+        }
+        prompt["selected_target_contract"] = selected_target
+    if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+        prompt["candidate_reviser_target_contract"] = (
+            "Edit only inside selected_target_contract.allowed_span_refs. Do not silently "
+            "change outside that target. If the selected causal handle truly requires a "
+            "larger target, keep the revision bounded and make the diff reporter declare "
+            "target_region_expanded with changed spans outside the original target."
+        )
+    if worker.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
+        prompt["revision_diff_integrity_contract"] = (
+            "Report every material text change in changed_spans. For each changed span, "
+            "set inside_target and within_selected_target truthfully against "
+            "selected_target_contract.allowed_span_refs. If any material change is outside "
+            "the selected target, set target_region_expanded true, provide "
+            "expanded_target_region, expansion_reason, target_expansion_justification, and "
+            "mark that changed span requires_target_expansion with target_expansion_reason. "
+            "If there is no explicit expansion, all changed spans must remain inside target."
+        )
     if worker.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
         variant_set = payloads.get(AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type)
         executed_variant_ids = _executed_ablation_variant_ids(variant_set or {})
@@ -874,21 +909,36 @@ def _prompt_for_revision_worker(
 
 
 def _validator_for_revision_worker(
+    subject: RevisionSubject,
     worker: AutonomousRevisionWorkerSpec,
     payloads: dict[str, dict[str, Any]],
 ):
-    if worker.schema != AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
-        return None
+    if worker.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
 
-    variant_set = payloads[AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type]
+        def _validate_diff(parsed_payload: dict[str, object]) -> None:
+            try:
+                candidate_payloads = dict(payloads)
+                candidate_payloads[AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA.artifact_type] = (
+                    parsed_payload
+                )
+                _validate_diff_integrity(subject, candidate_payloads)
+            except RevisionIntegrityError as error:
+                raise ModelValidationError(str(error)) from error
 
-    def _validate(parsed_payload: dict[str, object]) -> None:
-        try:
-            _validate_ablation_alignment(variant_set, parsed_payload)
-        except RevisionIntegrityError as error:
-            raise ModelValidationError(str(error)) from error
+        return _validate_diff
 
-    return _validate
+    if worker.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
+        variant_set = payloads[AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type]
+
+        def _validate_ablation(parsed_payload: dict[str, object]) -> None:
+            try:
+                _validate_ablation_alignment(variant_set, parsed_payload)
+            except RevisionIntegrityError as error:
+                raise ModelValidationError(str(error)) from error
+
+        return _validate_ablation
+
+    return None
 
 
 def _parent_ids_for_revision_worker(
@@ -962,13 +1012,30 @@ def _validate_diff_integrity(
             selected_target_region,
         )
         if not within_selected_target:
-            out_of_target_changes.append(_change_summary(change))
+            out_of_target_changes.append(
+                _change_summary(change, matching_span=matching_span, inside_target=False)
+            )
+            expansion_reported = (
+                bool(diff_report["target_region_expanded"])
+                and bool(str(diff_report["target_expansion_justification"]).strip())
+                and bool(str(diff_report.get("expanded_target_region", "")).strip())
+                and bool(str(diff_report.get("expansion_reason", "")).strip())
+                and not bool(matching_span["within_selected_target"])
+                and not bool(matching_span.get("inside_target", True))
+                and bool(matching_span.get("requires_target_expansion", False))
+                and bool(str(matching_span.get("target_expansion_reason", "")).strip())
+            )
             if (
-                not diff_report["target_region_expanded"]
-                or not str(diff_report["target_expansion_justification"]).strip()
-                or bool(matching_span["within_selected_target"])
+                not expansion_reported
             ):
-                target_violations.append(_change_summary(change))
+                target_violations.append(
+                    _change_summary(
+                        change,
+                        matching_span=matching_span,
+                        inside_target=False,
+                        expansion_absent=True,
+                    )
+                )
 
     if missing_changes:
         raise RevisionIntegrityError(
@@ -991,7 +1058,11 @@ def _validate_diff_integrity(
         "target": {
             "selected_target_region": selected_target_region,
             "reported_target_region": diff_report["target_region"],
+            "target_region_label": diff_report.get("target_region_label"),
+            "allowed_span_refs": diff_report.get("allowed_span_refs", []),
             "target_region_expanded": bool(diff_report["target_region_expanded"]),
+            "expanded_target_region": diff_report.get("expanded_target_region", ""),
+            "expansion_reason": diff_report.get("expansion_reason", ""),
             "target_expansion_justification": diff_report["target_expansion_justification"],
             "out_of_target_change_count": len(out_of_target_changes),
             "out_of_target_changes": out_of_target_changes,
@@ -1130,7 +1201,7 @@ def _validate_old_new_rival_provenance(
     }
 
 
-def _material_text_changes(original: str, revised: str) -> list[dict[str, str]]:
+def _material_text_changes(original: str, revised: str) -> list[dict[str, object]]:
     original_units = _diff_units(original)
     revised_units = _diff_units(revised)
     matcher = SequenceMatcher(None, original_units, revised_units, autojunk=False)
@@ -1147,6 +1218,8 @@ def _material_text_changes(original: str, revised: str) -> list[dict[str, str]]:
         index = min(original_start, max(0, len(original_units) - 1))
         changes.append(
             {
+                "change_id": f"change_{len(changes) + 1:02d}",
+                "unit_index": index,
                 "before": before,
                 "after": after,
                 "region": _region_for_unit_index(index, len(original_units)),
@@ -1162,16 +1235,60 @@ def _reported_changed_spans_for_texts(
     target_region: str,
     reason: str,
 ) -> list[dict[str, object]]:
-    return [
-        {
-            "before": change["before"],
-            "after": change["after"],
-            "region": change["region"],
-            "within_selected_target": _region_matches_target(change["region"], target_region),
-            "reason": reason,
-        }
-        for change in _material_text_changes(original, revised)
-    ]
+    spans = []
+    for change in _material_text_changes(original, revised):
+        inside_target = _region_matches_target(str(change["region"]), target_region)
+        spans.append(
+            {
+                "changed_span_id": str(change["change_id"]),
+                "before": change["before"],
+                "after": change["after"],
+                "region": change["region"],
+                "inside_target": inside_target,
+                "within_selected_target": inside_target,
+                "requires_target_expansion": not inside_target,
+                "target_expansion_reason": (
+                    ""
+                    if inside_target
+                    else "outside selected target; top-level target expansion is required"
+                ),
+                "reason": reason,
+            }
+        )
+    return spans
+
+
+def _target_region_contract(region: str) -> dict[str, object]:
+    label = "_".join(_words(region)[:8]) or "target_region"
+    return {
+        "target_region_label": f"target_region:{label}",
+        "target_region_description": (
+            "Selected bounded revision target; material edits outside this region "
+            "require explicit target expansion."
+        ),
+        "allowed_span_refs": [region],
+        "protected_outside_spans": [f"all candidate spans outside {region}"],
+    }
+
+
+def _target_contract_from_handle(handle: dict[str, Any]) -> dict[str, object]:
+    region = str(handle["span_ref"]["region"])
+    fallback = _target_region_contract(region)
+    return {
+        "target_region_label": str(
+            handle.get("target_region_label", fallback["target_region_label"])
+        ),
+        "target_region_description": str(
+            handle.get(
+                "target_region_description",
+                fallback["target_region_description"],
+            )
+        ),
+        "allowed_span_refs": list(handle.get("allowed_span_refs", fallback["allowed_span_refs"])),
+        "protected_outside_spans": list(
+            handle.get("protected_outside_spans", fallback["protected_outside_spans"])
+        ),
+    }
 
 
 def _diff_units(text: str) -> list[str]:
@@ -1197,7 +1314,7 @@ def _region_for_unit_index(index: int, total: int) -> str:
 
 def _matching_changed_span(
     reported_spans: list[dict[str, Any]],
-    change: dict[str, str],
+    change: dict[str, object],
 ) -> dict[str, Any] | None:
     for span in reported_spans:
         if _span_covers_change(span, change):
@@ -1205,9 +1322,9 @@ def _matching_changed_span(
     return None
 
 
-def _span_covers_change(span: dict[str, Any], change: dict[str, str]) -> bool:
-    before_actual = _normalize_diff_text(change["before"])
-    after_actual = _normalize_diff_text(change["after"])
+def _span_covers_change(span: dict[str, Any], change: dict[str, object]) -> bool:
+    before_actual = _normalize_diff_text(str(change["before"]))
+    after_actual = _normalize_diff_text(str(change["after"]))
     before_reported = _normalize_diff_text(str(span.get("before", "")))
     after_reported = _normalize_diff_text(str(span.get("after", "")))
     return _text_covers(before_reported, before_actual) or _text_covers(
@@ -1248,10 +1365,29 @@ def _region_matches_target(change_region: str, selected_target_region: str) -> b
     return change in target or target in change
 
 
-def _change_summary(change: dict[str, str]) -> str:
-    before = change["before"][:80].replace("\n", " ")
-    after = change["after"][:80].replace("\n", " ")
-    return f"{change['region']} before={before!r} after={after!r}"
+def _change_summary(
+    change: dict[str, object],
+    *,
+    matching_span: dict[str, Any] | None = None,
+    inside_target: bool | None = None,
+    expansion_absent: bool | None = None,
+) -> str:
+    before = str(change["before"])[:80].replace("\n", " ")
+    after = str(change["after"])[:80].replace("\n", " ")
+    parts = [
+        f"change_id={change.get('change_id', 'unknown')}",
+        f"unit_index={change.get('unit_index', 'unknown')}",
+        f"region={change['region']!r}",
+    ]
+    if matching_span is not None:
+        parts.append(f"changed_span_id={matching_span.get('changed_span_id', 'unknown')}")
+    if inside_target is not None:
+        parts.append(f"inside_target={inside_target}")
+    if expansion_absent is not None:
+        parts.append(f"expansion_absent={expansion_absent}")
+    parts.append(f"before={before!r}")
+    parts.append(f"after={after!r}")
+    return " ".join(parts)
 
 
 def _fake_model_payload_for_revision_schema(
@@ -1303,6 +1439,7 @@ def _fake_model_causal_handle_payload(
     plan_item = _plan_item_for_failure(plan, str(selected_failure["selected_failure_type"]))
     candidate = prompt["candidate"]
     quoted = _first_sentence(str(candidate["text"]))
+    target_contract = _target_region_contract(str(plan_item["target_region"]))
     return {
         "bounded_target": True,
         "target_count": 1,
@@ -1314,6 +1451,7 @@ def _fake_model_causal_handle_payload(
             "region": str(plan_item["target_region"]),
             "selection_basis": "smallest handle connected to live reader-lab evidence",
         },
+        **target_contract,
         "quoted_text": quoted,
         "causal_handle": str(plan_item["causal_handle"]),
         "local_law_hypothesis": (
@@ -1377,11 +1515,13 @@ def _fake_model_diff_payload(
     handle = prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
     revised = prior_payloads[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type]
     target_region = str(handle["span_ref"]["region"])
+    target_contract = _target_contract_from_handle(handle)
     return {
         "full_rewrite": False,
         "bounded_change": True,
         "operation_type": "append_local_consequence",
         "target_region": target_region,
+        **target_contract,
         "causal_handle": str(handle["causal_handle"]),
         "original_excerpt": _first_sentence(original),
         "revised_excerpt": _first_two_sentences(str(revised["text"])),
@@ -1392,6 +1532,8 @@ def _fake_model_diff_payload(
             "bounded insertion adds consequence while preserving object-world",
         ),
         "target_region_expanded": False,
+        "expanded_target_region": "",
+        "expansion_reason": "",
         "target_expansion_justification": "",
         "protected_effects_preserved": list(handle["protected_effects"]),
         "forbidden_changes_honored": list(handle["forbidden_changes"]),
@@ -1748,6 +1890,7 @@ def _build_causal_handle_selection(
     candidate = subject.candidate_text
     quoted = _first_sentence(candidate.text)
     handle = str(plan_item["causal_handle"])
+    target_contract = _target_region_contract(str(plan_item["target_region"]))
     return {
         "worker": "causal_handle_selector_v1_fake",
         "bounded_target": True,
@@ -1759,6 +1902,7 @@ def _build_causal_handle_selection(
             "region": plan_item["target_region"],
             "selection_basis": "smallest local handle connected to selected failure",
         },
+        **target_contract,
         "quoted_text": quoted,
         "causal_handle": handle,
         "local_law_hypothesis": (
@@ -1830,12 +1974,14 @@ def _build_revision_diff_report(
     added_words = sorted(revised_words - original_words)[:20]
     removed_words = sorted(original_words - revised_words)[:20]
     target_region = str(handle_selection["span_ref"]["region"])
+    target_contract = _target_contract_from_handle(handle_selection)
     return {
         "worker": "revision_diff_report_v1_fake",
         "full_rewrite": False,
         "bounded_change": True,
         "operation_type": "append_local_consequence",
         "target_region": target_region,
+        **target_contract,
         "causal_handle": handle_selection["causal_handle"],
         "operation": {
             "type": "append_local_consequence",
@@ -1854,6 +2000,8 @@ def _build_revision_diff_report(
             ),
         ),
         "target_region_expanded": False,
+        "expanded_target_region": "",
+        "expansion_reason": "",
         "target_expansion_justification": "",
         "added_words_sample": added_words,
         "removed_words_sample": removed_words,

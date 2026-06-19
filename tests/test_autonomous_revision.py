@@ -253,6 +253,15 @@ class TargetRegionViolationClient(FakeAutonomousRevisionModelClient):
         payload = json.loads(raw_output)
         if request.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
             payload["span_ref"]["region"] = "ending paragraph only"
+            payload["target_region_label"] = "target_region:ending_paragraph_only"
+            payload["target_region_description"] = (
+                "Selected bounded revision target; material edits outside this region "
+                "require explicit target expansion."
+            )
+            payload["allowed_span_refs"] = ["ending paragraph only"]
+            payload["protected_outside_spans"] = [
+                "all candidate spans outside ending paragraph only"
+            ]
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
         return raw_output
@@ -265,12 +274,21 @@ class ExplicitTargetExpansionClient(TargetRegionViolationClient):
         if request.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
             payload["target_region"] = "opening paragraph plus ending paragraph"
             payload["target_region_expanded"] = True
+            payload["expanded_target_region"] = "opening paragraph plus ending paragraph"
+            payload["expansion_reason"] = (
+                "The selected ending pressure depends on the opening object record."
+            )
             payload["target_expansion_justification"] = (
                 "The selected ending pressure depends on the opening object record, "
                 "so the repair explicitly expands the target."
             )
             for span in payload["changed_spans"]:
+                span["inside_target"] = False
                 span["within_selected_target"] = False
+                span["requires_target_expansion"] = True
+                span["target_expansion_reason"] = (
+                    "Opening change is required to make the selected ending pressure legible."
+                )
                 span["region"] = "opening paragraph"
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
@@ -613,6 +631,16 @@ def test_autonomous_revision_model_schemas_are_strict_objects():
     variant_item = variants_schema["properties"]["variants"]["items"]
     assert variant_item["type"] == "object"
     assert variant_item["additionalProperties"] is False
+    diff_schema = json_schema_for_worker_schema(AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA)
+    changed_span = diff_schema["properties"]["changed_spans"]["items"]
+    for field in (
+        "changed_span_id",
+        "inside_target",
+        "within_selected_target",
+        "requires_target_expansion",
+        "target_expansion_reason",
+    ):
+        assert field in changed_span["required"]
 
 
 def test_ablation_comparison_schema_distinguishes_executed_and_planned_rows():
@@ -737,6 +765,23 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert len(client.requests) == 8
     assert "reader_lab_payloads" in client.requests[0].input_text
     assert "source_texts" in client.requests[0].input_text
+    reviser_request = next(
+        request
+        for request in client.requests
+        if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA
+    )
+    reviser_prompt = json.loads(reviser_request.input_text)
+    assert "selected_target_contract" in reviser_prompt
+    assert "candidate_reviser_target_contract" in reviser_prompt
+    diff_request = next(
+        request
+        for request in client.requests
+        if request.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA
+    )
+    diff_prompt = json.loads(diff_request.input_text)
+    assert "selected_target_contract" in diff_prompt
+    assert "revision_diff_integrity_contract" in diff_prompt
+    assert "target_region_expanded" in diff_prompt["revision_diff_integrity_contract"]
     ablation_request = next(
         request
         for request in client.requests
@@ -794,6 +839,9 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert handle["bounded_target"] is True
     assert handle["target_count"] == 1
     assert handle["does_not_rebuild_artifact"] is True
+    assert handle["target_region_label"]
+    assert handle["allowed_span_refs"]
+    assert handle["protected_outside_spans"]
 
     revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
     assert revised["bounded_recomposition"] is True
@@ -806,6 +854,14 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert diff["bounded_change"] is True
     assert diff["changed_spans"]
     assert diff["target_region_expanded"] is False
+    assert diff["expanded_target_region"] == ""
+    assert diff["expansion_reason"] == ""
+    assert diff["target_region_label"] == handle["target_region_label"]
+    assert all("changed_span_id" in span for span in diff["changed_spans"])
+    assert all(
+        span["inside_target"] == span["within_selected_target"]
+        for span in diff["changed_spans"]
+    )
 
     variants = read_payload(result.payload["artifact_paths"]["ablation_variant_set"])
     assert variants["variants"]
@@ -885,13 +941,40 @@ def test_stubbed_openai_unreported_material_change_fails_closed(tmp_path):
 
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
-    assert "integrity validation failure" in result.payload["message"]
+    assert "model-call failure" in result.payload["message"]
     assert "revision_diff_report does not cover material text changes" in result.payload[
         "message"
     ]
-    assert result.payload["counts"]["model_calls"] == 8
+    assert result.payload["counts"]["model_calls"] == 4
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "change_id=" in result.payload["message"]
+    assert "revision_diff_report" not in result.payload["artifact_ids"]
+    assert "ablation_variant_set" not in result.payload["artifact_ids"]
+    assert "ablation_reread_comparison" not in result.payload["artifact_ids"]
+    assert "old_new_rival_comparison" not in result.payload["artifact_ids"]
+    assert "local_law_case_note" not in result.payload["artifact_ids"]
     assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
     assert "autonomous_closed_loop_gate_report" not in result.payload["artifact_ids"]
+    assert result.payload["gate_report"] is None
+
+    with connect(config.db_path) as connection:
+        revision_calls = [
+            call
+            for call in list_model_calls(connection, run_id=result.payload["run_id"])
+            if call.prompt_contract_id.startswith("autonomous.revision.")
+        ]
+        revision_artifact_types = {
+            artifact.type
+            for artifact in list_artifacts(connection, result.payload["run_id"])
+            if artifact.type in AUTONOMOUS_REVISION_ARTIFACT_TYPES
+        }
+
+    assert len(revision_calls) == 4
+    assert "revision_diff_report" not in revision_artifact_types
+    assert "ablation_variant_set" not in revision_artifact_types
 
 
 def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
@@ -910,8 +993,46 @@ def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
 
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
+    assert "model-call failure" in result.payload["message"]
     assert "changes outside selected target region" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 4
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "inside_target=False" in result.payload["message"]
+    assert "expansion_absent=True" in result.payload["message"]
+    assert "revision_diff_report" not in result.payload["artifact_ids"]
+    assert "ablation_variant_set" not in result.payload["artifact_ids"]
+    assert "ablation_reread_comparison" not in result.payload["artifact_ids"]
+    assert "old_new_rival_comparison" not in result.payload["artifact_ids"]
+    assert "local_law_case_note" not in result.payload["artifact_ids"]
+    assert "autonomous_closed_loop_gate_report" not in result.payload["artifact_ids"]
     assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
+    assert result.payload["gate_report"] is None
+
+    with connect(config.db_path) as connection:
+        revision_calls = [
+            call
+            for call in list_model_calls(connection, run_id=result.payload["run_id"])
+            if call.prompt_contract_id.startswith("autonomous.revision.")
+        ]
+        revision_artifact_types = {
+            artifact.type
+            for artifact in list_artifacts(connection, result.payload["run_id"])
+            if artifact.type in AUTONOMOUS_REVISION_ARTIFACT_TYPES
+        }
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(revision_calls) == 4
+    assert "revision_diff_report" not in revision_artifact_types
+    assert "ablation_variant_set" not in revision_artifact_types
+    assert "autonomous_closed_loop_packet" not in revision_artifact_types
+    assert final_report.refused is True
 
 
 def test_stubbed_openai_explicit_target_expansion_passes(tmp_path):
@@ -932,7 +1053,15 @@ def test_stubbed_openai_explicit_target_expansion_passes(tmp_path):
     diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
     gate_report = read_payload(result.payload["artifact_paths"]["autonomous_closed_loop_gate_report"])
     assert diff["target_region_expanded"] is True
+    assert diff["expanded_target_region"] == "opening paragraph plus ending paragraph"
+    assert diff["expansion_reason"]
     assert diff["target_expansion_justification"]
+    assert any(not span["inside_target"] for span in diff["changed_spans"])
+    assert all(
+        span["requires_target_expansion"]
+        for span in diff["changed_spans"]
+        if not span["inside_target"]
+    )
     assert gate_report["integrity_report"]["target"]["target_region_expanded"] is True
     assert gate_report["integrity_report"]["target"]["out_of_target_change_count"] >= 1
     assert gate_report["eligible"] is False

@@ -1438,13 +1438,27 @@ def _revision_span_ref_schema() -> dict[str, Any]:
 def _revision_changed_span_schema() -> dict[str, Any]:
     return _object_schema(
         {
+            "changed_span_id": {"type": "string"},
             "before": {"type": "string"},
             "after": {"type": "string"},
             "region": {"type": "string"},
+            "inside_target": {"type": "boolean"},
             "within_selected_target": {"type": "boolean"},
+            "requires_target_expansion": {"type": "boolean"},
+            "target_expansion_reason": {"type": "string"},
             "reason": {"type": "string"},
         },
-        ["before", "after", "region", "within_selected_target", "reason"],
+        [
+            "changed_span_id",
+            "before",
+            "after",
+            "region",
+            "inside_target",
+            "within_selected_target",
+            "requires_target_expansion",
+            "target_expansion_reason",
+            "reason",
+        ],
     )
 
 
@@ -1593,6 +1607,10 @@ def autonomous_revision_causal_handle_json_schema() -> dict[str, Any]:
             "target_count": {"type": "integer"},
             "does_not_rebuild_artifact": {"type": "boolean"},
             "span_ref": _revision_span_ref_schema(),
+            "target_region_label": {"type": "string"},
+            "target_region_description": {"type": "string"},
+            "allowed_span_refs": _string_array_schema(),
+            "protected_outside_spans": _string_array_schema(),
             "quoted_text": {"type": "string"},
             "causal_handle": {"type": "string"},
             "local_law_hypothesis": {"type": "string"},
@@ -1613,6 +1631,10 @@ def autonomous_revision_causal_handle_json_schema() -> dict[str, Any]:
             "target_count",
             "does_not_rebuild_artifact",
             "span_ref",
+            "target_region_label",
+            "target_region_description",
+            "allowed_span_refs",
+            "protected_outside_spans",
             "quoted_text",
             "causal_handle",
             "local_law_hypothesis",
@@ -1683,11 +1705,17 @@ def autonomous_revision_diff_report_json_schema() -> dict[str, Any]:
             "bounded_change": {"type": "boolean"},
             "operation_type": {"type": "string"},
             "target_region": {"type": "string"},
+            "target_region_label": {"type": "string"},
+            "target_region_description": {"type": "string"},
+            "allowed_span_refs": _string_array_schema(),
+            "protected_outside_spans": _string_array_schema(),
             "causal_handle": {"type": "string"},
             "original_excerpt": {"type": "string"},
             "revised_excerpt": {"type": "string"},
             "changed_spans": {"type": "array", "items": _revision_changed_span_schema()},
             "target_region_expanded": {"type": "boolean"},
+            "expanded_target_region": {"type": "string"},
+            "expansion_reason": {"type": "string"},
             "target_expansion_justification": {"type": "string"},
             "protected_effects_preserved": _string_array_schema(),
             "forbidden_changes_honored": _string_array_schema(),
@@ -1699,11 +1727,17 @@ def autonomous_revision_diff_report_json_schema() -> dict[str, Any]:
             "bounded_change",
             "operation_type",
             "target_region",
+            "target_region_label",
+            "target_region_description",
+            "allowed_span_refs",
+            "protected_outside_spans",
             "causal_handle",
             "original_excerpt",
             "revised_excerpt",
             "changed_spans",
             "target_region_expanded",
+            "expanded_target_region",
+            "expansion_reason",
             "target_expansion_justification",
             "protected_effects_preserved",
             "forbidden_changes_honored",
@@ -2822,6 +2856,12 @@ def _validate_autonomous_revision_causal_handle(payload: dict[str, Any]) -> dict
     _require_true(payload, "does_not_rebuild_artifact")
     _require_type(payload, "span_ref", dict)
     span_ref = _validate_revision_span_ref(payload["span_ref"], "span_ref")
+    for key in ("target_region_label", "target_region_description"):
+        _require_type(payload, key, str)
+    _require_string_list(payload, "allowed_span_refs")
+    _require_string_list(payload, "protected_outside_spans")
+    if not payload["allowed_span_refs"]:
+        raise ModelValidationError("allowed_span_refs must not be empty")
     for key in (
         "quoted_text",
         "causal_handle",
@@ -2844,6 +2884,10 @@ def _validate_autonomous_revision_causal_handle(payload: dict[str, Any]) -> dict
         "target_count": 1,
         "does_not_rebuild_artifact": True,
         "span_ref": span_ref,
+        "target_region_label": payload["target_region_label"],
+        "target_region_description": payload["target_region_description"],
+        "allowed_span_refs": payload["allowed_span_refs"],
+        "protected_outside_spans": payload["protected_outside_spans"],
         "quoted_text": payload["quoted_text"],
         "causal_handle": payload["causal_handle"],
         "local_law_hypothesis": payload["local_law_hypothesis"],
@@ -2913,12 +2957,18 @@ def _validate_autonomous_revision_diff_report(payload: dict[str, Any]) -> dict[s
     for key in (
         "operation_type",
         "target_region",
+        "target_region_label",
+        "target_region_description",
         "causal_handle",
         "original_excerpt",
         "revised_excerpt",
         "explanation",
     ):
         _require_type(payload, key, str)
+    _require_string_list(payload, "allowed_span_refs")
+    _require_string_list(payload, "protected_outside_spans")
+    if not payload["allowed_span_refs"]:
+        raise ModelValidationError("allowed_span_refs must not be empty")
     _require_object_list(payload, "changed_spans")
     changed_spans = [
         _validate_changed_span(span, f"changed_spans[{index}]")
@@ -2927,11 +2977,19 @@ def _validate_autonomous_revision_diff_report(payload: dict[str, Any]) -> dict[s
     if not changed_spans:
         raise ModelValidationError("changed_spans must not be empty")
     _require_type(payload, "target_region_expanded", bool)
+    _require_type(payload, "expanded_target_region", str)
+    _require_type(payload, "expansion_reason", str)
     _require_type(payload, "target_expansion_justification", str)
-    if payload["target_region_expanded"] and not payload["target_expansion_justification"].strip():
-        raise ModelValidationError(
-            "target_expansion_justification is required when target_region_expanded is true"
-        )
+    if payload["target_region_expanded"]:
+        for key in (
+            "expanded_target_region",
+            "expansion_reason",
+            "target_expansion_justification",
+        ):
+            if not payload[key].strip():
+                raise ModelValidationError(
+                    f"{key} is required when target_region_expanded is true"
+                )
     _require_string_list(payload, "protected_effects_preserved")
     _require_string_list(payload, "forbidden_changes_honored")
     _require_true(payload, "not_human_data")
@@ -2940,11 +2998,17 @@ def _validate_autonomous_revision_diff_report(payload: dict[str, Any]) -> dict[s
         "bounded_change": True,
         "operation_type": payload["operation_type"],
         "target_region": payload["target_region"],
+        "target_region_label": payload["target_region_label"],
+        "target_region_description": payload["target_region_description"],
+        "allowed_span_refs": payload["allowed_span_refs"],
+        "protected_outside_spans": payload["protected_outside_spans"],
         "causal_handle": payload["causal_handle"],
         "original_excerpt": payload["original_excerpt"],
         "revised_excerpt": payload["revised_excerpt"],
         "changed_spans": changed_spans,
         "target_region_expanded": payload["target_region_expanded"],
+        "expanded_target_region": payload["expanded_target_region"],
+        "expansion_reason": payload["expansion_reason"],
         "target_expansion_justification": payload["target_expansion_justification"],
         "protected_effects_preserved": payload["protected_effects_preserved"],
         "forbidden_changes_honored": payload["forbidden_changes_honored"],
@@ -3108,9 +3172,36 @@ def _validate_revision_span_ref(payload: dict[str, Any], label: str) -> dict[str
 
 
 def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, object]:
-    validated = _validate_object(payload, label, ("before", "after", "region", "reason"))
+    validated = _validate_object(
+        payload,
+        label,
+        (
+            "changed_span_id",
+            "before",
+            "after",
+            "region",
+            "target_expansion_reason",
+            "reason",
+        ),
+    )
+    _require_type(payload, "inside_target", bool, field_prefix=f"{label}.")
     _require_type(payload, "within_selected_target", bool, field_prefix=f"{label}.")
+    _require_type(payload, "requires_target_expansion", bool, field_prefix=f"{label}.")
+    if payload["inside_target"] != payload["within_selected_target"]:
+        raise ModelValidationError(
+            f"{label}.inside_target and {label}.within_selected_target must agree"
+        )
+    if payload["inside_target"] and payload["requires_target_expansion"]:
+        raise ModelValidationError(
+            f"{label}.requires_target_expansion must be false for in-target changes"
+        )
+    if payload["requires_target_expansion"] and not payload["target_expansion_reason"].strip():
+        raise ModelValidationError(
+            f"{label}.target_expansion_reason is required when target expansion is required"
+        )
+    validated["inside_target"] = payload["inside_target"]
     validated["within_selected_target"] = payload["within_selected_target"]
+    validated["requires_target_expansion"] = payload["requires_target_expansion"]
     return validated
 
 
