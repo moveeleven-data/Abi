@@ -748,6 +748,7 @@ def _prompt_for_worker(
         "not_human_data": True,
     }
     if worker.sees_source_classes:
+        prompt["source_classes_by_label"] = _source_classes_by_label(subject)
         prompt["source_items"] = [
             {
                 "label": text.label,
@@ -921,9 +922,7 @@ def _fake_model_hostile_payload(prior_payloads: dict[str, dict[str, Any]]) -> di
 def _fake_model_rival_payload(prompt: dict[str, Any]) -> dict[str, Any]:
     source_items = list(prompt.get("source_items", []))
     scores = [_score_source_item(item) for item in source_items]
-    source_by_label = {
-        str(item["label"]): str(item["source_class"]) for item in source_items
-    }
+    source_by_label = dict(prompt["source_classes_by_label"])
     candidate_score = next(score for score in scores if score["source_class"] == "abi_candidate")
     strongest_rival = next(
         (score for score in scores if score["source_class"] == "strongest_rival"),
@@ -1155,6 +1154,16 @@ def _score_source_item(item: dict[str, Any]) -> dict[str, object]:
         "reread_transformation_score": min(10, 3 + retained_count + (1 if words > 100 else 0)),
         "local_embodiment_score": min(10, 3 + retained_count),
         "compression_score": max(1, min(10, 10 - abs(words - 120) // 40)),
+    }
+
+
+def _source_classes_by_label(subject: InternalReaderSubject) -> dict[str, str]:
+    label_map = subject.payloads["pilot_neutral_label_map_private"]["label_map"]
+    return {
+        "Text A": str(label_map["Text A"]["source_class"]),
+        "Text B": str(label_map["Text B"]["source_class"]),
+        "Text C": str(label_map["Text C"]["source_class"]),
+        "Text D": str(label_map["Text D"]["source_class"]),
     }
 
 

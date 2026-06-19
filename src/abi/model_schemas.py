@@ -882,6 +882,179 @@ def pilot_raw_model_baseline_json_schema() -> dict[str, Any]:
     )
 
 
+def _internal_attention_point_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "span": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+        ["span", "reason"],
+    )
+
+
+def _internal_confusion_point_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "span": {"type": "string"},
+            "issue": {"type": "string"},
+        },
+        ["span", "issue"],
+    )
+
+
+def _internal_overexplicitness_point_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "marker": {"type": "string"},
+            "risk": {"type": "string"},
+        },
+        ["marker", "risk"],
+    )
+
+
+def _internal_motif_return_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "motif": {"type": "string"},
+            "first_read_state": {"type": "string"},
+            "reread_state": {"type": "string"},
+        },
+        ["motif", "first_read_state", "reread_state"],
+    )
+
+
+def _internal_reread_gain_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "score": {"type": "number"},
+            "scale": {"type": "string"},
+            "not_human_score": {"type": "boolean"},
+        },
+        ["score", "scale", "not_human_score"],
+    )
+
+
+def _internal_support_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "claim": {"type": "string"},
+            "exact_textual_support": {"type": "string"},
+        },
+        ["claim", "exact_textual_support"],
+    )
+
+
+def _internal_attack_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "risk_type": {"type": "string"},
+            "finding": {"type": "string"},
+        },
+        ["risk_type", "finding"],
+    )
+
+
+def _internal_source_classes_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "Text A": {"type": "string"},
+            "Text B": {"type": "string"},
+            "Text C": {"type": "string"},
+            "Text D": {"type": "string"},
+        },
+        ["Text A", "Text B", "Text C", "Text D"],
+    )
+
+
+def _internal_score_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "label": {"type": "string"},
+            "source_class": {"type": "string"},
+            "first_read_clarity_score": {"type": "integer"},
+            "reread_transformation_score": {"type": "integer"},
+            "local_embodiment_score": {"type": "integer"},
+            "compression_score": {"type": "integer"},
+        },
+        [
+            "label",
+            "source_class",
+            "first_read_clarity_score",
+            "reread_transformation_score",
+            "local_embodiment_score",
+            "compression_score",
+        ],
+    )
+
+
+def _internal_failure_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "failure_type": {"type": "string"},
+            "diagnosis": {"type": "string"},
+            "evidence_artifacts": _string_array_schema(),
+            "severity": {"type": "string"},
+        },
+        ["failure_type", "diagnosis", "evidence_artifacts", "severity"],
+    )
+
+
+def _internal_plan_item_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "step_id": {"type": "string"},
+            "target_region": {"type": "string"},
+            "causal_handle": {"type": "string"},
+            "failure_being_addressed": {"type": "string"},
+            "protected_effects": _string_array_schema(),
+            "forbidden_changes": _string_array_schema(),
+            "expected_improvement": {"type": "string"},
+            "verification_plan": {"type": "string"},
+        },
+        [
+            "step_id",
+            "target_region",
+            "causal_handle",
+            "failure_being_addressed",
+            "protected_effects",
+            "forbidden_changes",
+            "expected_improvement",
+            "verification_plan",
+        ],
+    )
+
+
+def _internal_ablation_test_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "ablation_id": {"type": "string"},
+            "suspected_causal_handle": {"type": "string"},
+            "ablation_operation": {"type": "string"},
+            "predicted_reader_state_effect": {"type": "string"},
+            "pass_fail_criterion": {"type": "string"},
+        },
+        [
+            "ablation_id",
+            "suspected_causal_handle",
+            "ablation_operation",
+            "predicted_reader_state_effect",
+            "pass_fail_criterion",
+        ],
+    )
+
+
+def _internal_gate_result_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "gate_name": {"type": "string"},
+            "passed": {"type": "boolean"},
+            "blocking_defects": _string_array_schema(),
+            "record": {"type": "boolean"},
+        },
+        ["gate_name", "passed", "blocking_defects", "record"],
+    )
+
+
 def internal_stream_reader_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
@@ -889,9 +1062,12 @@ def internal_stream_reader_json_schema() -> dict[str, Any]:
             "retained_images": _string_array_schema(),
             "dropped_details": _string_array_schema(),
             "live_motifs": _string_array_schema(),
-            "attention_points": {"type": "array", "items": _free_object_schema()},
-            "confusion_points": {"type": "array", "items": _free_object_schema()},
-            "overexplicitness_points": {"type": "array", "items": _free_object_schema()},
+            "attention_points": {"type": "array", "items": _internal_attention_point_schema()},
+            "confusion_points": {"type": "array", "items": _internal_confusion_point_schema()},
+            "overexplicitness_points": {
+                "type": "array",
+                "items": _internal_overexplicitness_point_schema(),
+            },
             "first_read_opening_interpretation": {"type": "string"},
             "first_read_summary": {"type": "string"},
             "bounded_mode": {"type": "boolean"},
@@ -920,9 +1096,9 @@ def internal_reread_reader_json_schema() -> dict[str, Any]:
             "opening_changed": {"type": "boolean"},
             "opening_words_images_changed": _string_array_schema(),
             "hidden_consequence_clearer": {"type": "string"},
-            "motif_returned_changed": {"type": "array", "items": _free_object_schema()},
+            "motif_returned_changed": {"type": "array", "items": _internal_motif_return_schema()},
             "reread_summary": {"type": "string"},
-            "reread_gain_estimate": _free_object_schema(),
+            "reread_gain_estimate": _internal_reread_gain_schema(),
             "not_human_data": {"type": "boolean"},
         },
         [
@@ -942,7 +1118,7 @@ def forensic_grounding_reader_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
             "claimed_effects": _string_array_schema(),
-            "exact_textual_support": {"type": "array", "items": _free_object_schema()},
+            "exact_textual_support": {"type": "array", "items": _internal_support_schema()},
             "unsupported_claims": _string_array_schema(),
             "fake_depth_risk": {"type": "string"},
             "reread_claims_grounded": {"type": "boolean"},
@@ -964,7 +1140,7 @@ def forensic_grounding_reader_json_schema() -> dict[str, Any]:
 def hostile_internal_reader_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
-            "attacks": {"type": "array", "items": _free_object_schema()},
+            "attacks": {"type": "array", "items": _internal_attack_schema()},
             "blocking_risks": _string_array_schema(),
             "fake_depth": {"type": "string"},
             "overexplanation": {"type": "string"},
@@ -997,7 +1173,7 @@ def hostile_internal_reader_json_schema() -> dict[str, Any]:
 def internal_rival_comparison_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
-            "source_classes_by_label": _free_object_schema(),
+            "source_classes_by_label": _internal_source_classes_schema(),
             "strongest_by_first_read_clarity": {"type": "string"},
             "strongest_by_reread_transformation": {"type": "string"},
             "strongest_by_local_embodiment": {"type": "string"},
@@ -1006,7 +1182,7 @@ def internal_rival_comparison_json_schema() -> dict[str, Any]:
             "abi_candidate_loses_where": _string_array_schema(),
             "rival_preservation_remains_required": {"type": "boolean"},
             "strongest_rival_present": {"type": "boolean"},
-            "scores": {"type": "array", "items": _free_object_schema()},
+            "scores": {"type": "array", "items": _internal_score_schema()},
             "not_human_data": {"type": "boolean"},
         },
         [
@@ -1029,9 +1205,9 @@ def internal_failure_diagnosis_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
             "failure_types_present": _string_array_schema(),
-            "failures": {"type": "array", "items": _free_object_schema()},
+            "failures": {"type": "array", "items": _internal_failure_schema()},
             "requires_recomposition": {"type": "boolean"},
-            "reread_gain_estimate": _free_object_schema(),
+            "reread_gain_estimate": _internal_reread_gain_schema(),
             "not_human_data": {"type": "boolean"},
         },
         [
@@ -1049,7 +1225,7 @@ def targeted_recomposition_plan_json_schema() -> dict[str, Any]:
         {
             "bounded": {"type": "boolean"},
             "does_not_rewrite_artifact": {"type": "boolean"},
-            "plan_items": {"type": "array", "items": _free_object_schema()},
+            "plan_items": {"type": "array", "items": _internal_plan_item_schema()},
             "protected_effects": _string_array_schema(),
             "forbidden_changes": _string_array_schema(),
             "verification_plan": {"type": "string"},
@@ -1070,7 +1246,7 @@ def targeted_recomposition_plan_json_schema() -> dict[str, Any]:
 def counterfactual_ablation_plan_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
-            "ablation_tests": {"type": "array", "items": _free_object_schema()},
+            "ablation_tests": {"type": "array", "items": _internal_ablation_test_schema()},
             "suspected_causal_handles": _string_array_schema(),
             "operations": _string_array_schema(),
             "predicted_reader_state_effect": {"type": "string"},
@@ -1095,7 +1271,7 @@ def autonomous_candidate_gate_report_json_schema() -> dict[str, Any]:
             "passed": {"type": "boolean"},
             "eligible": {"type": "boolean"},
             "required_gates": _string_array_schema(),
-            "gate_results": {"type": "array", "items": _free_object_schema()},
+            "gate_results": {"type": "array", "items": _internal_gate_result_schema()},
             "failed_gates": _string_array_schema(),
             "missing_gates": _string_array_schema(),
             "human_validation_required": {"type": "boolean"},

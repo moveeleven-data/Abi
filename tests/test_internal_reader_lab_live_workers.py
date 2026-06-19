@@ -111,6 +111,41 @@ def test_internal_reader_lab_schema_catalog_exposes_internal_worker_schemas():
         exposed = json_schema_for_worker_schema(schema)
         assert exposed["type"] == "object"
         assert exposed["required"]
+        assert_strict_object_schema(exposed, path=schema.name)
+
+
+def assert_strict_object_schema(schema: object, *, path: str) -> None:
+    if isinstance(schema, dict):
+        if schema.get("type") == "object":
+            assert schema.get("additionalProperties") is False, path
+        if "properties" in schema:
+            for key, value in schema["properties"].items():
+                assert_strict_object_schema(value, path=f"{path}.properties.{key}")
+        if "items" in schema:
+            assert_strict_object_schema(schema["items"], path=f"{path}.items")
+        for key in ("anyOf", "allOf", "oneOf"):
+            for index, value in enumerate(schema.get(key, [])):
+                assert_strict_object_schema(value, path=f"{path}.{key}[{index}]")
+        for key in ("$defs", "definitions"):
+            for name, value in schema.get(key, {}).items():
+                assert_strict_object_schema(value, path=f"{path}.{key}.{name}")
+    elif isinstance(schema, list):
+        for index, value in enumerate(schema):
+            assert_strict_object_schema(value, path=f"{path}[{index}]")
+
+
+def test_internal_reader_lab_nested_array_item_schemas_are_strict_objects():
+    stream_schema = json_schema_for_worker_schema(INTERNAL_READER_LAB_MODEL_SCHEMAS[0])
+    attention_item = stream_schema["properties"]["attention_points"]["items"]
+    assert attention_item["type"] == "object"
+    assert attention_item["additionalProperties"] is False
+    assert attention_item["required"] == ["span", "reason"]
+
+    gate_schema = json_schema_for_worker_schema(INTERNAL_READER_LAB_MODEL_SCHEMAS[-1])
+    gate_item = gate_schema["properties"]["gate_results"]["items"]
+    assert gate_item["type"] == "object"
+    assert gate_item["additionalProperties"] is False
+    assert gate_item["required"] == ["gate_name", "passed", "blocking_defects", "record"]
 
 
 def test_stubbed_openai_internal_reader_lab_creates_model_artifacts(tmp_path):
