@@ -108,6 +108,10 @@ def test_internal_reader_lab_fake_creates_required_artifacts(tmp_path, monkeypat
     forensic = read_payload(result.payload["artifact_paths"]["forensic_grounding_report"])
     assert forensic["claimed_effects"]
     assert forensic["exact_textual_support"]
+    assert all(
+        set(support) == {"claim", "source_label", "quoted_span", "support_reason"}
+        for support in forensic["exact_textual_support"]
+    )
     assert "unsupported_claims" in forensic
     assert "fake_depth_risk" in forensic
     assert "reread_claims_grounded" in forensic
@@ -154,6 +158,7 @@ def test_internal_reader_lab_fake_creates_required_artifacts(tmp_path, monkeypat
     assert gate_report["human_validation_required"] is False
     assert gate_report["paper_validation_required"] is False
     assert gate_report["phase_shift_claim"] is False
+    assert "fake fixture mode" in gate_report["summary_verdict"].lower()
     assert "no_fixture_only_core_evidence" in gate_report["failed_gates"]
     assert "internal_operator_approval" in gate_report["missing_gates"]
 

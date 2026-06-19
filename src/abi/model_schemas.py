@@ -976,9 +976,11 @@ def _internal_support_schema() -> dict[str, Any]:
     return _object_schema(
         {
             "claim": {"type": "string"},
-            "exact_textual_support": {"type": "string"},
+            "source_label": {"type": "string"},
+            "quoted_span": {"type": "string"},
+            "support_reason": {"type": "string"},
         },
-        ["claim", "exact_textual_support"],
+        ["claim", "source_label", "quoted_span", "support_reason"],
     )
 
 
@@ -2083,6 +2085,18 @@ def _validate_internal_reread_reader(payload: dict[str, Any]) -> dict[str, Any]:
 def _validate_forensic_grounding_reader(payload: dict[str, Any]) -> dict[str, Any]:
     _require_string_list(payload, "claimed_effects")
     _require_object_list(payload, "exact_textual_support")
+    support_items = []
+    for index, support in enumerate(payload["exact_textual_support"]):
+        for key in ("claim", "source_label", "quoted_span", "support_reason"):
+            _require_type(support, key, str, field_prefix=f"exact_textual_support[{index}].")
+        support_items.append(
+            {
+                "claim": support["claim"],
+                "source_label": support["source_label"],
+                "quoted_span": support["quoted_span"],
+                "support_reason": support["support_reason"],
+            }
+        )
     _require_string_list(payload, "unsupported_claims")
     _require_type(payload, "fake_depth_risk", str)
     _require_type(payload, "reread_claims_grounded", bool)
@@ -2090,7 +2104,7 @@ def _validate_forensic_grounding_reader(payload: dict[str, Any]) -> dict[str, An
     _require_true(payload, "not_human_data")
     return {
         "claimed_effects": payload["claimed_effects"],
-        "exact_textual_support": payload["exact_textual_support"],
+        "exact_textual_support": support_items,
         "unsupported_claims": payload["unsupported_claims"],
         "fake_depth_risk": payload["fake_depth_risk"],
         "reread_claims_grounded": payload["reread_claims_grounded"],
@@ -2101,6 +2115,16 @@ def _validate_forensic_grounding_reader(payload: dict[str, Any]) -> dict[str, An
 
 def _validate_hostile_internal_reader(payload: dict[str, Any]) -> dict[str, Any]:
     _require_object_list(payload, "attacks")
+    attacks = []
+    for index, attack in enumerate(payload["attacks"]):
+        _require_type(attack, "risk_type", str, field_prefix=f"attacks[{index}].")
+        _require_type(attack, "finding", str, field_prefix=f"attacks[{index}].")
+        attacks.append(
+            {
+                "risk_type": attack["risk_type"],
+                "finding": attack["finding"],
+            }
+        )
     _require_string_list(payload, "blocking_risks")
     for key in (
         "fake_depth",
@@ -2116,7 +2140,7 @@ def _validate_hostile_internal_reader(payload: dict[str, Any]) -> dict[str, Any]
         _require_type(payload, key, str)
     _require_true(payload, "not_human_data")
     return {
-        "attacks": payload["attacks"],
+        "attacks": attacks,
         "blocking_risks": payload["blocking_risks"],
         "fake_depth": payload["fake_depth"],
         "overexplanation": payload["overexplanation"],

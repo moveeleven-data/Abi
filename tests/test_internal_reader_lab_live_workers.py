@@ -176,6 +176,18 @@ class OverreachingGateReportClient(FakeInternalReaderLabModelClient):
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
+class BadForensicSupportClient(FakeInternalReaderLabModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        if request.schema != FORENSIC_GROUNDING_READER_SCHEMA:
+            return raw_output
+        payload = json.loads(raw_output)
+        payload["exact_textual_support"][0]["quoted_span"] = (
+            "this span is not present in the candidate artifact text"
+        )
+        return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
 def test_internal_reader_lab_schema_catalog_exposes_internal_worker_schemas():
     for schema in INTERNAL_READER_LAB_MODEL_SCHEMAS:
         exposed = json_schema_for_worker_schema(schema)
@@ -216,6 +228,17 @@ def test_internal_reader_lab_nested_array_item_schemas_are_strict_objects():
     assert gate_item["type"] == "object"
     assert gate_item["additionalProperties"] is False
     assert gate_item["required"] == ["gate_name", "passed", "blocking_defects", "record"]
+
+    forensic_schema = json_schema_for_worker_schema(FORENSIC_GROUNDING_READER_SCHEMA)
+    support_item = forensic_schema["properties"]["exact_textual_support"]["items"]
+    assert support_item["type"] == "object"
+    assert support_item["additionalProperties"] is False
+    assert support_item["required"] == [
+        "claim",
+        "source_label",
+        "quoted_span",
+        "support_reason",
+    ]
 
 
 def test_internal_failure_schema_enum_matches_canonical_validator():
@@ -322,6 +345,25 @@ def test_stubbed_openai_internal_reader_lab_creates_model_artifacts(tmp_path):
     assert len(client.requests) == 9
     assert "source_class" not in client.requests[0].input_text
     assert "source_class" not in client.requests[1].input_text
+    candidate_text = json.loads(client.requests[0].input_text)["candidate"]["text"]
+    forensic_request = next(
+        request
+        for request in client.requests
+        if request.prompt_contract_id.endswith(".forensic_reader.v1")
+    )
+    forensic_prompt = json.loads(forensic_request.input_text)
+    assert forensic_prompt["forensic_grounding_target"]["candidate_label"] == "Text A"
+    assert forensic_prompt["forensic_grounding_target"]["candidate_text"] == candidate_text
+    assert "reread_claims_to_check" in forensic_prompt["forensic_grounding_target"]
+    hostile_request = next(
+        request
+        for request in client.requests
+        if request.prompt_contract_id.endswith(".hostile_reader.v1")
+    )
+    hostile_prompt = json.loads(hostile_request.input_text)
+    assert hostile_prompt["hostile_attack_target"]["candidate_label"] == "Text A"
+    assert hostile_prompt["hostile_attack_target"]["candidate_text"] == candidate_text
+    assert "literary artifact text itself" in hostile_prompt["hostile_reader_instruction"]
     rival_request = next(
         request
         for request in client.requests
@@ -363,6 +405,8 @@ def test_stubbed_openai_internal_reader_lab_creates_model_artifacts(tmp_path):
     assert manifest["model_call_id"] is None
     assert packet["fixture_only"] is False
     assert packet["model_call_id"] is None
+    assert "fake_mode" not in packet["payload"]
+    assert "fake_target_schema" not in packet["payload"]
 
     rival = read_payload(result.payload["artifact_paths"]["internal_rival_comparison"])
     assert rival["strongest_rival_present"] is True
@@ -370,10 +414,30 @@ def test_stubbed_openai_internal_reader_lab_creates_model_artifacts(tmp_path):
 
     stream = read_payload(result.payload["artifact_paths"]["internal_stream_reader_trace"])
     reread = read_payload(result.payload["artifact_paths"]["internal_reread_reader_trace"])
+    forensic = read_payload(result.payload["artifact_paths"]["forensic_grounding_report"])
+    hostile = read_payload(result.payload["artifact_paths"]["hostile_reader_report"])
     diagnosis = read_payload(result.payload["artifact_paths"]["internal_failure_diagnosis"])
+    gate_report = read_payload(result.payload["artifact_paths"]["autonomous_candidate_gate_report"])
     assert stream["not_human_data"] is True
     assert reread["not_human_data"] is True
+    assert forensic["exact_textual_support"]
+    assert all(
+        support["source_label"] == "Text A"
+        and support["quoted_span"]
+        and support["quoted_span"] in candidate_text
+        for support in forensic["exact_textual_support"]
+    )
+    hostile_serialized = json.dumps(hostile, sort_keys=True).lower()
+    for phrase in (
+        "packet component",
+        "the response should",
+        "evaluation steps",
+        "json",
+    ):
+        assert phrase not in hostile_serialized
     assert "thesis_replacing_artifact" in diagnosis["failure_types_present"]
+    assert "fake fixture mode" not in gate_report["summary_verdict"].lower()
+    assert "non-fixture internal model evidence" in gate_report["summary_verdict"]
 
     assert final_report.refused is True
     combined_blockers = " ".join(final_report.missing_gates + final_report.failed_gates)
@@ -501,6 +565,58 @@ def test_stubbed_openai_malformed_gate_commentary_fails_closed(tmp_path):
     }
     assert "autonomous_candidate_gate_report" not in reader_lab_types
     assert "internal_reader_lab_packet" not in reader_lab_types
+
+
+def test_stubbed_openai_invalid_forensic_support_span_fails_closed(tmp_path):
+    config, pilot_payload = build_pilot_packet(tmp_path, with_rival=True)
+    clients: list[BadForensicSupportClient] = []
+
+    def _factory(model: str) -> BadForensicSupportClient:
+        client = BadForensicSupportClient(
+            provider="openai",
+            model=model,
+            mode="valid",
+            target_schema=FORENSIC_GROUNDING_READER_SCHEMA,
+        )
+        clients.append(client)
+        return client
+
+    result = run_internal_reader_lab(
+        config,
+        client_name="openai",
+        packet_dir=pilot_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-internal-reader-model",
+        client_factory=_factory,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "evidence validation failure" in result.payload["message"]
+    assert "quoted_span is not present" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 3
+    forensic_call = result.payload["model_calls"][-1]
+    assert forensic_call["schema_name"] == FORENSIC_GROUNDING_READER_SCHEMA.name
+    assert forensic_call["status"] == MODEL_CALL_SUCCESS
+    assert forensic_call["parsed_output_artifact_id"] is None
+    assert "forensic_grounding_report" not in result.payload["artifact_ids"]
+    assert "hostile_reader_report" not in result.payload["artifact_ids"]
+    assert "internal_reader_lab_packet" not in result.payload["artifact_ids"]
+
+    with connect(config.db_path) as connection:
+        artifacts = list_artifacts(connection, result.payload["run_id"])
+
+    reader_lab_types = {
+        artifact.type
+        for artifact in artifacts
+        if artifact.type in INTERNAL_READER_LAB_ARTIFACT_TYPES
+    }
+    assert reader_lab_types == {
+        "internal_reader_subject_manifest",
+        "internal_stream_reader_trace",
+        "internal_reread_reader_trace",
+    }
 
 
 def test_stubbed_openai_invalid_output_rejects_without_parsed_artifact(tmp_path):

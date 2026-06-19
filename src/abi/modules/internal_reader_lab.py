@@ -80,6 +80,17 @@ INTERNAL_READER_LAB_ARTIFACT_TYPES = (
 INTERNAL_READER_LAB_PROMPT_CONTRACT_PREFIX = "autonomous.reader_lab"
 INTERNAL_READER_LAB_FAKE_MODEL_PROVIDER = "fake"
 INTERNAL_READER_LAB_FAKE_MODEL = "fake-internal-reader-lab-v1"
+LIVE_MODULE_VALIDATED_SCHEMAS = (
+    FORENSIC_GROUNDING_READER_SCHEMA,
+    HOSTILE_INTERNAL_READER_SCHEMA,
+    AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA,
+)
+HOSTILE_SCAFFOLD_TARGET_PHRASES = (
+    "packet component",
+    "the response should",
+    "evaluation steps",
+    "json",
+)
 INTERNAL_READER_LAB_WORKERS = (
     InternalReaderLabWorkerSpec(
         schema=INTERNAL_STREAM_READER_SCHEMA,
@@ -592,6 +603,7 @@ def _run_live_internal_reader_lab(
                 model_results=model_results,
                 message="Autonomous reader lab stopped by max-model-calls budget.",
             )
+        module_validated_artifact = worker.schema in LIVE_MODULE_VALIDATED_SCHEMAS
         controller_owned_gate_report = worker.schema == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA
         parent_ids = [
             artifacts["internal_reader_subject_manifest"].id,
@@ -614,14 +626,14 @@ def _run_live_internal_reader_lab(
                 parent_ids=parent_ids,
                 fixture_only=fixture_only,
                 output_dir=str(output_dir),
-                register_parsed_artifact=not controller_owned_gate_report,
+                register_parsed_artifact=not module_validated_artifact,
             )
         )
         model_results.append(result)
         if (
             not result.accepted
             or result.parsed_payload is None
-            or (not controller_owned_gate_report and result.parsed_artifact is None)
+            or (not module_validated_artifact and result.parsed_artifact is None)
         ):
             return _live_failure_result(
                 client_name=client_name,
@@ -633,6 +645,50 @@ def _run_live_internal_reader_lab(
                 model_results=model_results,
                 message="Autonomous reader lab stopped by model-call failure.",
             )
+        if worker.schema in (FORENSIC_GROUNDING_READER_SCHEMA, HOSTILE_INTERNAL_READER_SCHEMA):
+            evidence_error = _validate_live_evidence_targeting(
+                subject=subject,
+                schema=worker.schema,
+                payload=result.parsed_payload,
+            )
+            if evidence_error is not None:
+                return _live_failure_result(
+                    client_name=client_name,
+                    model=model,
+                    subject=subject,
+                    packet_dir=output_dir,
+                    artifacts=artifacts,
+                    payloads=payloads,
+                    model_results=model_results,
+                    message=f"Autonomous reader lab stopped by evidence validation failure: {evidence_error}",
+                )
+            with connect(config.db_path) as connection:
+                writer = PacketWriter(
+                    connection=connection,
+                    run_id=subject.run_id,
+                    packet_dir=output_dir,
+                    lineage_id=INTERNAL_READER_LAB_LINEAGE_ID,
+                    created_by=f"model_driver:{model_client.provider}:{model_client.model}",
+                    fixture_only=fixture_only,
+                    model_call_id=result.model_call.id,
+                )
+                artifacts[worker.artifact_type] = writer.write_artifact(
+                    worker.artifact_type,
+                    result.parsed_payload,
+                    parent_ids=parent_ids,
+                )
+                linked_call = link_model_call_parsed_artifact(
+                    connection,
+                    model_call_id=result.model_call.id,
+                    parsed_output_artifact_id=artifacts[worker.artifact_type].id,
+                )
+            payloads[worker.artifact_type] = result.parsed_payload
+            model_results[-1] = ModelDriverResult(
+                model_call=linked_call,
+                parsed_payload=result.parsed_payload,
+                parsed_artifact=artifacts[worker.artifact_type],
+            )
+            continue
         if controller_owned_gate_report:
             payloads[worker.artifact_type] = _build_gate_report(
                 subject=subject,
@@ -706,8 +762,6 @@ def _run_live_internal_reader_lab(
                     schema.artifact_type for schema in INTERNAL_READER_LAB_MODEL_SCHEMAS
                 ],
                 "model_driver_backed": True,
-                "fake_mode": fake_mode,
-                "fake_target_schema": fake_target_schema.name,
             }
         )
         artifacts["internal_reader_lab_packet"] = writer.write_artifact(
@@ -807,6 +861,36 @@ def _prompt_for_worker(
             }
             for text in subject.texts
         ]
+    if worker.schema == FORENSIC_GROUNDING_READER_SCHEMA:
+        reread_trace = payloads.get(INTERNAL_REREAD_READER_SCHEMA.artifact_type, {})
+        prompt["forensic_grounding_target"] = {
+            "candidate_label": subject.candidate_text.label,
+            "candidate_text": subject.candidate_text.text,
+            "reread_claims_to_check": {
+                "opening_words_images_changed": list(
+                    reread_trace.get("opening_words_images_changed", [])
+                ),
+                "hidden_consequence_clearer": reread_trace.get(
+                    "hidden_consequence_clearer",
+                    "",
+                ),
+                "reread_summary": reread_trace.get("reread_summary", ""),
+            },
+        }
+        prompt["forensic_grounding_instruction"] = (
+            "Ground each claim in quoted_span values copied exactly from the literary "
+            "artifact text for source_label. Do not use prior model summaries as support."
+        )
+    if worker.schema == HOSTILE_INTERNAL_READER_SCHEMA:
+        prompt["hostile_attack_target"] = {
+            "candidate_label": subject.candidate_text.label,
+            "candidate_text": subject.candidate_text.text,
+        }
+        prompt["hostile_reader_instruction"] = (
+            "Attack the literary artifact text itself. Do not attack the JSON packet, "
+            "prior model responses, evaluation steps, or system instructions."
+        )
+        prompt["scaffold_target_phrases_forbidden"] = list(HOSTILE_SCAFFOLD_TARGET_PHRASES)
     if worker.schema == INTERNAL_FAILURE_DIAGNOSIS_SCHEMA:
         prompt["allowed_internal_failure_types"] = list(INTERNAL_FAILURE_TYPES)
         prompt["hostile_risk_failure_type_map"] = dict(INTERNAL_HOSTILE_RISK_FAILURE_TYPE_MAP)
@@ -840,7 +924,7 @@ def _fake_model_payload_for_schema(
     if schema == FORENSIC_GROUNDING_READER_SCHEMA:
         return _fake_model_forensic_payload(prompt, prior_payloads)
     if schema == HOSTILE_INTERNAL_READER_SCHEMA:
-        return _fake_model_hostile_payload(prior_payloads)
+        return _fake_model_hostile_payload(prompt, prior_payloads)
     if schema == INTERNAL_RIVAL_COMPARISON_SCHEMA:
         return _fake_model_rival_payload(prompt)
     if schema == INTERNAL_FAILURE_DIAGNOSIS_SCHEMA:
@@ -932,7 +1016,9 @@ def _fake_model_forensic_payload(
     support = [
         {
             "claim": f"{term} carries reread pressure",
-            "exact_textual_support": _support_snippet(text, str(term)),
+            "source_label": str(candidate["label"]),
+            "quoted_span": _support_snippet(text, str(term)),
+            "support_reason": "quoted span is copied from the candidate artifact text",
         }
         for term in reread["opening_words_images_changed"]
     ]
@@ -954,11 +1040,15 @@ def _fake_model_forensic_payload(
     }
 
 
-def _fake_model_hostile_payload(prior_payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _fake_model_hostile_payload(
+    prompt: dict[str, Any],
+    prior_payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     forensic = prior_payloads[FORENSIC_GROUNDING_READER_SCHEMA.artifact_type]
+    target = prompt["hostile_attack_target"]
     attacks = [
-        _attack("fake_depth", str(forensic["fake_depth_risk"])),
-        _attack("overexplanation", "check whether the text tells the reader what to infer"),
+        _attack("fake_depth", f"{target['candidate_label']} has {forensic['fake_depth_risk']} fake-depth risk"),
+        _attack("overexplanation", "check whether the artifact tells the reader what to infer"),
         _attack("scaffold_leakage", "scan for process terms replacing artifact pressure"),
         _attack("wrong_register", "watch for internal process cadence in the artifact"),
         _attack("accidental_comedy", "low but monitored around abrupt scale shifts"),
@@ -1445,6 +1535,61 @@ def _build_reread_trace(
     }
 
 
+def _validate_live_evidence_targeting(
+    *,
+    subject: InternalReaderSubject,
+    schema: WorkerSchema,
+    payload: dict[str, Any],
+) -> str | None:
+    if schema == FORENSIC_GROUNDING_READER_SCHEMA:
+        return _validate_forensic_support_targets(subject, payload)
+    if schema == HOSTILE_INTERNAL_READER_SCHEMA:
+        return _validate_hostile_targets_artifact(payload)
+    return None
+
+
+def _validate_forensic_support_targets(
+    subject: InternalReaderSubject,
+    payload: dict[str, Any],
+) -> str | None:
+    text_by_label = {text.label: text.text for text in subject.texts}
+    for index, support in enumerate(payload.get("exact_textual_support", [])):
+        if not isinstance(support, dict):
+            return f"exact_textual_support[{index}] is not an object"
+        source_label = support.get("source_label")
+        quoted_span = support.get("quoted_span")
+        if not isinstance(source_label, str) or source_label not in text_by_label:
+            return f"exact_textual_support[{index}].source_label is not a known reader label"
+        if not isinstance(quoted_span, str) or not quoted_span.strip():
+            return f"exact_textual_support[{index}].quoted_span is empty"
+        if quoted_span not in text_by_label[source_label]:
+            return (
+                f"exact_textual_support[{index}].quoted_span is not present in "
+                f"{source_label}"
+            )
+    return None
+
+
+def _validate_hostile_targets_artifact(payload: dict[str, Any]) -> str | None:
+    for text in _string_values(payload):
+        lowered = text.lower()
+        for phrase in HOSTILE_SCAFFOLD_TARGET_PHRASES:
+            if phrase in lowered:
+                return f"hostile reader output targets scaffold phrase: {phrase}"
+    return None
+
+
+def _string_values(value: object):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for nested in value.values():
+            yield from _string_values(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _string_values(nested)
+
+
 def _build_forensic_report(
     subject: InternalReaderSubject,
     reread_trace: dict[str, Any],
@@ -1454,7 +1599,9 @@ def _build_forensic_report(
     support = [
         {
             "claim": f"{term} carries reread pressure",
-            "exact_textual_support": _support_snippet(candidate.text, str(term)),
+            "source_label": candidate.label,
+            "quoted_span": _support_snippet(candidate.text, str(term)),
+            "support_reason": "quoted span is copied from the candidate artifact text",
         }
         for term in support_terms
     ]
@@ -1725,13 +1872,25 @@ def _build_gate_report(
         "human_validation_required": False,
         "paper_validation_required": False,
         "phase_shift_claim": False,
-        "summary_verdict": (
-            "Autonomous reader lab evidence exists, but fake fixture mode, "
-            "unresolved internal blockers, and missing operator approval keep "
-            "autonomous finalization refused."
-        ),
+        "summary_verdict": _gate_summary_verdict(fixture_only=fixture_only, unresolved=unresolved),
         "fixture_only": fixture_only,
     }
+
+
+def _gate_summary_verdict(*, fixture_only: bool, unresolved: list[str]) -> str:
+    if unresolved:
+        blocker_phrase = "unresolved internal blockers and missing internal operator approval keep"
+    else:
+        blocker_phrase = "missing internal operator approval keeps"
+    if fixture_only:
+        return (
+            "Autonomous reader lab evidence exists, but fake fixture mode, "
+            f"{blocker_phrase} autonomous finalization refused."
+        )
+    return (
+        "Autonomous reader lab evidence includes non-fixture internal model evidence, "
+        f"but {blocker_phrase} autonomous finalization refused."
+    )
 
 
 def _build_packet_summary(
