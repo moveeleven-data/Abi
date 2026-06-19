@@ -6,7 +6,7 @@ Abi is not a public-validation harness right now. Human readers, browser ChatGPT
 
 ## Project Status
 
-- Current implemented surface: deterministic infrastructure, artifact/run registries, guarded model-call records, Abi Ear, Minimal Reread, production/candidate scaffolds, pilot candidate/baseline/rival artifact sets, strongest-rival import, and Autonomous Internal Reader Lab v1 fake packets.
+- Current implemented surface: deterministic infrastructure, artifact/run registries, guarded model-call records, Abi Ear, Minimal Reread, production/candidate scaffolds, pilot candidate/baseline/rival artifact sets, strongest-rival import, Autonomous Internal Reader Lab v1 fake packets, and Autonomous Closed-Loop Revision v1 fake packets.
 - Active finalization profile: `autonomous_creative_candidate`.
 - Current finalization status: fail-closed until internal autonomous gates are explicitly satisfied.
 - Legacy external profile: `final_artifact` remains present as historical/external validation policy, but it is not the active development path.
@@ -56,6 +56,7 @@ Fake-client and candidate packet paths:
 .\.venv\Scripts\abi.exe production live-demo --client fake
 .\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
 .\.venv\Scripts\abi.exe autonomous reader-lab --client fake --packet-dir <packet_dir>
+.\.venv\Scripts\abi.exe autonomous revise --client fake --reader-lab-packet <reader_lab_packet_dir>
 ```
 
 Strongest-rival preservation:
@@ -92,7 +93,7 @@ Controller and gate inspection:
 Do not claim from this repo state that:
 
 - Abi produces phase-shift-level writing.
-- Abi has completed an autonomous internal reader lab.
+- Abi has proven autonomous creative success from the internal reader lab or revision loop.
 - Abi has beaten a strongest rival.
 - Abi has passed hostile internal audit.
 - Any generated candidate is final.
@@ -114,6 +115,7 @@ Examples that refuse without opt-in:
 .\.venv\Scripts\abi.exe production live-demo --client openai
 .\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source
 .\.venv\Scripts\abi.exe autonomous reader-lab --client openai --packet-dir <packet_dir>
+.\.venv\Scripts\abi.exe autonomous revise --client openai --reader-lab-packet <reader_lab_packet_dir>
 ```
 
 Opt-in examples:
@@ -126,6 +128,7 @@ Opt-in examples:
 .\.venv\Scripts\abi.exe production live-demo --client openai --allow-live-model --max-model-calls 24
 .\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source --allow-live-model --max-model-calls 36
 .\.venv\Scripts\abi.exe autonomous reader-lab --client openai --packet-dir <packet_dir> --allow-live-model --max-model-calls 12
+.\.venv\Scripts\abi.exe autonomous revise --client openai --reader-lab-packet <reader_lab_packet_dir> --allow-live-model --max-model-calls 12
 ```
 
 Do not run live OpenAI commands casually. Install optional live dependencies only for an intentional manual live smoke test:
@@ -148,17 +151,16 @@ The pilot artifact-set command hashes source files and records filenames. Privat
 
 ## Autonomous Roadmap
 
-The current development milestone is **Autonomous Internal Reader Lab v1**.
+The current development milestone is **Autonomous Closed-Loop Revision v1**.
 
 Do not use browser ChatGPT sessions as ad hoc readers. Do not use external humans as core Abi evaluators.
 
 Near-term work should focus on:
 
-1. Expand internal reader-state workers beyond deterministic fake mode.
-2. Execute targeted recomposition against bounded candidate regions.
-3. Execute counterfactual ablation checks.
-4. Preserve strongest-rival pressure through internal comparison.
-5. Keep fail-closed `autonomous_creative_candidate` readiness.
+1. Repeat closed-loop revision as a second autonomous cycle.
+2. Expand internal reader-state and recomposition workers beyond deterministic fake mode.
+3. Preserve strongest-rival pressure through every internal comparison.
+4. Keep fail-closed `autonomous_creative_candidate` readiness.
 
 ## Where To Find Docs
 

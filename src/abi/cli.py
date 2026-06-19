@@ -23,6 +23,11 @@ from abi.live_model import LIVE_WORKERS, run_live_abi_ear_worker
 from abi.model_calls import get_model_call, list_model_calls, model_call_to_dict
 from abi.model_driver import run_model_driver_demo
 from abi.modules.abi_ear import run_abi_ear_demo
+from abi.modules.autonomous_revision import (
+    AUTONOMOUS_REVISION_CLIENTS,
+    AUTONOMOUS_REVISION_MAX_MODEL_CALLS_DEFAULT,
+    run_autonomous_revision,
+)
 from abi.modules.internal_reader_lab import (
     INTERNAL_READER_LAB_CLIENTS,
     INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
@@ -259,6 +264,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for internal reader workers.",
     )
+    autonomous_revise_parser = autonomous_subparsers.add_parser(
+        "revise",
+        help="Run the Autonomous Closed-Loop Revision v1 packet",
+    )
+    autonomous_revise_parser.add_argument(
+        "--client",
+        choices=AUTONOMOUS_REVISION_CLIENTS,
+        required=True,
+        help="Autonomous revision client path to use.",
+    )
+    autonomous_revise_parser.add_argument(
+        "--reader-lab-packet",
+        type=Path,
+        required=True,
+        help="Internal reader-lab packet directory to revise from.",
+    )
+    autonomous_revise_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_revise_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=AUTONOMOUS_REVISION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for revision workers.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -386,6 +418,14 @@ def main(argv: list[str] | None = None) -> int:
             config,
             client_name=args.client,
             packet_dir=args.packet_dir,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "revise":
+        return _cmd_autonomous_revise(
+            config,
+            client_name=args.client,
+            reader_lab_packet=args.reader_lab_packet,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
         )
@@ -621,6 +661,25 @@ def _cmd_autonomous_reader_lab(
         config,
         client_name=client_name,
         packet_dir=packet_dir,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_revise(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    reader_lab_packet: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_autonomous_revision(
+        config,
+        client_name=client_name,
+        reader_lab_packet=reader_lab_packet,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
     )
