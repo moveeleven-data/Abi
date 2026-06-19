@@ -38,6 +38,15 @@ class WorkerRole(str, Enum):
     PILOT_ABI_CANDIDATE_BUILDER = "pilot_abi_candidate_builder"
     PILOT_DIRECT_PROMPT_BASELINE_BUILDER = "pilot_direct_prompt_baseline_builder"
     PILOT_RAW_MODEL_BASELINE_BUILDER = "pilot_raw_model_baseline_builder"
+    INTERNAL_STREAM_READER = "internal_stream_reader"
+    INTERNAL_REREAD_READER = "internal_reread_reader"
+    FORENSIC_GROUNDING_READER = "forensic_grounding_reader"
+    HOSTILE_INTERNAL_READER = "hostile_internal_reader"
+    INTERNAL_RIVAL_COMPARATOR = "internal_rival_comparator"
+    INTERNAL_FAILURE_DIAGNOSER = "internal_failure_diagnoser"
+    TARGETED_RECOMPOSITION_PLANNER = "targeted_recomposition_planner"
+    COUNTERFACTUAL_ABLATION_PLANNER = "counterfactual_ablation_planner"
+    AUTONOMOUS_CANDIDATE_GATE_REPORTER = "autonomous_candidate_gate_reporter"
 
 
 @dataclass(frozen=True)
@@ -234,11 +243,78 @@ PILOT_MODEL_SCHEMAS = (
     PILOT_RAW_MODEL_BASELINE_SCHEMA,
 )
 
+INTERNAL_STREAM_READER_SCHEMA = WorkerSchema(
+    name="InternalStreamReaderOutput",
+    version="1",
+    artifact_type="internal_stream_reader_trace",
+)
+
+INTERNAL_REREAD_READER_SCHEMA = WorkerSchema(
+    name="InternalRereadReaderOutput",
+    version="1",
+    artifact_type="internal_reread_reader_trace",
+)
+
+FORENSIC_GROUNDING_READER_SCHEMA = WorkerSchema(
+    name="ForensicGroundingReaderOutput",
+    version="1",
+    artifact_type="forensic_grounding_report",
+)
+
+HOSTILE_INTERNAL_READER_SCHEMA = WorkerSchema(
+    name="HostileInternalReaderOutput",
+    version="1",
+    artifact_type="hostile_reader_report",
+)
+
+INTERNAL_RIVAL_COMPARISON_SCHEMA = WorkerSchema(
+    name="InternalRivalComparisonOutput",
+    version="1",
+    artifact_type="internal_rival_comparison",
+)
+
+INTERNAL_FAILURE_DIAGNOSIS_SCHEMA = WorkerSchema(
+    name="InternalFailureDiagnosisOutput",
+    version="1",
+    artifact_type="internal_failure_diagnosis",
+)
+
+TARGETED_RECOMPOSITION_PLAN_SCHEMA = WorkerSchema(
+    name="TargetedRecompositionPlanOutput",
+    version="1",
+    artifact_type="targeted_recomposition_plan",
+)
+
+COUNTERFACTUAL_ABLATION_PLAN_SCHEMA = WorkerSchema(
+    name="CounterfactualAblationPlanOutput",
+    version="1",
+    artifact_type="counterfactual_ablation_plan",
+)
+
+AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA = WorkerSchema(
+    name="AutonomousCandidateGateReportOutput",
+    version="1",
+    artifact_type="autonomous_candidate_gate_report",
+)
+
+INTERNAL_READER_LAB_MODEL_SCHEMAS = (
+    INTERNAL_STREAM_READER_SCHEMA,
+    INTERNAL_REREAD_READER_SCHEMA,
+    FORENSIC_GROUNDING_READER_SCHEMA,
+    HOSTILE_INTERNAL_READER_SCHEMA,
+    INTERNAL_RIVAL_COMPARISON_SCHEMA,
+    INTERNAL_FAILURE_DIAGNOSIS_SCHEMA,
+    TARGETED_RECOMPOSITION_PLAN_SCHEMA,
+    COUNTERFACTUAL_ABLATION_PLAN_SCHEMA,
+    AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA,
+)
+
 LIVE_MODEL_WORKER_SCHEMAS = (
     LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
     + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
     + EVALUATION_MODEL_SCHEMAS
     + PILOT_MODEL_SCHEMAS
+    + INTERNAL_READER_LAB_MODEL_SCHEMAS
 )
 
 
@@ -806,6 +882,245 @@ def pilot_raw_model_baseline_json_schema() -> dict[str, Any]:
     )
 
 
+def internal_stream_reader_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "candidate_label": {"type": "string"},
+            "retained_images": _string_array_schema(),
+            "dropped_details": _string_array_schema(),
+            "live_motifs": _string_array_schema(),
+            "attention_points": {"type": "array", "items": _free_object_schema()},
+            "confusion_points": {"type": "array", "items": _free_object_schema()},
+            "overexplicitness_points": {"type": "array", "items": _free_object_schema()},
+            "first_read_opening_interpretation": {"type": "string"},
+            "first_read_summary": {"type": "string"},
+            "bounded_mode": {"type": "boolean"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "candidate_label",
+            "retained_images",
+            "dropped_details",
+            "live_motifs",
+            "attention_points",
+            "confusion_points",
+            "overexplicitness_points",
+            "first_read_opening_interpretation",
+            "first_read_summary",
+            "bounded_mode",
+            "not_human_data",
+        ],
+    )
+
+
+def internal_reread_reader_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "candidate_label": {"type": "string"},
+            "opening_changed": {"type": "boolean"},
+            "opening_words_images_changed": _string_array_schema(),
+            "hidden_consequence_clearer": {"type": "string"},
+            "motif_returned_changed": {"type": "array", "items": _free_object_schema()},
+            "reread_summary": {"type": "string"},
+            "reread_gain_estimate": _free_object_schema(),
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "candidate_label",
+            "opening_changed",
+            "opening_words_images_changed",
+            "hidden_consequence_clearer",
+            "motif_returned_changed",
+            "reread_summary",
+            "reread_gain_estimate",
+            "not_human_data",
+        ],
+    )
+
+
+def forensic_grounding_reader_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "claimed_effects": _string_array_schema(),
+            "exact_textual_support": {"type": "array", "items": _free_object_schema()},
+            "unsupported_claims": _string_array_schema(),
+            "fake_depth_risk": {"type": "string"},
+            "reread_claims_grounded": {"type": "boolean"},
+            "grounding_verdict": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "claimed_effects",
+            "exact_textual_support",
+            "unsupported_claims",
+            "fake_depth_risk",
+            "reread_claims_grounded",
+            "grounding_verdict",
+            "not_human_data",
+        ],
+    )
+
+
+def hostile_internal_reader_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "attacks": {"type": "array", "items": _free_object_schema()},
+            "blocking_risks": _string_array_schema(),
+            "fake_depth": {"type": "string"},
+            "overexplanation": {"type": "string"},
+            "scaffold_leakage": {"type": "string"},
+            "wrong_register": {"type": "string"},
+            "accidental_comedy": {"type": "string"},
+            "cliche_contamination": {"type": "string"},
+            "thesis_replacing_artifact": {"type": "string"},
+            "pasted_ending": {"type": "string"},
+            "unearned_cosmic_scale": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "attacks",
+            "blocking_risks",
+            "fake_depth",
+            "overexplanation",
+            "scaffold_leakage",
+            "wrong_register",
+            "accidental_comedy",
+            "cliche_contamination",
+            "thesis_replacing_artifact",
+            "pasted_ending",
+            "unearned_cosmic_scale",
+            "not_human_data",
+        ],
+    )
+
+
+def internal_rival_comparison_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "source_classes_by_label": _free_object_schema(),
+            "strongest_by_first_read_clarity": {"type": "string"},
+            "strongest_by_reread_transformation": {"type": "string"},
+            "strongest_by_local_embodiment": {"type": "string"},
+            "strongest_by_compression_necessity": {"type": "string"},
+            "abi_candidate_wins_where": _string_array_schema(),
+            "abi_candidate_loses_where": _string_array_schema(),
+            "rival_preservation_remains_required": {"type": "boolean"},
+            "strongest_rival_present": {"type": "boolean"},
+            "scores": {"type": "array", "items": _free_object_schema()},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "source_classes_by_label",
+            "strongest_by_first_read_clarity",
+            "strongest_by_reread_transformation",
+            "strongest_by_local_embodiment",
+            "strongest_by_compression_necessity",
+            "abi_candidate_wins_where",
+            "abi_candidate_loses_where",
+            "rival_preservation_remains_required",
+            "strongest_rival_present",
+            "scores",
+            "not_human_data",
+        ],
+    )
+
+
+def internal_failure_diagnosis_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "failure_types_present": _string_array_schema(),
+            "failures": {"type": "array", "items": _free_object_schema()},
+            "requires_recomposition": {"type": "boolean"},
+            "reread_gain_estimate": _free_object_schema(),
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "failure_types_present",
+            "failures",
+            "requires_recomposition",
+            "reread_gain_estimate",
+            "not_human_data",
+        ],
+    )
+
+
+def targeted_recomposition_plan_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "bounded": {"type": "boolean"},
+            "does_not_rewrite_artifact": {"type": "boolean"},
+            "plan_items": {"type": "array", "items": _free_object_schema()},
+            "protected_effects": _string_array_schema(),
+            "forbidden_changes": _string_array_schema(),
+            "verification_plan": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "bounded",
+            "does_not_rewrite_artifact",
+            "plan_items",
+            "protected_effects",
+            "forbidden_changes",
+            "verification_plan",
+            "not_human_data",
+        ],
+    )
+
+
+def counterfactual_ablation_plan_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "ablation_tests": {"type": "array", "items": _free_object_schema()},
+            "suspected_causal_handles": _string_array_schema(),
+            "operations": _string_array_schema(),
+            "predicted_reader_state_effect": {"type": "string"},
+            "pass_fail_criteria": _string_array_schema(),
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "ablation_tests",
+            "suspected_causal_handles",
+            "operations",
+            "predicted_reader_state_effect",
+            "pass_fail_criteria",
+            "not_human_data",
+        ],
+    )
+
+
+def autonomous_candidate_gate_report_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "profile": {"type": "string"},
+            "passed": {"type": "boolean"},
+            "eligible": {"type": "boolean"},
+            "required_gates": _string_array_schema(),
+            "gate_results": {"type": "array", "items": _free_object_schema()},
+            "failed_gates": _string_array_schema(),
+            "missing_gates": _string_array_schema(),
+            "human_validation_required": {"type": "boolean"},
+            "paper_validation_required": {"type": "boolean"},
+            "phase_shift_claim": {"type": "boolean"},
+            "final_gates_marked_passed": _string_array_schema(),
+            "summary_verdict": {"type": "string"},
+        },
+        [
+            "profile",
+            "passed",
+            "eligible",
+            "required_gates",
+            "gate_results",
+            "failed_gates",
+            "missing_gates",
+            "human_validation_required",
+            "paper_validation_required",
+            "phase_shift_claim",
+            "final_gates_marked_passed",
+            "summary_verdict",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -857,6 +1172,24 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return pilot_direct_prompt_baseline_json_schema()
     if schema == PILOT_RAW_MODEL_BASELINE_SCHEMA:
         return pilot_raw_model_baseline_json_schema()
+    if schema == INTERNAL_STREAM_READER_SCHEMA:
+        return internal_stream_reader_json_schema()
+    if schema == INTERNAL_REREAD_READER_SCHEMA:
+        return internal_reread_reader_json_schema()
+    if schema == FORENSIC_GROUNDING_READER_SCHEMA:
+        return forensic_grounding_reader_json_schema()
+    if schema == HOSTILE_INTERNAL_READER_SCHEMA:
+        return hostile_internal_reader_json_schema()
+    if schema == INTERNAL_RIVAL_COMPARISON_SCHEMA:
+        return internal_rival_comparison_json_schema()
+    if schema == INTERNAL_FAILURE_DIAGNOSIS_SCHEMA:
+        return internal_failure_diagnosis_json_schema()
+    if schema == TARGETED_RECOMPOSITION_PLAN_SCHEMA:
+        return targeted_recomposition_plan_json_schema()
+    if schema == COUNTERFACTUAL_ABLATION_PLAN_SCHEMA:
+        return counterfactual_ablation_plan_json_schema()
+    if schema == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA:
+        return autonomous_candidate_gate_report_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -918,6 +1251,24 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_pilot_direct_prompt_baseline(payload)
     if schema == PILOT_RAW_MODEL_BASELINE_SCHEMA:
         return _validate_pilot_raw_model_baseline(payload)
+    if schema == INTERNAL_STREAM_READER_SCHEMA:
+        return _validate_internal_stream_reader(payload)
+    if schema == INTERNAL_REREAD_READER_SCHEMA:
+        return _validate_internal_reread_reader(payload)
+    if schema == FORENSIC_GROUNDING_READER_SCHEMA:
+        return _validate_forensic_grounding_reader(payload)
+    if schema == HOSTILE_INTERNAL_READER_SCHEMA:
+        return _validate_hostile_internal_reader(payload)
+    if schema == INTERNAL_RIVAL_COMPARISON_SCHEMA:
+        return _validate_internal_rival_comparison(payload)
+    if schema == INTERNAL_FAILURE_DIAGNOSIS_SCHEMA:
+        return _validate_internal_failure_diagnosis(payload)
+    if schema == TARGETED_RECOMPOSITION_PLAN_SCHEMA:
+        return _validate_targeted_recomposition_plan(payload)
+    if schema == COUNTERFACTUAL_ABLATION_PLAN_SCHEMA:
+        return _validate_counterfactual_ablation_plan(payload)
+    if schema == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA:
+        return _validate_autonomous_candidate_gate_report(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -1450,6 +1801,245 @@ def _validate_pilot_raw_model_baseline(payload: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _validate_internal_stream_reader(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "candidate_label", str)
+    for key in ("retained_images", "dropped_details", "live_motifs"):
+        _require_string_list(payload, key)
+    for key in ("attention_points", "confusion_points", "overexplicitness_points"):
+        _require_object_list(payload, key)
+    _require_type(payload, "first_read_opening_interpretation", str)
+    _require_type(payload, "first_read_summary", str)
+    _require_type(payload, "bounded_mode", bool)
+    _require_true(payload, "not_human_data")
+    return {
+        "candidate_label": payload["candidate_label"],
+        "retained_images": payload["retained_images"],
+        "dropped_details": payload["dropped_details"],
+        "live_motifs": payload["live_motifs"],
+        "attention_points": payload["attention_points"],
+        "confusion_points": payload["confusion_points"],
+        "overexplicitness_points": payload["overexplicitness_points"],
+        "first_read_opening_interpretation": payload["first_read_opening_interpretation"],
+        "first_read_summary": payload["first_read_summary"],
+        "bounded_mode": payload["bounded_mode"],
+        "not_human_data": True,
+    }
+
+
+def _validate_internal_reread_reader(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "candidate_label", str)
+    _require_type(payload, "opening_changed", bool)
+    _require_string_list(payload, "opening_words_images_changed")
+    _require_type(payload, "hidden_consequence_clearer", str)
+    _require_object_list(payload, "motif_returned_changed")
+    _require_type(payload, "reread_summary", str)
+    _require_type(payload, "reread_gain_estimate", dict)
+    _require_true(payload, "not_human_data")
+    return {
+        "candidate_label": payload["candidate_label"],
+        "opening_changed": payload["opening_changed"],
+        "opening_words_images_changed": payload["opening_words_images_changed"],
+        "hidden_consequence_clearer": payload["hidden_consequence_clearer"],
+        "motif_returned_changed": payload["motif_returned_changed"],
+        "reread_summary": payload["reread_summary"],
+        "reread_gain_estimate": payload["reread_gain_estimate"],
+        "not_human_data": True,
+    }
+
+
+def _validate_forensic_grounding_reader(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_string_list(payload, "claimed_effects")
+    _require_object_list(payload, "exact_textual_support")
+    _require_string_list(payload, "unsupported_claims")
+    _require_type(payload, "fake_depth_risk", str)
+    _require_type(payload, "reread_claims_grounded", bool)
+    _require_type(payload, "grounding_verdict", str)
+    _require_true(payload, "not_human_data")
+    return {
+        "claimed_effects": payload["claimed_effects"],
+        "exact_textual_support": payload["exact_textual_support"],
+        "unsupported_claims": payload["unsupported_claims"],
+        "fake_depth_risk": payload["fake_depth_risk"],
+        "reread_claims_grounded": payload["reread_claims_grounded"],
+        "grounding_verdict": payload["grounding_verdict"],
+        "not_human_data": True,
+    }
+
+
+def _validate_hostile_internal_reader(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_object_list(payload, "attacks")
+    _require_string_list(payload, "blocking_risks")
+    for key in (
+        "fake_depth",
+        "overexplanation",
+        "scaffold_leakage",
+        "wrong_register",
+        "accidental_comedy",
+        "cliche_contamination",
+        "thesis_replacing_artifact",
+        "pasted_ending",
+        "unearned_cosmic_scale",
+    ):
+        _require_type(payload, key, str)
+    _require_true(payload, "not_human_data")
+    return {
+        "attacks": payload["attacks"],
+        "blocking_risks": payload["blocking_risks"],
+        "fake_depth": payload["fake_depth"],
+        "overexplanation": payload["overexplanation"],
+        "scaffold_leakage": payload["scaffold_leakage"],
+        "wrong_register": payload["wrong_register"],
+        "accidental_comedy": payload["accidental_comedy"],
+        "cliche_contamination": payload["cliche_contamination"],
+        "thesis_replacing_artifact": payload["thesis_replacing_artifact"],
+        "pasted_ending": payload["pasted_ending"],
+        "unearned_cosmic_scale": payload["unearned_cosmic_scale"],
+        "not_human_data": True,
+    }
+
+
+def _validate_internal_rival_comparison(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "source_classes_by_label", dict)
+    if not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in payload["source_classes_by_label"].items()
+    ):
+        raise ModelValidationError("source_classes_by_label must map strings to strings")
+    for key in (
+        "strongest_by_first_read_clarity",
+        "strongest_by_reread_transformation",
+        "strongest_by_local_embodiment",
+        "strongest_by_compression_necessity",
+    ):
+        _require_type(payload, key, str)
+    _require_string_list(payload, "abi_candidate_wins_where")
+    _require_string_list(payload, "abi_candidate_loses_where")
+    _require_type(payload, "rival_preservation_remains_required", bool)
+    _require_type(payload, "strongest_rival_present", bool)
+    _require_object_list(payload, "scores")
+    _require_true(payload, "not_human_data")
+    return {
+        "source_classes_by_label": dict(payload["source_classes_by_label"]),
+        "strongest_by_first_read_clarity": payload["strongest_by_first_read_clarity"],
+        "strongest_by_reread_transformation": payload["strongest_by_reread_transformation"],
+        "strongest_by_local_embodiment": payload["strongest_by_local_embodiment"],
+        "strongest_by_compression_necessity": payload["strongest_by_compression_necessity"],
+        "abi_candidate_wins_where": payload["abi_candidate_wins_where"],
+        "abi_candidate_loses_where": payload["abi_candidate_loses_where"],
+        "rival_preservation_remains_required": payload["rival_preservation_remains_required"],
+        "strongest_rival_present": payload["strongest_rival_present"],
+        "scores": payload["scores"],
+        "not_human_data": True,
+    }
+
+
+def _validate_internal_failure_diagnosis(payload: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "underplanted",
+        "overexplained",
+        "fake_depth",
+        "weak_bridge",
+        "wrong_scale",
+        "unlicensed_field",
+        "dead_detail",
+        "motif_returns_unchanged",
+        "low_crisis",
+        "rival_stronger_local_embodiment",
+        "paraphrase_capture",
+        "cadence_or_register_damage",
+    }
+    _require_string_list(payload, "failure_types_present")
+    for failure_type in payload["failure_types_present"]:
+        if failure_type not in allowed:
+            raise ModelValidationError(f"unsupported internal failure type: {failure_type}")
+    _require_object_list(payload, "failures")
+    for index, failure in enumerate(payload["failures"]):
+        failure_type = failure.get("failure_type")
+        if not isinstance(failure_type, str) or failure_type not in allowed:
+            raise ModelValidationError(f"failures[{index}].failure_type is unsupported")
+    _require_type(payload, "requires_recomposition", bool)
+    _require_type(payload, "reread_gain_estimate", dict)
+    _require_true(payload, "not_human_data")
+    return {
+        "failure_types_present": payload["failure_types_present"],
+        "failures": payload["failures"],
+        "requires_recomposition": payload["requires_recomposition"],
+        "reread_gain_estimate": payload["reread_gain_estimate"],
+        "not_human_data": True,
+    }
+
+
+def _validate_targeted_recomposition_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "bounded", bool)
+    _require_type(payload, "does_not_rewrite_artifact", bool)
+    _require_object_list(payload, "plan_items")
+    _require_string_list(payload, "protected_effects")
+    _require_string_list(payload, "forbidden_changes")
+    _require_type(payload, "verification_plan", str)
+    _require_true(payload, "not_human_data")
+    return {
+        "bounded": payload["bounded"],
+        "does_not_rewrite_artifact": payload["does_not_rewrite_artifact"],
+        "plan_items": payload["plan_items"],
+        "protected_effects": payload["protected_effects"],
+        "forbidden_changes": payload["forbidden_changes"],
+        "verification_plan": payload["verification_plan"],
+        "not_human_data": True,
+    }
+
+
+def _validate_counterfactual_ablation_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_object_list(payload, "ablation_tests")
+    _require_string_list(payload, "suspected_causal_handles")
+    _require_string_list(payload, "operations")
+    _require_type(payload, "predicted_reader_state_effect", str)
+    _require_string_list(payload, "pass_fail_criteria")
+    _require_true(payload, "not_human_data")
+    return {
+        "ablation_tests": payload["ablation_tests"],
+        "suspected_causal_handles": payload["suspected_causal_handles"],
+        "operations": payload["operations"],
+        "predicted_reader_state_effect": payload["predicted_reader_state_effect"],
+        "pass_fail_criteria": payload["pass_fail_criteria"],
+        "not_human_data": True,
+    }
+
+
+def _validate_autonomous_candidate_gate_report(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "profile", str)
+    if payload["profile"] != "autonomous_creative_candidate":
+        raise ModelValidationError("profile must be autonomous_creative_candidate")
+    _require_type(payload, "passed", bool)
+    _require_type(payload, "eligible", bool)
+    if payload["passed"] or payload["eligible"]:
+        raise ModelValidationError("model gate report must remain fail-closed")
+    _require_string_list(payload, "required_gates")
+    _require_object_list(payload, "gate_results")
+    _require_string_list(payload, "failed_gates")
+    _require_string_list(payload, "missing_gates")
+    _require_false(payload, "human_validation_required")
+    _require_false(payload, "paper_validation_required")
+    _require_false(payload, "phase_shift_claim")
+    _require_string_list(payload, "final_gates_marked_passed")
+    if payload["final_gates_marked_passed"]:
+        raise ModelValidationError("final_gates_marked_passed must be empty")
+    _require_type(payload, "summary_verdict", str)
+    return {
+        "profile": payload["profile"],
+        "passed": False,
+        "eligible": False,
+        "required_gates": payload["required_gates"],
+        "gate_results": payload["gate_results"],
+        "failed_gates": payload["failed_gates"],
+        "missing_gates": payload["missing_gates"],
+        "human_validation_required": False,
+        "paper_validation_required": False,
+        "phase_shift_claim": False,
+        "final_gates_marked_passed": [],
+        "summary_verdict": payload["summary_verdict"],
+    }
+
+
 def _schema_with_properties(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {
         "type": "object",
@@ -1521,6 +2111,25 @@ def _require_number(payload: dict[str, Any], key: str, *, field_prefix: str = ""
         raise ModelValidationError(f"missing required field: {field_prefix}{key}")
     if isinstance(payload[key], bool) or not isinstance(payload[key], int | float):
         raise ModelValidationError(f"{field_prefix}{key} must be a number")
+
+
+def _require_true(payload: dict[str, Any], key: str, *, field_prefix: str = "") -> None:
+    _require_type(payload, key, bool, field_prefix=field_prefix)
+    if payload[key] is not True:
+        raise ModelValidationError(f"{field_prefix}{key} must be true")
+
+
+def _require_false(payload: dict[str, Any], key: str, *, field_prefix: str = "") -> None:
+    _require_type(payload, key, bool, field_prefix=field_prefix)
+    if payload[key] is not False:
+        raise ModelValidationError(f"{field_prefix}{key} must be false")
+
+
+def _require_object_list(payload: dict[str, Any], key: str, *, field_prefix: str = "") -> None:
+    _require_type(payload, key, list, field_prefix=field_prefix)
+    for index, value in enumerate(payload[key]):
+        if not isinstance(value, dict):
+            raise ModelValidationError(f"{field_prefix}{key}[{index}] must be an object")
 
 
 def _require_string_list(

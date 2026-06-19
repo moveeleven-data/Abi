@@ -6,7 +6,7 @@ Abi is not a public-validation harness right now. Human readers, browser ChatGPT
 
 ## Project Status
 
-- Current implemented surface: deterministic infrastructure, artifact/run registries, guarded model-call records, Abi Ear, Minimal Reread, production/candidate scaffolds, pilot candidate/baseline/rival artifact sets, strongest-rival import, Autonomous Internal Reader Lab v1 fake packets, and Autonomous Closed-Loop Revision v1 fake packets.
+- Current implemented surface: deterministic infrastructure, artifact/run registries, guarded model-call records, Abi Ear, Minimal Reread, production/candidate scaffolds, pilot candidate/baseline/rival artifact sets, strongest-rival import, Autonomous Internal Reader Lab v1 fake packets plus guarded model-driver-backed internal workers, and Autonomous Closed-Loop Revision v1 fake packets.
 - Active finalization profile: `autonomous_creative_candidate`.
 - Current finalization status: fail-closed until internal autonomous gates are explicitly satisfied.
 - Legacy external profile: `final_artifact` remains present as historical/external validation policy, but it is not the active development path.
@@ -57,6 +57,12 @@ Fake-client and candidate packet paths:
 .\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
 .\.venv\Scripts\abi.exe autonomous reader-lab --client fake --packet-dir <packet_dir>
 .\.venv\Scripts\abi.exe autonomous revise --client fake --reader-lab-packet <reader_lab_packet_dir>
+```
+
+Guarded model-driver-backed internal reader workers:
+
+```powershell
+.\.venv\Scripts\abi.exe autonomous reader-lab --client openai --packet-dir <packet_dir> --allow-live-model --max-model-calls 12
 ```
 
 Strongest-rival preservation:
