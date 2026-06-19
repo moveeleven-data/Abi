@@ -32,6 +32,28 @@ THEORY_FRAGMENT = """# Theory Fragment
 The opening should be testable by reread without telling the reader what to feel.
 """
 
+PROSE_SENTENCES = (
+    "At dawn the table kept its place by the window, and everyone who entered the "
+    "room noticed the silence before they noticed the wood. "
+    "A cup stood near one corner with a faint ring beneath it, as if the night had "
+    "lifted its hand but left the pressure behind. "
+    "Nothing announced itself, yet the room seemed arranged around a question that "
+    "had waited patiently for morning."
+)
+FORBIDDEN_READER_TERMS = (
+    "source_class",
+    "abi candidate",
+    "direct prompt baseline",
+    "raw model baseline",
+    "non-final",
+    "validation",
+    "gate",
+    "artifact",
+    "metadata",
+    "fixture",
+    "model_call_id",
+)
+
 
 def config_for(tmp_path: Path) -> AbiConfig:
     return AbiConfig(
@@ -58,21 +80,32 @@ def read_payload(path: str) -> dict[str, object]:
     return json.loads(Path(path).read_text(encoding="utf-8"))["payload"]
 
 
+def clean_reader_prose() -> str:
+    return " ".join(PROSE_SENTENCES for _ in range(15))
+
+
 class StubOpenAIPilotClient:
     provider = "openai"
 
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, mode: str = "clean") -> None:
         self.model = model
+        self.mode = mode
 
     def generate(self, request) -> str:
         source_context = json.loads(request.input_text)
         source_files = source_context["source_files"]
+        source_contents = source_context["source_contents"]
+        assert any(SOURCE_NOTE.strip() in item["content"] for item in source_contents)
+        assert any(THEORY_FRAGMENT.strip() in item["content"] for item in source_contents)
         hashes = [item["sha256"] for item in source_files]
         if request.schema == PILOT_ABI_CANDIDATE_SCHEMA:
+            text = clean_reader_prose()
+            if self.mode == "candidate_leakage":
+                text = f"{text} BASELINE COMPONENT"
             return json.dumps(
                 {
                     "candidate_id": "stub_openai_candidate",
-                    "text": "Stub OpenAI candidate text for a blinded pilot artifact set.",
+                    "text": text,
                     "source_file_count": len(source_files),
                     "source_set_hashes": hashes,
                     "non_final": True,
@@ -89,10 +122,13 @@ class StubOpenAIPilotClient:
                 sort_keys=True,
             )
         if request.schema == PILOT_DIRECT_PROMPT_BASELINE_SCHEMA:
+            text = clean_reader_prose()
+            if self.mode == "baseline_json":
+                text = '{"paragraph":"this is a JSON object, not reader prose"}'
             return json.dumps(
                 {
                     "baseline_id": "stub_direct_prompt_baseline",
-                    "text": "Stub OpenAI direct-prompt baseline text.",
+                    "text": text,
                     "generation_rule": "stubbed OpenAI test client",
                     "risks": ["stub output is not validation"],
                 },
@@ -102,7 +138,7 @@ class StubOpenAIPilotClient:
             return json.dumps(
                 {
                     "baseline_id": "stub_raw_model_baseline",
-                    "text": "Stub OpenAI raw-model baseline text.",
+                    "text": clean_reader_prose(),
                     "risks": ["stub output is not validation"],
                 },
                 sort_keys=True,
@@ -170,10 +206,10 @@ def test_fake_pilot_artifact_set_creates_source_frozen_packet(tmp_path, monkeypa
     assert label_map["label_map"]["Text A"]["source_class"] == "abi_candidate"
 
     bundle = read_payload(result.payload["artifact_paths"]["pilot_blinded_reader_bundle"])
-    assert bundle["source_classes_hidden"] is True
+    assert set(bundle) == {"reader_items"}
     assert [item["label"] for item in bundle["reader_items"]] == ["Text A", "Text B", "Text C"]
     for item in bundle["reader_items"]:
-        assert set(item) == {"label", "text", "first_read_task", "reread_task"}
+        assert set(item) == {"label", "text"}
 
     readiness = read_payload(result.payload["artifact_paths"]["pilot_readiness_report"])
     assert readiness["ready_for_protocol_dry_run"] is True
@@ -347,10 +383,64 @@ def test_stubbed_openai_pilot_creates_model_records_and_model_artifacts(
     assert raw["not_real_validation"] is True
     assert raw["raw_model_baseline_gate_satisfied"] is False
 
+    bundle = read_payload(result.payload["artifact_paths"]["pilot_blinded_reader_bundle"])
+    assert set(bundle) == {"reader_items"}
+    assert [item["label"] for item in bundle["reader_items"]] == ["Text A", "Text B", "Text C"]
+    for item in bundle["reader_items"]:
+        assert set(item) == {"label", "text"}
+        assert len(item["text"].split()) >= 500
+    bundle_text = json.dumps(bundle, sort_keys=True).lower()
+    for forbidden in FORBIDDEN_READER_TERMS:
+        assert forbidden not in bundle_text
+
     strongest = read_payload(result.payload["artifact_paths"]["pilot_strongest_rival_slot"])
     assert strongest["strongest_rival_gate_satisfied"] is False
     assert final_report.refused is True
     assert "strongest_rival_comparison_passed" in final_report.missing_gates
+
+
+def test_stubbed_openai_pilot_fails_closed_on_scaffold_leakage(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    source_dir = write_sources(tmp_path)
+    config = config_for(tmp_path)
+
+    result = run_pilot_artifact_set(
+        config,
+        client_name="openai",
+        source_dir=source_dir,
+        allow_live_model=True,
+        client_factory=lambda model: StubOpenAIPilotClient(model, mode="candidate_leakage"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "reader-facing text validation failed" in result.payload["message"]
+    assert "scaffold leakage" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 3
+    assert "pilot_blinded_reader_bundle" not in result.payload["artifact_ids"]
+    assert "pilot_packet" not in result.payload["artifact_ids"]
+
+
+def test_stubbed_openai_pilot_fails_closed_on_json_baseline_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    source_dir = write_sources(tmp_path)
+    config = config_for(tmp_path)
+
+    result = run_pilot_artifact_set(
+        config,
+        client_name="openai",
+        source_dir=source_dir,
+        allow_live_model=True,
+        client_factory=lambda model: StubOpenAIPilotClient(model, mode="baseline_json"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "reader-facing text validation failed" in result.payload["message"]
+    assert "JSON" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 3
+    assert "pilot_blinded_reader_bundle" not in result.payload["artifact_ids"]
+    assert "pilot_packet" not in result.payload["artifact_ids"]
 
 
 def test_pilot_cli_fake_and_openai_guard(tmp_path, capsys, monkeypatch):

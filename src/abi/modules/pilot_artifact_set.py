@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 
 from abi.artifacts import ArtifactRecord
 from abi.config import AbiConfig
@@ -40,6 +41,26 @@ PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT = 36
 PILOT_ARTIFACT_SET_REQUIRED_MODEL_CALLS = 0
 PILOT_ARTIFACT_SET_OPENAI_MODEL_CALLS = 3
 PILOT_ARTIFACT_SET_FAKE_MODEL = "fake-pilot-artifact-set-v1"
+PILOT_READER_TEXT_MIN_WORDS = 500
+PILOT_READER_TEXT_FORBIDDEN_TERMS = (
+    "baseline component",
+    "role:",
+    "status:",
+    "non-final",
+    "validation",
+    "final gates",
+    "phase-shift claim",
+    "source manifest",
+    "artifact-set",
+    "json object",
+    "fixture",
+    "model_call_id",
+    "abi candidate",
+    "direct prompt baseline",
+    "raw model baseline",
+    "metadata",
+    "finalization",
+)
 PILOT_ARTIFACT_SET_ARTIFACT_TYPES = (
     "pilot_source_manifest",
     "pilot_generation_plan",
@@ -264,6 +285,7 @@ def _write_pilot_packet(
                     config=config,
                     run_id=run_id,
                     packet_dir=packet_dir,
+                    source_dir=source_dir,
                     source_files=source_files,
                     source_manifest_artifact_id=artifacts["pilot_source_manifest"].id,
                     generation_plan_artifact_id=artifacts["pilot_generation_plan"].id,
@@ -291,6 +313,26 @@ def _write_pilot_packet(
                     )
                 artifacts[result.parsed_artifact.type] = result.parsed_artifact
                 payloads[result.parsed_artifact.type] = result.parsed_payload
+            reader_validation_error = _reader_facing_text_validation_error(
+                payloads=payloads,
+                min_words=PILOT_READER_TEXT_MIN_WORDS,
+            )
+            if reader_validation_error is not None:
+                return _failure_result(
+                    client_name=client_name,
+                    model=model,
+                    run_id=run_id,
+                    packet_dir=str(packet_dir),
+                    source_dir=source_dir,
+                    artifacts=artifacts,
+                    payloads=payloads,
+                    model_results=model_results,
+                    max_model_calls=max_model_calls,
+                    message=(
+                        "Pilot artifact-set reader-facing text validation failed: "
+                        f"{reader_validation_error}"
+                    ),
+                )
         else:
             payloads["pilot_abi_candidate_ref"] = _build_candidate_payload(
                 source_files=source_files,
@@ -474,6 +516,7 @@ def _run_pilot_model_calls(
     config: AbiConfig,
     run_id: str,
     packet_dir: Path,
+    source_dir: Path,
     source_files: list[dict[str, object]],
     source_manifest_artifact_id: str,
     generation_plan_artifact_id: str,
@@ -483,7 +526,7 @@ def _run_pilot_model_calls(
     results: list[ModelDriverResult] = []
     driver = ModelDriver(config=config, client=model_client)
     parent_ids = [source_manifest_artifact_id, generation_plan_artifact_id]
-    input_text = _model_input_text(source_files)
+    input_text = _model_input_text(source_dir=source_dir, source_files=source_files)
 
     for index, worker in enumerate(PILOT_MODEL_WORKERS, start=1):
         if index > max_model_calls:
@@ -693,39 +736,11 @@ def _build_blinded_bundle_payload(
     payloads: dict[str, dict[str, object]],
 ) -> dict[str, object]:
     return {
-        "worker": "pilot_blinded_reader_bundle_v1",
-        "reader_visible": True,
-        "source_classes_hidden": True,
         "reader_items": [
             _reader_item("Text A", str(payloads["pilot_abi_candidate_ref"]["text"])),
             _reader_item("Text B", str(payloads["pilot_direct_prompt_baseline"]["text"])),
             _reader_item("Text C", str(payloads["pilot_raw_model_baseline"]["text"])),
         ],
-        "reserved_labels": [
-            {
-                "label": "Text D",
-                "status": "reserved for strongest rival after protocol-compliant import",
-            }
-        ],
-        "task_protocol": {
-            "first_read": [
-                "What did you think the text was doing on first read?",
-                "Which image, phrase, or sentence held your attention most strongly?",
-                "What felt unresolved, hidden, or unclear?",
-                "Summarize the text in one or two sentences.",
-                "Rate confusion from 1 to 5.",
-                "Rate overexplicitness from 1 to 5.",
-            ],
-            "reread": [
-                "Did the opening change in meaning after reread?",
-                "What hidden consequence became clearer, if any?",
-                "What did the text make you carry back to the beginning?",
-                "Summarize the text again in one or two sentences.",
-                "Rate attention intensity from 1 to 5.",
-                "Rate confusion from 1 to 5.",
-                "Rate overexplicitness from 1 to 5.",
-            ],
-        },
     }
 
 
@@ -966,10 +981,21 @@ def _refusal(
     )
 
 
-def _model_input_text(source_files: list[dict[str, object]]) -> str:
+def _model_input_text(
+    *,
+    source_dir: Path,
+    source_files: list[dict[str, object]],
+) -> str:
     return json.dumps(
         {
             "source_files": source_files,
+            "source_contents": _source_contents(source_dir=source_dir, source_files=source_files),
+            "reader_facing_text_rules": {
+                "target_words": "700-1200",
+                "minimum_words": PILOT_READER_TEXT_MIN_WORDS,
+                "must_be_prose_for_blind_readers": True,
+                "forbidden_terms": list(PILOT_READER_TEXT_FORBIDDEN_TERMS),
+            },
             "candidate_rules": {
                 "non_final": True,
                 "candidate_only": True,
@@ -985,6 +1011,67 @@ def _model_input_text(source_files: list[dict[str, object]]) -> str:
         indent=2,
         sort_keys=True,
     )
+
+
+def _source_contents(
+    *,
+    source_dir: Path,
+    source_files: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    contents = []
+    for source_file in source_files:
+        relative_path = str(source_file["relative_path"])
+        path = source_dir / relative_path
+        contents.append(
+            {
+                "relative_path": relative_path,
+                "sha256": source_file["sha256"],
+                "content": path.read_text(encoding="utf-8", errors="replace"),
+            }
+        )
+    return contents
+
+
+def _reader_facing_text_validation_error(
+    *,
+    payloads: dict[str, dict[str, object]],
+    min_words: int,
+) -> str | None:
+    labels = {
+        "pilot_abi_candidate_ref": "candidate",
+        "pilot_direct_prompt_baseline": "direct baseline",
+        "pilot_raw_model_baseline": "raw baseline",
+    }
+    for artifact_type, label in labels.items():
+        text = str(payloads[artifact_type].get("text", ""))
+        error = _reader_text_validation_error(text=text, label=label, min_words=min_words)
+        if error is not None:
+            return error
+    return None
+
+
+def _reader_text_validation_error(*, text: str, label: str, min_words: int) -> str | None:
+    stripped = text.strip()
+    if not stripped:
+        return f"{label} text is empty"
+    if stripped.startswith("{"):
+        return f"{label} text starts with JSON object syntax"
+    try:
+        json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    else:
+        return f"{label} text parses as JSON"
+
+    word_count = len(re.findall(r"\b[\w'-]+\b", stripped))
+    if word_count < min_words:
+        return f"{label} text has {word_count} words; minimum is {min_words}"
+
+    lowered = stripped.lower()
+    for term in PILOT_READER_TEXT_FORBIDDEN_TERMS:
+        if term in lowered:
+            return f"{label} text contains scaffold leakage term: {term}"
+    return None
 
 
 def _artifact_text(
@@ -1006,8 +1093,6 @@ def _reader_item(label: str, text: str) -> dict[str, object]:
     return {
         "label": label,
         "text": text,
-        "first_read_task": "complete first-read response before reread questions",
-        "reread_task": "complete reread response after rereading the same text",
     }
 
 

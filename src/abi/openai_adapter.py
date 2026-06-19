@@ -12,7 +12,10 @@ from abi.model_schemas import (
     ABI_EAR_FIELD_MODEL_SCHEMA,
     ABI_EAR_GERM_ANALYSIS_SCHEMA,
     LIVE_MODEL_WORKER_SCHEMAS,
+    PILOT_ABI_CANDIDATE_SCHEMA,
+    PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
     PILOT_MODEL_SCHEMAS,
+    PILOT_RAW_MODEL_BASELINE_SCHEMA,
     json_schema_for_worker_schema,
 )
 
@@ -84,8 +87,14 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_germ_analysis_prompt
     if schema == ABI_EAR_FIELD_MODEL_SCHEMA:
         return _build_field_model_prompt
+    if schema == PILOT_ABI_CANDIDATE_SCHEMA:
+        return _build_pilot_candidate_prompt
+    if schema == PILOT_DIRECT_PROMPT_BASELINE_SCHEMA:
+        return _build_pilot_direct_prompt_baseline_prompt
+    if schema == PILOT_RAW_MODEL_BASELINE_SCHEMA:
+        return _build_pilot_raw_model_baseline_prompt
     if schema in PILOT_MODEL_SCHEMAS:
-        return _build_pilot_artifact_set_prompt
+        return _build_pilot_reader_artifact_prompt
     return _build_live_packet_prompt
 
 
@@ -115,14 +124,45 @@ def _build_live_packet_prompt(germ_text: str) -> str:
     )
 
 
-def _build_pilot_artifact_set_prompt(input_text: str) -> str:
+def _build_pilot_candidate_prompt(input_text: str) -> str:
     return (
-        "Produce the requested pilot artifact-set component as strict structured JSON. "
-        "For baseline components, generate baseline content only; Abi assigns the "
-        "baseline role and no-validation/no-final-gate metadata deterministically. "
-        "The output must remain non-final, must not claim human validation, must not "
-        "claim phase shift, and must not satisfy final-artifact gates. Source manifest "
-        "and task context:\n"
+        "Return strict JSON matching the schema. In the text field, write a 700-1200 "
+        "word reader-facing prose artifact from source_contents. Do not describe the "
+        "system, the task, the schema, or the artifact status. Do not use headings like "
+        "role or status. Do not mention internal labels, source manifests, gates, "
+        "validation, non-finality, metadata, or JSON. Source material and constraints:\n"
+        f"{input_text}"
+    )
+
+
+def _build_pilot_direct_prompt_baseline_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema. In the text field, write a 700-1200 "
+        "word reader-facing prose piece from source_contents using a broad direct "
+        "writing prompt. Do not use Abi-specific machinery or internal labels. Do not "
+        "describe the system, the schema, baseline status, gates, validation, "
+        "non-finality, metadata, or JSON. Source material and constraints:\n"
+        f"{input_text}"
+    )
+
+
+def _build_pilot_raw_model_baseline_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema. In the text field, write a 700-1200 "
+        "word reader-facing prose piece from source_contents as if from a simple raw "
+        "writing prompt. The text field must be prose, not JSON or a report. Do not "
+        "describe the system, the schema, baseline status, gates, validation, "
+        "non-finality, metadata, or JSON. Source material and constraints:\n"
+        f"{input_text}"
+    )
+
+
+def _build_pilot_reader_artifact_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema. Generate reader-facing prose in text "
+        "fields from source_contents. Do not describe the system, schema, internal "
+        "status, gates, validation, non-finality, metadata, or JSON. Source material "
+        "and constraints:\n"
         f"{input_text}"
     )
 
