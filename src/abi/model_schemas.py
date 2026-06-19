@@ -2234,25 +2234,19 @@ def _validate_counterfactual_ablation_plan(payload: dict[str, Any]) -> dict[str,
 
 def _validate_autonomous_candidate_gate_report(payload: dict[str, Any]) -> dict[str, Any]:
     _require_type(payload, "profile", str)
-    if payload["profile"] != "autonomous_creative_candidate":
-        raise ModelValidationError("profile must be autonomous_creative_candidate")
     _require_type(payload, "passed", bool)
     _require_type(payload, "eligible", bool)
-    if payload["passed"] or payload["eligible"]:
-        raise ModelValidationError("model gate report must remain fail-closed")
     _require_string_list(payload, "required_gates")
     _require_object_list(payload, "gate_results")
     _require_string_list(payload, "failed_gates")
     _require_string_list(payload, "missing_gates")
-    _require_false(payload, "human_validation_required")
-    _require_false(payload, "paper_validation_required")
-    _require_false(payload, "phase_shift_claim")
+    _require_type(payload, "human_validation_required", bool)
+    _require_type(payload, "paper_validation_required", bool)
+    _require_type(payload, "phase_shift_claim", bool)
     _require_string_list(payload, "final_gates_marked_passed")
-    if payload["final_gates_marked_passed"]:
-        raise ModelValidationError("final_gates_marked_passed must be empty")
     _require_type(payload, "summary_verdict", str)
     return {
-        "profile": payload["profile"],
+        "profile": "autonomous_creative_candidate",
         "passed": False,
         "eligible": False,
         "required_gates": payload["required_gates"],

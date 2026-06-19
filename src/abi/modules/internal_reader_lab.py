@@ -23,6 +23,7 @@ from abi.hashing import sha256_text
 from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
 from abi.model_driver import ModelClient, ModelClientError, ModelDriver, ModelDriverResult
 from abi.model_driver import WorkerRequest
+from abi.model_calls import link_model_call_parsed_artifact
 from abi.model_schemas import (
     AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA,
     COUNTERFACTUAL_ABLATION_PLAN_SCHEMA,
@@ -591,6 +592,7 @@ def _run_live_internal_reader_lab(
                 model_results=model_results,
                 message="Autonomous reader lab stopped by max-model-calls budget.",
             )
+        controller_owned_gate_report = worker.schema == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA
         parent_ids = [
             artifacts["internal_reader_subject_manifest"].id,
             *[
@@ -612,10 +614,15 @@ def _run_live_internal_reader_lab(
                 parent_ids=parent_ids,
                 fixture_only=fixture_only,
                 output_dir=str(output_dir),
+                register_parsed_artifact=not controller_owned_gate_report,
             )
         )
         model_results.append(result)
-        if not result.accepted or result.parsed_artifact is None or result.parsed_payload is None:
+        if (
+            not result.accepted
+            or result.parsed_payload is None
+            or (not controller_owned_gate_report and result.parsed_artifact is None)
+        ):
             return _live_failure_result(
                 client_name=client_name,
                 model=model,
@@ -626,6 +633,46 @@ def _run_live_internal_reader_lab(
                 model_results=model_results,
                 message="Autonomous reader lab stopped by model-call failure.",
             )
+        if controller_owned_gate_report:
+            payloads[worker.artifact_type] = _build_gate_report(
+                subject=subject,
+                fixture_only=fixture_only,
+                payloads=payloads,
+            )
+            payloads[worker.artifact_type].update(
+                {
+                    "worker": "autonomous_candidate_gate_report_v1_controller",
+                    "model_driver_backed": True,
+                    "model_gate_assessment_call_id": result.model_call.id,
+                    "model_gate_assessment_received": True,
+                }
+            )
+            with connect(config.db_path) as connection:
+                writer = PacketWriter(
+                    connection=connection,
+                    run_id=subject.run_id,
+                    packet_dir=output_dir,
+                    lineage_id=INTERNAL_READER_LAB_LINEAGE_ID,
+                    created_by="autonomous_internal_reader_lab_v1_controller",
+                    fixture_only=fixture_only,
+                    model_call_id=result.model_call.id,
+                )
+                artifacts[worker.artifact_type] = writer.write_artifact(
+                    worker.artifact_type,
+                    payloads[worker.artifact_type],
+                    parent_ids=parent_ids,
+                )
+                linked_call = link_model_call_parsed_artifact(
+                    connection,
+                    model_call_id=result.model_call.id,
+                    parsed_output_artifact_id=artifacts[worker.artifact_type].id,
+                )
+            model_results[-1] = ModelDriverResult(
+                model_call=linked_call,
+                parsed_payload=payloads[worker.artifact_type],
+                parsed_artifact=artifacts[worker.artifact_type],
+            )
+            continue
         artifacts[worker.artifact_type] = result.parsed_artifact
         payloads[worker.artifact_type] = result.parsed_payload
 
@@ -763,6 +810,21 @@ def _prompt_for_worker(
     if worker.schema == INTERNAL_FAILURE_DIAGNOSIS_SCHEMA:
         prompt["allowed_internal_failure_types"] = list(INTERNAL_FAILURE_TYPES)
         prompt["hostile_risk_failure_type_map"] = dict(INTERNAL_HOSTILE_RISK_FAILURE_TYPE_MAP)
+    if worker.schema == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA:
+        prompt["controller_owned_gate_fields"] = [
+            "profile",
+            "passed",
+            "eligible",
+            "required_gates",
+            "human_validation_required",
+            "paper_validation_required",
+            "phase_shift_claim",
+            "final_gates_marked_passed",
+        ]
+        prompt["gate_report_authority_boundary"] = (
+            "Model output is advisory only. Abi deterministically assembles final gate "
+            "authority fields and gate pass/fail records."
+        )
     return _canonical_json(prompt)
 
 

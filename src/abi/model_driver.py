@@ -66,6 +66,7 @@ class WorkerRequest:
     parent_ids: list[str] = field(default_factory=list)
     fixture_only: bool | None = True
     output_dir: str | None = None
+    register_parsed_artifact: bool = True
 
     def input_hash(self) -> str:
         return sha256_text(
@@ -78,6 +79,7 @@ class WorkerRequest:
                     "input_text": self.input_text,
                     "input_artifact_ids": list(self.input_artifact_ids),
                     "input_packet_path": self.input_packet_path,
+                    "register_parsed_artifact": self.register_parsed_artifact,
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -213,21 +215,23 @@ class ModelDriver:
                 parsed_artifact=None,
             )
 
-        with connect(self.config.db_path) as connection:
-            writer = PacketWriter(
-                connection=connection,
-                run_id=request.run_id,
-                packet_dir=call_dir,
-                lineage_id=request.lineage_id,
-                created_by=f"model_driver:{self.client.provider}:{self.client.model}",
-                fixture_only=request.fixture_only,
-                model_call_id=call_id,
-            )
-            parsed_artifact = writer.write_artifact(
-                request.schema.artifact_type,
-                parsed_payload,
-                parent_ids=_artifact_parent_ids(request),
-            )
+        parsed_artifact = None
+        if request.register_parsed_artifact:
+            with connect(self.config.db_path) as connection:
+                writer = PacketWriter(
+                    connection=connection,
+                    run_id=request.run_id,
+                    packet_dir=call_dir,
+                    lineage_id=request.lineage_id,
+                    created_by=f"model_driver:{self.client.provider}:{self.client.model}",
+                    fixture_only=request.fixture_only,
+                    model_call_id=call_id,
+                )
+                parsed_artifact = writer.write_artifact(
+                    request.schema.artifact_type,
+                    parsed_payload,
+                    parent_ids=_artifact_parent_ids(request),
+                )
 
         return self._record_result(
             request=request,

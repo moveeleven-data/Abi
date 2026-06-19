@@ -6,10 +6,14 @@ import pytest
 from abi.artifacts import list_artifacts
 from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
-from abi.controller.policy import GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE
+from abi.controller.policy import (
+    AUTONOMOUS_CREATIVE_CANDIDATE_REQUIRED_GATES,
+    GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+)
 from abi.db import connect
 from abi.model_calls import MODEL_CALL_SUCCESS, MODEL_CALL_VALIDATION_FAILED, list_model_calls
 from abi.model_schemas import (
+    AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA,
     FORENSIC_GROUNDING_READER_SCHEMA,
     INTERNAL_FAILURE_DIAGNOSIS_SCHEMA,
     INTERNAL_FAILURE_TYPES,
@@ -122,18 +126,54 @@ def stub_factory(
     clients: list[FakeInternalReaderLabModelClient],
     *,
     mode: str = "valid",
+    target_schema=FORENSIC_GROUNDING_READER_SCHEMA,
 ):
     def _factory(model: str) -> FakeInternalReaderLabModelClient:
         client = FakeInternalReaderLabModelClient(
             provider="openai",
             model=model,
             mode=mode,
-            target_schema=FORENSIC_GROUNDING_READER_SCHEMA,
+            target_schema=target_schema,
         )
         clients.append(client)
         return client
 
     return _factory
+
+
+class OverreachingGateReportClient(FakeInternalReaderLabModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        if request.schema != AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA:
+            return raw_output
+        payload = json.loads(raw_output)
+        payload.update(
+            {
+                "profile": "paper_public_final",
+                "passed": True,
+                "eligible": True,
+                "required_gates": ["model_chosen_gate"],
+                "failed_gates": [],
+                "missing_gates": [],
+                "human_validation_required": True,
+                "paper_validation_required": True,
+                "phase_shift_claim": True,
+                "final_gates_marked_passed": [
+                    "real_human_validation_passed",
+                    "final_operator_approval",
+                ],
+                "summary_verdict": "The model attempted to approve the candidate.",
+            }
+        )
+        for gate_result in payload["gate_results"]:
+            if gate_result["gate_name"] in {
+                "no_unresolved_internal_blockers",
+                "internal_operator_approval",
+            }:
+                gate_result["passed"] = True
+                gate_result["blocking_defects"] = []
+                gate_result["record"] = True
+        return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def test_internal_reader_lab_schema_catalog_exposes_internal_worker_schemas():
@@ -308,7 +348,10 @@ def test_stubbed_openai_internal_reader_lab_creates_model_artifacts(tmp_path):
         assert envelope["artifact_type"] == artifact_type
         assert envelope["fixture_only"] is False
         assert envelope["model_call_id"] is not None
-        assert envelope["created_by"] == "model_driver:openai:stub-internal-reader-model"
+        if artifact_type == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA.artifact_type:
+            assert envelope["created_by"] == "autonomous_internal_reader_lab_v1_controller"
+        else:
+            assert envelope["created_by"] == "model_driver:openai:stub-internal-reader-model"
 
     manifest = json.loads(
         Path(artifact_by_type["internal_reader_subject_manifest"].path).read_text(encoding="utf-8")
@@ -338,6 +381,126 @@ def test_stubbed_openai_internal_reader_lab_creates_model_artifacts(tmp_path):
     assert "no_unresolved_internal_blockers" in combined_blockers
     assert "real_human_validation_passed" not in combined_blockers
     assert "paper" not in final_report.message.lower()
+
+
+def test_stubbed_openai_gate_reporter_cannot_choose_finalization_authority(tmp_path):
+    config, pilot_payload = build_pilot_packet(tmp_path, with_rival=True)
+    clients: list[OverreachingGateReportClient] = []
+
+    def _factory(model: str) -> OverreachingGateReportClient:
+        client = OverreachingGateReportClient(
+            provider="openai",
+            model=model,
+            mode="valid",
+            target_schema=FORENSIC_GROUNDING_READER_SCHEMA,
+        )
+        clients.append(client)
+        return client
+
+    result = run_internal_reader_lab(
+        config,
+        client_name="openai",
+        packet_dir=pilot_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-internal-reader-model",
+        client_factory=_factory,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 9
+
+    gate_report_path = result.payload["artifact_paths"]["autonomous_candidate_gate_report"]
+    gate_envelope = json.loads(Path(gate_report_path).read_text(encoding="utf-8"))
+    gate_report = gate_envelope["payload"]
+    serialized_report = json.dumps(gate_report, sort_keys=True)
+
+    assert gate_report["profile"] == GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE
+    assert gate_report["required_gates"] == list(AUTONOMOUS_CREATIVE_CANDIDATE_REQUIRED_GATES)
+    assert gate_report["passed"] is False
+    assert gate_report["eligible"] is False
+    assert gate_report["human_validation_required"] is False
+    assert gate_report["paper_validation_required"] is False
+    assert gate_report["phase_shift_claim"] is False
+    assert gate_report["final_gates_marked_passed"] == []
+    assert "paper_public_final" not in serialized_report
+    assert "real_human_validation_passed" not in gate_report["final_gates_marked_passed"]
+    assert "no_unresolved_internal_blockers" in gate_report["failed_gates"]
+    assert "internal_operator_approval" in gate_report["missing_gates"]
+
+    gate_results = {gate["gate_name"]: gate for gate in gate_report["gate_results"]}
+    assert gate_results["no_unresolved_internal_blockers"]["passed"] is False
+    assert gate_results["internal_operator_approval"]["passed"] is False
+    assert gate_results["internal_operator_approval"]["record"] is False
+
+    gate_call = next(
+        call
+        for call in result.payload["model_calls"]
+        if call["schema_name"] == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA.name
+    )
+    assert gate_call["status"] == MODEL_CALL_SUCCESS
+    assert gate_call["parsed_output_artifact_id"] == result.payload["artifact_ids"][
+        "autonomous_candidate_gate_report"
+    ]
+    assert gate_envelope["model_call_id"] == gate_call["id"]
+    assert result.payload["parsed_model_artifact_ids"][
+        AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA.name
+    ] == result.payload["artifact_ids"]["autonomous_candidate_gate_report"]
+
+    with connect(config.db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert final_report.refused is True
+    combined_blockers = " ".join(final_report.missing_gates + final_report.failed_gates)
+    assert "internal_operator_approval" in combined_blockers
+    assert "no_unresolved_internal_blockers" in combined_blockers
+    assert "real_human_validation_passed" not in combined_blockers
+    assert "paper" not in final_report.message.lower()
+
+
+def test_stubbed_openai_malformed_gate_commentary_fails_closed(tmp_path):
+    config, pilot_payload = build_pilot_packet(tmp_path, with_rival=True)
+    clients: list[FakeInternalReaderLabModelClient] = []
+
+    result = run_internal_reader_lab(
+        config,
+        client_name="openai",
+        packet_dir=pilot_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-internal-reader-model",
+        client_factory=stub_factory(
+            clients,
+            mode="malformed",
+            target_schema=AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA,
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 9
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "autonomous_candidate_gate_report" not in result.payload["artifact_ids"]
+    assert "internal_reader_lab_packet" not in result.payload["artifact_ids"]
+
+    with connect(config.db_path) as connection:
+        artifacts = list_artifacts(connection, result.payload["run_id"])
+
+    reader_lab_types = {
+        artifact.type
+        for artifact in artifacts
+        if artifact.type in INTERNAL_READER_LAB_ARTIFACT_TYPES
+    }
+    assert "autonomous_candidate_gate_report" not in reader_lab_types
+    assert "internal_reader_lab_packet" not in reader_lab_types
 
 
 def test_stubbed_openai_invalid_output_rejects_without_parsed_artifact(tmp_path):

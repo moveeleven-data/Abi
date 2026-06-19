@@ -93,6 +93,26 @@ def record_model_call(connection: sqlite3.Connection, record: ModelCallRecord) -
     return record
 
 
+def link_model_call_parsed_artifact(
+    connection: sqlite3.Connection,
+    *,
+    model_call_id: str,
+    parsed_output_artifact_id: str,
+) -> ModelCallRecord:
+    connection.execute(
+        """
+        UPDATE model_calls
+        SET parsed_output_artifact_id = ?
+        WHERE id = ?
+        """,
+        (parsed_output_artifact_id, model_call_id),
+    )
+    record = get_model_call(connection, model_call_id)
+    if record is None:
+        raise ValueError(f"model call not found: {model_call_id}")
+    return record
+
+
 def get_model_call(connection: sqlite3.Connection, model_call_id: str) -> ModelCallRecord | None:
     row = connection.execute(
         """
