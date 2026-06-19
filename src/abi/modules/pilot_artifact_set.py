@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 
@@ -16,6 +18,14 @@ from abi.controller.state import (
 from abi.db import connect
 from abi.hashing import sha256_file, sha256_text
 from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
+from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
+from abi.model_schemas import (
+    PILOT_ABI_CANDIDATE_SCHEMA,
+    PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
+    PILOT_RAW_MODEL_BASELINE_SCHEMA,
+    WorkerRole,
+    WorkerSchema,
+)
 from abi.packets import PacketWriter, create_packet_dir
 
 
@@ -28,6 +38,7 @@ PILOT_ARTIFACT_SET_CLIENTS = (
 )
 PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT = 36
 PILOT_ARTIFACT_SET_REQUIRED_MODEL_CALLS = 0
+PILOT_ARTIFACT_SET_OPENAI_MODEL_CALLS = 3
 PILOT_ARTIFACT_SET_FAKE_MODEL = "fake-pilot-artifact-set-v1"
 PILOT_ARTIFACT_SET_ARTIFACT_TYPES = (
     "pilot_source_manifest",
@@ -48,6 +59,38 @@ PILOT_ARTIFACT_SET_ARTIFACT_TYPES = (
 class PilotArtifactSetResult:
     exit_code: int
     payload: dict[str, object]
+    model_results: tuple[ModelDriverResult, ...] = ()
+
+
+@dataclass(frozen=True)
+class PilotModelWorkerSpec:
+    schema: WorkerSchema
+    worker_role: WorkerRole
+    prompt_contract_id: str
+
+    @property
+    def artifact_type(self) -> str:
+        return self.schema.artifact_type
+
+
+PILOT_PROMPT_CONTRACT_PREFIX = "phase16.pilot_artifact_set"
+PILOT_MODEL_WORKERS = (
+    PilotModelWorkerSpec(
+        schema=PILOT_ABI_CANDIDATE_SCHEMA,
+        worker_role=WorkerRole.PILOT_ABI_CANDIDATE_BUILDER,
+        prompt_contract_id=f"{PILOT_PROMPT_CONTRACT_PREFIX}.abi_candidate",
+    ),
+    PilotModelWorkerSpec(
+        schema=PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
+        worker_role=WorkerRole.PILOT_DIRECT_PROMPT_BASELINE_BUILDER,
+        prompt_contract_id=f"{PILOT_PROMPT_CONTRACT_PREFIX}.direct_prompt_baseline",
+    ),
+    PilotModelWorkerSpec(
+        schema=PILOT_RAW_MODEL_BASELINE_SCHEMA,
+        worker_role=WorkerRole.PILOT_RAW_MODEL_BASELINE_BUILDER,
+        prompt_contract_id=f"{PILOT_PROMPT_CONTRACT_PREFIX}.raw_model_baseline",
+    ),
+)
 
 
 def run_pilot_artifact_set(
@@ -59,6 +102,7 @@ def run_pilot_artifact_set(
     max_model_calls: int = PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT,
     api_key: str | None = None,
     model: str | None = None,
+    client_factory: Callable[[str], ModelClient] | None = None,
 ) -> PilotArtifactSetResult:
     if client_name not in PILOT_ARTIFACT_SET_CLIENTS:
         return _refusal(
@@ -101,6 +145,21 @@ def run_pilot_artifact_set(
             message=f"Pilot artifact-set refused; {OPENAI_API_KEY_ENV} is not set.",
         )
 
+    if (
+        client_name == PILOT_ARTIFACT_SET_CLIENT_OPENAI
+        and max_model_calls < PILOT_ARTIFACT_SET_OPENAI_MODEL_CALLS
+    ):
+        return _refusal(
+            client_name=client_name,
+            model=configured_model,
+            source_dir=source_dir,
+            message=(
+                "Pilot artifact-set refused; max-model-calls "
+                f"{max_model_calls} is below required OpenAI worker budget "
+                f"{PILOT_ARTIFACT_SET_OPENAI_MODEL_CALLS}."
+            ),
+        )
+
     source_root = _resolve_source_dir(config, source_dir)
     source_scan = _scan_source_dir(config, source_root)
     if isinstance(source_scan, PilotArtifactSetResult):
@@ -113,6 +172,10 @@ def run_pilot_artifact_set(
         if client_name == PILOT_ARTIFACT_SET_CLIENT_OPENAI
         else PILOT_ARTIFACT_SET_FAKE_MODEL
     )
+    model_client = None
+    if client_name == PILOT_ARTIFACT_SET_CLIENT_OPENAI:
+        factory = client_factory or _default_openai_client_factory
+        model_client = factory(configured_model)
 
     return _write_pilot_packet(
         config=config,
@@ -124,6 +187,7 @@ def run_pilot_artifact_set(
         max_model_calls=max_model_calls,
         fixture_only=client_name == PILOT_ARTIFACT_SET_CLIENT_FAKE,
         source_dir=source_root,
+        model_client=model_client,
     )
 
 
@@ -138,9 +202,16 @@ def _write_pilot_packet(
     max_model_calls: int,
     fixture_only: bool,
     source_dir: Path,
+    model_client: ModelClient | None,
 ) -> PilotArtifactSetResult:
     artifacts: dict[str, ArtifactRecord] = {}
     payloads: dict[str, dict[str, object]] = {}
+    model_results: list[ModelDriverResult] = []
+    planned_model_calls = (
+        len(PILOT_MODEL_WORKERS)
+        if client_name == PILOT_ARTIFACT_SET_CLIENT_OPENAI
+        else 0
+    )
 
     with connect(config.db_path) as connection:
         set_active_phase(connection, run_id, PHASE16_FIRST_REAL_CANDIDATE_SET_ACTIVE_PHASE)
@@ -169,6 +240,7 @@ def _write_pilot_packet(
             client_name=client_name,
             model=model,
             max_model_calls=max_model_calls,
+            model_calls_planned=planned_model_calls,
             fixture_only=fixture_only,
             source_manifest_artifact_id=artifacts["pilot_source_manifest"].id,
         )
@@ -178,47 +250,89 @@ def _write_pilot_packet(
             parent_ids=[artifacts["pilot_source_manifest"].id],
         )
 
-        payloads["pilot_abi_candidate_ref"] = _build_candidate_payload(
-            source_files=source_files,
-            client_name=client_name,
-            fixture_only=fixture_only,
-        )
-        artifacts["pilot_abi_candidate_ref"] = writer.write_artifact(
-            "pilot_abi_candidate_ref",
-            payloads["pilot_abi_candidate_ref"],
-            parent_ids=[
-                artifacts["pilot_source_manifest"].id,
-                artifacts["pilot_generation_plan"].id,
-            ],
-        )
+        if client_name == PILOT_ARTIFACT_SET_CLIENT_OPENAI:
+            connection.commit()
+            if model_client is None:
+                return _refusal(
+                    client_name=client_name,
+                    model=model,
+                    source_dir=source_dir,
+                    message="Pilot artifact-set refused; OpenAI model client is unavailable.",
+                )
+            model_results.extend(
+                _run_pilot_model_calls(
+                    config=config,
+                    run_id=run_id,
+                    packet_dir=packet_dir,
+                    source_files=source_files,
+                    source_manifest_artifact_id=artifacts["pilot_source_manifest"].id,
+                    generation_plan_artifact_id=artifacts["pilot_generation_plan"].id,
+                    model_client=model_client,
+                    max_model_calls=max_model_calls,
+                )
+            )
+            for result in model_results:
+                if (
+                    not result.accepted
+                    or result.parsed_artifact is None
+                    or result.parsed_payload is None
+                ):
+                    return _failure_result(
+                        client_name=client_name,
+                        model=model,
+                        run_id=run_id,
+                        packet_dir=str(packet_dir),
+                        source_dir=source_dir,
+                        artifacts=artifacts,
+                        payloads=payloads,
+                        model_results=model_results,
+                        max_model_calls=max_model_calls,
+                        message="Pilot artifact-set stopped by model-call failure.",
+                    )
+                artifacts[result.parsed_artifact.type] = result.parsed_artifact
+                payloads[result.parsed_artifact.type] = result.parsed_payload
+        else:
+            payloads["pilot_abi_candidate_ref"] = _build_candidate_payload(
+                source_files=source_files,
+                client_name=client_name,
+                fixture_only=fixture_only,
+            )
+            artifacts["pilot_abi_candidate_ref"] = writer.write_artifact(
+                "pilot_abi_candidate_ref",
+                payloads["pilot_abi_candidate_ref"],
+                parent_ids=[
+                    artifacts["pilot_source_manifest"].id,
+                    artifacts["pilot_generation_plan"].id,
+                ],
+            )
 
-        payloads["pilot_direct_prompt_baseline"] = _build_direct_baseline_payload(
-            source_files=source_files,
-            fixture_only=fixture_only,
-        )
-        artifacts["pilot_direct_prompt_baseline"] = writer.write_artifact(
-            "pilot_direct_prompt_baseline",
-            payloads["pilot_direct_prompt_baseline"],
-            parent_ids=[
-                artifacts["pilot_source_manifest"].id,
-                artifacts["pilot_generation_plan"].id,
-            ],
-        )
+            payloads["pilot_direct_prompt_baseline"] = _build_direct_baseline_payload(
+                source_files=source_files,
+                fixture_only=fixture_only,
+            )
+            artifacts["pilot_direct_prompt_baseline"] = writer.write_artifact(
+                "pilot_direct_prompt_baseline",
+                payloads["pilot_direct_prompt_baseline"],
+                parent_ids=[
+                    artifacts["pilot_source_manifest"].id,
+                    artifacts["pilot_generation_plan"].id,
+                ],
+            )
 
-        payloads["pilot_raw_model_baseline"] = _build_raw_baseline_payload(
-            source_files=source_files,
-            client_name=client_name,
-            model=model,
-            fixture_only=fixture_only,
-        )
-        artifacts["pilot_raw_model_baseline"] = writer.write_artifact(
-            "pilot_raw_model_baseline",
-            payloads["pilot_raw_model_baseline"],
-            parent_ids=[
-                artifacts["pilot_source_manifest"].id,
-                artifacts["pilot_generation_plan"].id,
-            ],
-        )
+            payloads["pilot_raw_model_baseline"] = _build_raw_baseline_payload(
+                source_files=source_files,
+                client_name=client_name,
+                model=model,
+                fixture_only=fixture_only,
+            )
+            artifacts["pilot_raw_model_baseline"] = writer.write_artifact(
+                "pilot_raw_model_baseline",
+                payloads["pilot_raw_model_baseline"],
+                parent_ids=[
+                    artifacts["pilot_source_manifest"].id,
+                    artifacts["pilot_generation_plan"].id,
+                ],
+            )
 
         payloads["pilot_strongest_rival_slot"] = _build_strongest_rival_slot_payload()
         artifacts["pilot_strongest_rival_slot"] = writer.write_artifact(
@@ -287,6 +401,7 @@ def _write_pilot_packet(
             max_model_calls=max_model_calls,
             artifacts=artifacts,
             payloads=payloads,
+            model_results=model_results,
         )
         artifacts["pilot_packet"] = writer.write_artifact(
             "pilot_packet",
@@ -308,10 +423,12 @@ def _write_pilot_packet(
             artifacts=artifacts,
             payloads=payloads,
             max_model_calls=max_model_calls,
+            model_results=model_results,
             refused=False,
             accepted=True,
             message=None,
         ),
+        model_results=tuple(model_results),
     )
 
 
@@ -352,6 +469,46 @@ def _scan_source_dir(
     ]
 
 
+def _run_pilot_model_calls(
+    *,
+    config: AbiConfig,
+    run_id: str,
+    packet_dir: Path,
+    source_files: list[dict[str, object]],
+    source_manifest_artifact_id: str,
+    generation_plan_artifact_id: str,
+    model_client: ModelClient,
+    max_model_calls: int,
+) -> list[ModelDriverResult]:
+    results: list[ModelDriverResult] = []
+    driver = ModelDriver(config=config, client=model_client)
+    parent_ids = [source_manifest_artifact_id, generation_plan_artifact_id]
+    input_text = _model_input_text(source_files)
+
+    for index, worker in enumerate(PILOT_MODEL_WORKERS, start=1):
+        if index > max_model_calls:
+            break
+        result = driver.run(
+            WorkerRequest(
+                run_id=run_id,
+                worker_role=worker.worker_role,
+                prompt_contract_id=worker.prompt_contract_id,
+                schema=worker.schema,
+                input_text=input_text,
+                input_artifact_ids=parent_ids,
+                input_packet_path=str(packet_dir),
+                lineage_id=PILOT_ARTIFACT_SET_LINEAGE_ID,
+                parent_ids=parent_ids,
+                fixture_only=False,
+                output_dir=str(packet_dir),
+            )
+        )
+        results.append(result)
+        if not result.accepted:
+            break
+    return results
+
+
 def _build_source_manifest_payload(
     *,
     config: AbiConfig,
@@ -377,6 +534,7 @@ def _build_generation_plan_payload(
     client_name: str,
     model: str,
     max_model_calls: int,
+    model_calls_planned: int,
     fixture_only: bool,
     source_manifest_artifact_id: str,
 ) -> dict[str, object]:
@@ -386,7 +544,8 @@ def _build_generation_plan_payload(
         "model": model,
         "source_manifest_artifact_id": source_manifest_artifact_id,
         "max_model_calls": max_model_calls,
-        "model_calls_used": 0,
+        "model_calls_planned": model_calls_planned,
+        "model_calls_used": model_calls_planned,
         "automatic_openai_call": False,
         "fixture_or_fake_mode": fixture_only,
         "artifact_set_arms": [
@@ -656,6 +815,7 @@ def _build_packet_summary_payload(
     max_model_calls: int,
     artifacts: dict[str, ArtifactRecord],
     payloads: dict[str, dict[str, object]],
+    model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
     candidate = payloads["pilot_abi_candidate_ref"]
     return {
@@ -665,7 +825,8 @@ def _build_packet_summary_payload(
         "client": client_name,
         "model": model,
         "max_model_calls": max_model_calls,
-        "model_calls_used": 0,
+        "model_calls_used": len(model_results),
+        "model_call_ids": [result.model_call.id for result in model_results],
         "artifact_types": list(PILOT_ARTIFACT_SET_ARTIFACT_TYPES),
         "artifact_ids": {artifact_type: artifact.id for artifact_type, artifact in artifacts.items()},
         "source_manifest_artifact_id": artifacts["pilot_source_manifest"].id,
@@ -700,6 +861,7 @@ def _summary_payload(
     artifacts: dict[str, ArtifactRecord],
     payloads: dict[str, dict[str, object]],
     max_model_calls: int,
+    model_results: list[ModelDriverResult],
     refused: bool,
     accepted: bool,
     message: str | None,
@@ -724,9 +886,11 @@ def _summary_payload(
             "pilot_artifacts": len(payloads),
             "required_pilot_artifacts": len(PILOT_ARTIFACT_SET_ARTIFACT_TYPES),
             "source_files": payloads.get("pilot_source_manifest", {}).get("source_count", 0),
-            "model_calls": 0,
+            "model_calls": len(model_results),
             "max_model_calls": max_model_calls,
         },
+        "model_calls": [result.model_call_to_dict() for result in model_results],
+        "model_call_ids": [result.model_call.id for result in model_results],
         "candidate_flags": _candidate_flags(payloads["pilot_abi_candidate_ref"])
         if "pilot_abi_candidate_ref" in payloads
         else {},
@@ -742,6 +906,39 @@ def _summary_payload(
         "readiness": payloads.get("pilot_readiness_report"),
         "message": message,
     }
+
+
+def _failure_result(
+    *,
+    client_name: str,
+    model: str,
+    run_id: str,
+    packet_dir: str,
+    source_dir: Path | str,
+    artifacts: dict[str, ArtifactRecord],
+    payloads: dict[str, dict[str, object]],
+    model_results: list[ModelDriverResult],
+    max_model_calls: int,
+    message: str,
+) -> PilotArtifactSetResult:
+    return PilotArtifactSetResult(
+        exit_code=1,
+        payload=_summary_payload(
+            client_name=client_name,
+            model=model,
+            run_id=run_id,
+            packet_dir=packet_dir,
+            source_dir=source_dir,
+            artifacts=artifacts,
+            payloads=payloads,
+            max_model_calls=max_model_calls,
+            model_results=model_results,
+            refused=False,
+            accepted=False,
+            message=message,
+        ),
+        model_results=tuple(model_results),
+    )
 
 
 def _refusal(
@@ -766,6 +963,27 @@ def _refusal(
             "model_calls": [],
             "message": message,
         },
+    )
+
+
+def _model_input_text(source_files: list[dict[str, object]]) -> str:
+    return json.dumps(
+        {
+            "source_files": source_files,
+            "candidate_rules": {
+                "non_final": True,
+                "candidate_only": True,
+                "not_human_validated": True,
+                "not_finalization_eligible": True,
+                "no_phase_shift_claim": True,
+            },
+            "baseline_rules": {
+                "not_real_validation": True,
+                "final_gates_satisfied": False,
+            },
+        },
+        indent=2,
+        sort_keys=True,
     )
 
 
@@ -812,3 +1030,9 @@ def _relative_display(path: Path, root: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _default_openai_client_factory(model: str) -> ModelClient:
+    from abi.openai_adapter import OpenAIResponsesClient
+
+    return OpenAIResponsesClient(model=model)

@@ -10,6 +10,12 @@ from abi.controller.policy import FINAL_ARTIFACT_REQUIRED_GATES, GATE_PROFILE_FI
 from abi.controller.state import get_latest_run
 from abi.db import connect
 from abi.hashing import sha256_file
+from abi.model_calls import MODEL_CALL_SUCCESS, list_model_calls
+from abi.model_schemas import (
+    PILOT_ABI_CANDIDATE_SCHEMA,
+    PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
+    PILOT_RAW_MODEL_BASELINE_SCHEMA,
+)
 from abi.modules.pilot_artifact_set import (
     PILOT_ARTIFACT_SET_ARTIFACT_TYPES,
     run_pilot_artifact_set,
@@ -52,6 +58,67 @@ def read_payload(path: str) -> dict[str, object]:
     return json.loads(Path(path).read_text(encoding="utf-8"))["payload"]
 
 
+class StubOpenAIPilotClient:
+    provider = "openai"
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+
+    def generate(self, request) -> str:
+        source_context = json.loads(request.input_text)
+        source_files = source_context["source_files"]
+        hashes = [item["sha256"] for item in source_files]
+        if request.schema == PILOT_ABI_CANDIDATE_SCHEMA:
+            return json.dumps(
+                {
+                    "candidate_id": "stub_openai_candidate",
+                    "text": "Stub OpenAI candidate text for a blinded pilot artifact set.",
+                    "source_file_count": len(source_files),
+                    "source_set_hashes": hashes,
+                    "non_final": True,
+                    "candidate_only": True,
+                    "not_human_validated": True,
+                    "not_finalization_eligible": True,
+                    "finalization_eligible": False,
+                    "human_validated": False,
+                    "human_validation_claim": False,
+                    "phase_shift_claim": False,
+                    "no_phase_shift_claim": True,
+                    "risks": ["stub output is not validation"],
+                },
+                sort_keys=True,
+            )
+        if request.schema == PILOT_DIRECT_PROMPT_BASELINE_SCHEMA:
+            return json.dumps(
+                {
+                    "baseline_id": "stub_direct_prompt_baseline",
+                    "baseline_type": "direct_prompt",
+                    "text": "Stub OpenAI direct-prompt baseline text.",
+                    "fixture_or_fake": False,
+                    "not_real_validation": True,
+                    "generation_rule": "stubbed OpenAI test client",
+                    "final_gate_satisfied": False,
+                    "risks": ["stub output is not validation"],
+                },
+                sort_keys=True,
+            )
+        if request.schema == PILOT_RAW_MODEL_BASELINE_SCHEMA:
+            return json.dumps(
+                {
+                    "baseline_id": "stub_raw_model_baseline",
+                    "baseline_type": "raw_model",
+                    "text": "Stub OpenAI raw-model baseline text.",
+                    "fixture_or_fake": False,
+                    "not_real_validation": True,
+                    "raw_model_baseline_gate_satisfied": False,
+                    "model_calls_used": 1,
+                    "risks": ["stub output is not validation"],
+                },
+                sort_keys=True,
+            )
+        raise AssertionError(f"unexpected schema: {request.schema}")
+
+
 def test_fake_pilot_artifact_set_creates_source_frozen_packet(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     source_dir = write_sources(tmp_path)
@@ -69,6 +136,7 @@ def test_fake_pilot_artifact_set_creates_source_frozen_packet(tmp_path, monkeypa
     assert set(result.payload["artifact_ids"]) == set(PILOT_ARTIFACT_SET_ARTIFACT_TYPES)
     assert result.payload["counts"]["pilot_artifacts"] == 11
     assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["model_calls"] == []
     assert Path(result.payload["packet_dir"]) == (
         tmp_path / "runs" / result.payload["run_id"] / "pilot_artifact_set" / "packet_0001"
     )
@@ -207,6 +275,81 @@ def test_openai_pilot_refuses_without_key_before_run(tmp_path, monkeypatch):
     assert result.payload["refused"] is True
     assert "OPENAI_API_KEY" in result.payload["message"]
     assert not config.db_path.exists()
+
+
+def test_stubbed_openai_pilot_creates_model_records_and_model_artifacts(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    monkeypatch.setenv("ABI_OPENAI_MODEL", "abi-test-model")
+    source_dir = write_sources(tmp_path)
+    config = config_for(tmp_path)
+
+    result = run_pilot_artifact_set(
+        config,
+        client_name="openai",
+        source_dir=source_dir,
+        allow_live_model=True,
+        client_factory=lambda model: StubOpenAIPilotClient(model),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["client"] == "openai"
+    assert result.payload["model"] == "abi-test-model"
+    assert result.payload["counts"]["model_calls"] == 3
+    assert len(result.payload["model_calls"]) == 3
+    assert result.payload["readiness"]["baseline_status"] == {
+        "direct_prompt_fixture_or_fake": False,
+        "raw_model_fixture_or_fake": False,
+    }
+    assert result.payload["readiness"]["strongest_rival_gate_satisfied"] is False
+
+    with connect(config.db_path) as connection:
+        calls = list_model_calls(connection, run_id=result.payload["run_id"])
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_FINAL_ARTIFACT,
+        )
+
+    assert len(calls) == 3
+    assert {call.status for call in calls} == {MODEL_CALL_SUCCESS}
+    assert {call.provider for call in calls} == {"openai"}
+    assert {call.model for call in calls} == {"abi-test-model"}
+    assert {
+        call.parsed_output_artifact_id for call in calls
+    } == {
+        result.payload["artifact_ids"]["pilot_abi_candidate_ref"],
+        result.payload["artifact_ids"]["pilot_direct_prompt_baseline"],
+        result.payload["artifact_ids"]["pilot_raw_model_baseline"],
+    }
+
+    for artifact_type in (
+        "pilot_abi_candidate_ref",
+        "pilot_direct_prompt_baseline",
+        "pilot_raw_model_baseline",
+    ):
+        envelope = json.loads(
+            Path(result.payload["artifact_paths"][artifact_type]).read_text(encoding="utf-8")
+        )
+        assert envelope["artifact_type"] == artifact_type
+        assert envelope["fixture_only"] is False
+        assert envelope["model_call_id"] is not None
+
+    candidate = read_payload(result.payload["artifact_paths"]["pilot_abi_candidate_ref"])
+    assert candidate["non_final"] is True
+    assert candidate["candidate_only"] is True
+    assert candidate["not_human_validated"] is True
+    assert candidate["not_finalization_eligible"] is True
+    assert candidate["finalization_eligible"] is False
+    assert candidate["phase_shift_claim"] is False
+
+    strongest = read_payload(result.payload["artifact_paths"]["pilot_strongest_rival_slot"])
+    assert strongest["strongest_rival_gate_satisfied"] is False
+    assert final_report.refused is True
+    assert "strongest_rival_comparison_passed" in final_report.missing_gates
 
 
 def test_pilot_cli_fake_and_openai_guard(tmp_path, capsys, monkeypatch):

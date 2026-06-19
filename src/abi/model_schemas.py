@@ -35,6 +35,9 @@ class WorkerRole(str, Enum):
     REREAD_GATE_EVALUATOR = "reread_gate_evaluator"
     EVALUATION_BASELINE_SUMMARIZER = "evaluation_baseline_summarizer"
     EVALUATION_COMPARISON_REPORTER = "evaluation_comparison_reporter"
+    PILOT_ABI_CANDIDATE_BUILDER = "pilot_abi_candidate_builder"
+    PILOT_DIRECT_PROMPT_BASELINE_BUILDER = "pilot_direct_prompt_baseline_builder"
+    PILOT_RAW_MODEL_BASELINE_BUILDER = "pilot_raw_model_baseline_builder"
 
 
 @dataclass(frozen=True)
@@ -207,10 +210,35 @@ EVALUATION_MODEL_SCHEMAS = (
     EVALUATION_BASELINE_COMPARISON_REPORT_SCHEMA,
 )
 
+PILOT_ABI_CANDIDATE_SCHEMA = WorkerSchema(
+    name="PilotAbiCandidateModelOutput",
+    version="1",
+    artifact_type="pilot_abi_candidate_ref",
+)
+
+PILOT_DIRECT_PROMPT_BASELINE_SCHEMA = WorkerSchema(
+    name="PilotDirectPromptBaselineModelOutput",
+    version="1",
+    artifact_type="pilot_direct_prompt_baseline",
+)
+
+PILOT_RAW_MODEL_BASELINE_SCHEMA = WorkerSchema(
+    name="PilotRawModelBaselineModelOutput",
+    version="1",
+    artifact_type="pilot_raw_model_baseline",
+)
+
+PILOT_MODEL_SCHEMAS = (
+    PILOT_ABI_CANDIDATE_SCHEMA,
+    PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
+    PILOT_RAW_MODEL_BASELINE_SCHEMA,
+)
+
 LIVE_MODEL_WORKER_SCHEMAS = (
     LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
     + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
     + EVALUATION_MODEL_SCHEMAS
+    + PILOT_MODEL_SCHEMAS
 )
 
 
@@ -709,6 +737,93 @@ def evaluation_baseline_comparison_report_json_schema() -> dict[str, Any]:
     )
 
 
+def pilot_abi_candidate_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "candidate_id": {"type": "string"},
+            "text": {"type": "string"},
+            "source_file_count": {"type": "integer"},
+            "source_set_hashes": _string_array_schema(),
+            "non_final": {"type": "boolean"},
+            "candidate_only": {"type": "boolean"},
+            "not_human_validated": {"type": "boolean"},
+            "not_finalization_eligible": {"type": "boolean"},
+            "finalization_eligible": {"type": "boolean"},
+            "human_validated": {"type": "boolean"},
+            "human_validation_claim": {"type": "boolean"},
+            "phase_shift_claim": {"type": "boolean"},
+            "no_phase_shift_claim": {"type": "boolean"},
+            "risks": _string_array_schema(),
+        },
+        [
+            "candidate_id",
+            "text",
+            "source_file_count",
+            "source_set_hashes",
+            "non_final",
+            "candidate_only",
+            "not_human_validated",
+            "not_finalization_eligible",
+            "finalization_eligible",
+            "human_validated",
+            "human_validation_claim",
+            "phase_shift_claim",
+            "no_phase_shift_claim",
+            "risks",
+        ],
+    )
+
+
+def pilot_direct_prompt_baseline_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "baseline_id": {"type": "string"},
+            "baseline_type": {"type": "string"},
+            "text": {"type": "string"},
+            "fixture_or_fake": {"type": "boolean"},
+            "not_real_validation": {"type": "boolean"},
+            "generation_rule": {"type": "string"},
+            "final_gate_satisfied": {"type": "boolean"},
+            "risks": _string_array_schema(),
+        },
+        [
+            "baseline_id",
+            "baseline_type",
+            "text",
+            "fixture_or_fake",
+            "not_real_validation",
+            "generation_rule",
+            "final_gate_satisfied",
+            "risks",
+        ],
+    )
+
+
+def pilot_raw_model_baseline_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "baseline_id": {"type": "string"},
+            "baseline_type": {"type": "string"},
+            "text": {"type": "string"},
+            "fixture_or_fake": {"type": "boolean"},
+            "not_real_validation": {"type": "boolean"},
+            "raw_model_baseline_gate_satisfied": {"type": "boolean"},
+            "model_calls_used": {"type": "integer"},
+            "risks": _string_array_schema(),
+        },
+        [
+            "baseline_id",
+            "baseline_type",
+            "text",
+            "fixture_or_fake",
+            "not_real_validation",
+            "raw_model_baseline_gate_satisfied",
+            "model_calls_used",
+            "risks",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -754,6 +869,12 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return evaluation_best_of_n_baseline_json_schema()
     if schema == EVALUATION_BASELINE_COMPARISON_REPORT_SCHEMA:
         return evaluation_baseline_comparison_report_json_schema()
+    if schema == PILOT_ABI_CANDIDATE_SCHEMA:
+        return pilot_abi_candidate_json_schema()
+    if schema == PILOT_DIRECT_PROMPT_BASELINE_SCHEMA:
+        return pilot_direct_prompt_baseline_json_schema()
+    if schema == PILOT_RAW_MODEL_BASELINE_SCHEMA:
+        return pilot_raw_model_baseline_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -809,6 +930,12 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_evaluation_best_of_n_baseline(payload)
     if schema == EVALUATION_BASELINE_COMPARISON_REPORT_SCHEMA:
         return _validate_evaluation_baseline_comparison_report(payload)
+    if schema == PILOT_ABI_CANDIDATE_SCHEMA:
+        return _validate_pilot_abi_candidate(payload)
+    if schema == PILOT_DIRECT_PROMPT_BASELINE_SCHEMA:
+        return _validate_pilot_direct_prompt_baseline(payload)
+    if schema == PILOT_RAW_MODEL_BASELINE_SCHEMA:
+        return _validate_pilot_raw_model_baseline(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -1255,6 +1382,109 @@ def _validate_evaluation_baseline_comparison_report(payload: dict[str, Any]) -> 
         "observed_reader_state_delta": payload["observed_reader_state_delta"],
         "comparison_summary": payload["comparison_summary"],
         "claims_not_made": payload["claims_not_made"],
+        "risks": payload["risks"],
+    }
+
+
+def _validate_pilot_abi_candidate(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("candidate_id", "text"):
+        _require_type(payload, key, str)
+    _require_integer(payload, "source_file_count")
+    _require_string_list(payload, "source_set_hashes")
+    _require_string_list(payload, "risks")
+    for key in (
+        "non_final",
+        "candidate_only",
+        "not_human_validated",
+        "not_finalization_eligible",
+        "finalization_eligible",
+        "human_validated",
+        "human_validation_claim",
+        "phase_shift_claim",
+        "no_phase_shift_claim",
+    ):
+        _require_type(payload, key, bool)
+    if not payload["non_final"]:
+        raise ModelValidationError("pilot candidate must be non_final")
+    if not payload["candidate_only"]:
+        raise ModelValidationError("pilot candidate must be candidate_only")
+    if not payload["not_human_validated"]:
+        raise ModelValidationError("pilot candidate must be not_human_validated")
+    if not payload["not_finalization_eligible"]:
+        raise ModelValidationError("pilot candidate must be not_finalization_eligible")
+    if payload["finalization_eligible"]:
+        raise ModelValidationError("pilot candidate must not be finalization_eligible")
+    if payload["human_validated"] or payload["human_validation_claim"]:
+        raise ModelValidationError("pilot candidate must not claim human validation")
+    if payload["phase_shift_claim"] or not payload["no_phase_shift_claim"]:
+        raise ModelValidationError("pilot candidate must not make a phase-shift claim")
+    return {
+        "candidate_id": payload["candidate_id"],
+        "text": payload["text"],
+        "source_file_count": int(payload["source_file_count"]),
+        "source_set_hashes": payload["source_set_hashes"],
+        "non_final": payload["non_final"],
+        "candidate_only": payload["candidate_only"],
+        "not_human_validated": payload["not_human_validated"],
+        "not_finalization_eligible": payload["not_finalization_eligible"],
+        "finalization_eligible": payload["finalization_eligible"],
+        "human_validated": payload["human_validated"],
+        "human_validation_claim": payload["human_validation_claim"],
+        "phase_shift_claim": payload["phase_shift_claim"],
+        "no_phase_shift_claim": payload["no_phase_shift_claim"],
+        "risks": payload["risks"],
+    }
+
+
+def _validate_pilot_direct_prompt_baseline(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("baseline_id", "baseline_type", "text", "generation_rule"):
+        _require_type(payload, key, str)
+    for key in ("fixture_or_fake", "not_real_validation", "final_gate_satisfied"):
+        _require_type(payload, key, bool)
+    _require_string_list(payload, "risks")
+    if payload["baseline_type"] != "direct_prompt":
+        raise ModelValidationError("pilot direct baseline must have baseline_type direct_prompt")
+    if not payload["not_real_validation"]:
+        raise ModelValidationError("pilot direct baseline must remain not_real_validation")
+    if payload["final_gate_satisfied"]:
+        raise ModelValidationError("pilot direct baseline must not satisfy a final gate")
+    return {
+        "baseline_id": payload["baseline_id"],
+        "baseline_type": payload["baseline_type"],
+        "text": payload["text"],
+        "fixture_or_fake": payload["fixture_or_fake"],
+        "not_real_validation": payload["not_real_validation"],
+        "generation_rule": payload["generation_rule"],
+        "final_gate_satisfied": payload["final_gate_satisfied"],
+        "risks": payload["risks"],
+    }
+
+
+def _validate_pilot_raw_model_baseline(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("baseline_id", "baseline_type", "text"):
+        _require_type(payload, key, str)
+    for key in (
+        "fixture_or_fake",
+        "not_real_validation",
+        "raw_model_baseline_gate_satisfied",
+    ):
+        _require_type(payload, key, bool)
+    _require_integer(payload, "model_calls_used")
+    _require_string_list(payload, "risks")
+    if payload["baseline_type"] != "raw_model":
+        raise ModelValidationError("pilot raw baseline must have baseline_type raw_model")
+    if not payload["not_real_validation"]:
+        raise ModelValidationError("pilot raw baseline must remain not_real_validation")
+    if payload["raw_model_baseline_gate_satisfied"]:
+        raise ModelValidationError("pilot raw baseline must not satisfy the raw-model gate")
+    return {
+        "baseline_id": payload["baseline_id"],
+        "baseline_type": payload["baseline_type"],
+        "text": payload["text"],
+        "fixture_or_fake": payload["fixture_or_fake"],
+        "not_real_validation": payload["not_real_validation"],
+        "raw_model_baseline_gate_satisfied": payload["raw_model_baseline_gate_satisfied"],
+        "model_calls_used": int(payload["model_calls_used"]),
         "risks": payload["risks"],
     }
 

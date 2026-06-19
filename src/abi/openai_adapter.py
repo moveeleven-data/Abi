@@ -12,6 +12,7 @@ from abi.model_schemas import (
     ABI_EAR_FIELD_MODEL_SCHEMA,
     ABI_EAR_GERM_ANALYSIS_SCHEMA,
     LIVE_MODEL_WORKER_SCHEMAS,
+    PILOT_MODEL_SCHEMAS,
     json_schema_for_worker_schema,
 )
 
@@ -83,6 +84,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_germ_analysis_prompt
     if schema == ABI_EAR_FIELD_MODEL_SCHEMA:
         return _build_field_model_prompt
+    if schema in PILOT_MODEL_SCHEMAS:
+        return _build_pilot_artifact_set_prompt
     return _build_live_packet_prompt
 
 
@@ -109,6 +112,16 @@ def _build_live_packet_prompt(germ_text: str) -> str:
         "Stay within the supplied schema and use fixture-level benchmark reasoning only. "
         "Germ sentence:\n"
         f"{germ_text}"
+    )
+
+
+def _build_pilot_artifact_set_prompt(input_text: str) -> str:
+    return (
+        "Produce the requested pilot artifact-set component as strict structured JSON. "
+        "The output must remain non-final, must not claim human validation, must not "
+        "claim phase shift, and must not satisfy final-artifact gates. Source manifest "
+        "and task context:\n"
+        f"{input_text}"
     )
 
 
