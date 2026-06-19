@@ -27,7 +27,13 @@ from abi.model_schemas import (
 )
 from abi.modules.autonomous_revision import (
     AUTONOMOUS_REVISION_ARTIFACT_TYPES,
+    AUTONOMOUS_REVISION_ALLOWED_ABLATION_PROBE_IDS,
+    AUTONOMOUS_REVISION_ALLOWED_ABLATION_VARIANT_IDS,
+    AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE,
     FakeAutonomousRevisionModelClient,
+    RevisionIntegrityError,
+    _load_revision_subject,
+    _validate_revision_work_order_payload,
     run_autonomous_revision,
 )
 from abi.modules.internal_reader_lab import FakeInternalReaderLabModelClient, run_internal_reader_lab
@@ -68,6 +74,25 @@ def write_sources(root: Path) -> Path:
 
 def read_payload(path: str) -> dict[str, object]:
     return json.loads(Path(path).read_text(encoding="utf-8"))["payload"]
+
+
+def candidate_text_from_reader_lab_packet(packet_dir: str | Path) -> str:
+    packet = read_payload(str(Path(packet_dir) / "internal_reader_lab_packet.json"))
+    source_packet_dir = Path(str(packet["source_packet_dir"]))
+    bundle = read_payload(str(source_packet_dir / "pilot_blinded_reader_bundle.json"))
+    private_map = read_payload(str(source_packet_dir / "pilot_neutral_label_map_private.json"))[
+        "label_map"
+    ]
+    for item in bundle["reader_items"]:
+        label = item["label"]
+        if private_map[label]["source_class"] == "abi_candidate":
+            return str(item["text"])
+    raise AssertionError("Abi candidate text not found in source packet")
+
+
+def revision_subject_from_reader_lab_packet(config: AbiConfig, packet_dir: str | Path):
+    with connect(config.db_path) as connection:
+        return _load_revision_subject(connection, Path(packet_dir))
 
 
 def build_reader_lab_packet(
@@ -206,8 +231,8 @@ def valid_ablation_comparison_payload() -> dict[str, object]:
         "candidate_label": "Text A",
         "comparison_rows": [
             {
-                "row_id": "comparison_variant_01",
-                "executed_variant_id": "variant_01",
+                "row_id": "comparison_ablation_variant_001",
+                "executed_variant_id": "ablation_variant_001",
                 "planned_probe_id": None,
                 "operation": "remove_suspected_causal_handle",
                 "planned_only": False,
@@ -462,11 +487,13 @@ class PlannedOnlyAblationClient(FakeAutonomousRevisionModelClient):
         raw_output = super().generate(request)
         payload = json.loads(raw_output)
         if request.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
+            prompt = json.loads(request.input_text)
+            planned_probe_id = prompt["allowed_ablation_probe_ids"][0]
             payload["comparison_rows"].append(
                 {
-                    "row_id": "comparison_planned_probe_99",
+                    "row_id": f"comparison_{planned_probe_id}",
                     "executed_variant_id": None,
-                    "planned_probe_id": "planned_probe_99",
+                    "planned_probe_id": planned_probe_id,
                     "operation": "move_motif_earlier_later",
                     "planned_only": True,
                     "evidence_basis": "planned_ablation_probe",
@@ -546,6 +573,43 @@ def assert_strict_object_schema(schema: object, *, path: str) -> None:
             assert_strict_object_schema(value, path=f"{path}[{index}]")
 
 
+def assert_valid_work_order_payload(
+    *,
+    work_order: dict[str, object],
+    candidate_text: str,
+    expected_artifact_id: str,
+) -> None:
+    assert work_order["controller_owned"] is True
+    assert work_order["work_order_id"] == "revision_work_order_001"
+    assert work_order.get("work_order_artifact_id") in {expected_artifact_id, None}
+    assert work_order["source_candidate"]["text_sha256"]
+    assert work_order["original_candidate_text_sha256"] == work_order["source_candidate"][
+        "text_sha256"
+    ]
+    assert work_order["allowed_ablation_variant_ids"] == list(
+        AUTONOMOUS_REVISION_ALLOWED_ABLATION_VARIANT_IDS
+    )
+    assert work_order["allowed_ablation_probe_ids"] == list(
+        AUTONOMOUS_REVISION_ALLOWED_ABLATION_PROBE_IDS
+    )
+    assert set(work_order["allowed_provenance_tokens"]) == set(
+        AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS
+    )
+    for target in work_order["allowed_patch_targets"]:
+        assert target["patch_target_id"].startswith("target_")
+        assert "/" not in target["patch_target_id"]
+        assert " " not in target["patch_target_id"]
+        assert target["text_window"] in candidate_text
+    for span in work_order["patchable_spans"]:
+        assert span["patch_span_id"].startswith("span_")
+        assert "/" not in span["patch_span_id"]
+        assert " " not in span["patch_span_id"]
+        assert span["exact_text"] in candidate_text
+    for item in work_order["candidate_sentence_span_inventory"]:
+        assert item["candidate_span_id"].startswith("candidate_span_")
+        assert item["exact_text"] in candidate_text
+
+
 def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     config, lab_payload = build_reader_lab_packet(tmp_path)
@@ -564,8 +628,8 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
     assert result.payload["client"] == "fake"
     assert set(result.payload["artifact_ids"]) == set(AUTONOMOUS_REVISION_ARTIFACT_TYPES)
     assert result.payload["counts"] == {
-        "autonomous_revision_artifacts": 12,
-        "required_autonomous_revision_artifacts": 12,
+        "autonomous_revision_artifacts": 13,
+        "required_autonomous_revision_artifacts": 13,
         "model_calls": 0,
         "recorded_autonomous_gates": 5,
     }
@@ -582,7 +646,21 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
     assert selected["reader_lab_evidence_artifacts"]
     assert "forensic_grounding_report" in selected["reader_lab_evidence_artifacts"]
 
+    work_order = read_payload(
+        result.payload["artifact_paths"][AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
+    )
+    assert_valid_work_order_payload(
+        work_order=work_order,
+        candidate_text=candidate_text_from_reader_lab_packet(lab_payload["packet_dir"]),
+        expected_artifact_id=result.payload["artifact_ids"][
+            AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+        ],
+    )
+
     handle = read_payload(result.payload["artifact_paths"]["causal_handle_selection"])
+    assert handle["revision_work_order_artifact_id"] == result.payload["artifact_ids"][
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+    ]
     assert handle["bounded_target"] is True
     assert handle["target_count"] == 1
     assert handle["span_ref"]["source_class"] == "abi_candidate"
@@ -611,7 +689,11 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
     revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
     assert revised["text"]
     assert revised["assembled_by_controller"] is True
+    assert revised["work_order_artifact_id"] == result.payload["artifact_ids"][
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+    ]
     assert revised["source_patch_ids"] == ["patch_01"]
+    assert revised["source_patch_target_ids"]
     assert revised["bounded_recomposition"] is True
     assert revised["full_rewrite"] is False
     assert revised["non_final"] is True
@@ -623,7 +705,11 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
 
     diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
     assert diff["assembled_by_controller"] is True
+    assert diff["work_order_artifact_id"] == result.payload["artifact_ids"][
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+    ]
     assert diff["source_patch_ids"] == ["patch_01"]
+    assert diff["source_patch_target_ids"]
     assert diff["full_rewrite"] is False
     assert diff["bounded_change"] is True
     assert diff["operation"]["type"] == "insert_after"
@@ -697,6 +783,103 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
     assert "no_unresolved_internal_blockers" in combined_blockers
     assert "real_human_validation_passed" not in combined_blockers
     assert "paper" not in final_report.message.lower()
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (
+            lambda payload: payload["allowed_patch_targets"][0].update(
+                {"patch_target_id": "target_ending_return/bad"}
+            ),
+            "lowercase letters, digits, and underscores",
+        ),
+        (
+            lambda payload: payload["allowed_patch_targets"][0].update(
+                {"patch_target_id": "ending paragraph especially the return"}
+            ),
+            "must start with 'target_'",
+        ),
+        (
+            lambda payload: payload["patchable_spans"][0].update(
+                {"patch_span_id": "span_ending prose id"}
+            ),
+            "must use only lowercase letters, digits, and underscores",
+        ),
+        (
+            lambda payload: payload["patchable_spans"][0].update(
+                {"exact_text": "not present in the candidate"}
+            ),
+            "exact_text is not an exact candidate substring",
+        ),
+    ],
+)
+def test_revision_work_order_rejects_noncanonical_or_invalid_inventory(
+    tmp_path,
+    mutator,
+    message,
+):
+    config, lab_payload = build_reader_lab_packet(tmp_path)
+    result = run_autonomous_revision(
+        config,
+        client_name="fake",
+        reader_lab_packet=lab_payload["packet_dir"],
+    )
+    assert result.exit_code == 0
+    subject = revision_subject_from_reader_lab_packet(config, lab_payload["packet_dir"])
+    work_order = read_payload(
+        result.payload["artifact_paths"][AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
+    )
+    mutated = json.loads(json.dumps(work_order))
+    mutator(mutated)
+
+    with pytest.raises(RevisionIntegrityError, match=message):
+        _validate_revision_work_order_payload(subject, mutated)
+
+
+def test_invalid_work_order_construction_fails_before_downstream_model_calls(
+    tmp_path,
+    monkeypatch,
+):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    def _bad_inventory(subject, primary_region):
+        _ = subject, primary_region
+        return [
+            {
+                "patch_target_id": "target_bad/slash",
+                "target_region_label": "target_region:bad",
+                "target_region_description": "bad slash target",
+                "allowed_span_ref": "opening sentence",
+                "text_window": "The table is still there in the morning.",
+                "paragraph_index": 0,
+                "protected_outside_spans": ["all outside bad target"],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "abi.modules.autonomous_revision._controller_patch_target_inventory",
+        _bad_inventory,
+    )
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=revision_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "work-order validation failure" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "causal_handle_selection" not in result.payload["artifact_ids"]
+    assert AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE not in result.payload["artifact_ids"]
+    assert len(clients[0].requests) == 1
 
 
 def test_autonomous_revision_packet_directory_is_unique(tmp_path):
@@ -847,7 +1030,7 @@ def test_ablation_comparison_schema_distinguishes_executed_and_planned_rows():
 
     executed_row = parsed["comparison_rows"][0]
     planned_row = parsed["comparison_rows"][1]
-    assert executed_row["executed_variant_id"] == "variant_01"
+    assert executed_row["executed_variant_id"] == "ablation_variant_001"
     assert executed_row["planned_probe_id"] is None
     assert planned_row["planned_only"] is True
     assert planned_row["executed_variant_id"] is None
@@ -932,8 +1115,8 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert result.payload["model"] == "stub-autonomous-revision-model"
     assert set(result.payload["artifact_ids"]) == set(AUTONOMOUS_REVISION_ARTIFACT_TYPES)
     assert result.payload["counts"] == {
-        "autonomous_revision_artifacts": 12,
-        "required_autonomous_revision_artifacts": 12,
+        "autonomous_revision_artifacts": 13,
+        "required_autonomous_revision_artifacts": 13,
         "model_calls": 7,
         "recorded_autonomous_gates": 5,
     }
@@ -959,10 +1142,17 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
         if request.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA
     )
     causal_prompt = json.loads(causal_request.input_text)
+    assert "revision_work_order" in causal_prompt
+    assert causal_prompt["revision_work_order_artifact_id"] == result.payload[
+        "artifact_ids"
+    ][AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
     assert "controller_owned_patch_target_inventory" in causal_prompt
     assert causal_prompt["allowed_patch_targets"] == causal_prompt[
         "controller_owned_patch_target_inventory"
     ]["allowed_patch_targets"]
+    assert causal_prompt["allowed_patch_target_ids"] == causal_prompt[
+        "revision_work_order"
+    ]["allowed_patch_target_ids"]
     assert all(
         target["patch_target_id"].startswith("target_")
         for target in causal_prompt["allowed_patch_targets"]
@@ -976,6 +1166,7 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
         if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA
     )
     reviser_prompt = json.loads(reviser_request.input_text)
+    assert reviser_prompt["revision_work_order"] == causal_prompt["revision_work_order"]
     assert "selected_target_contract" in reviser_prompt
     assert "allowed_patch_targets" in reviser_prompt
     assert reviser_prompt["allowed_patch_targets"] == reviser_prompt[
@@ -986,9 +1177,11 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
         "allowed_patch_targets"
     ][0]["patch_target_id"]
     assert reviser_prompt["patchable_spans"]
+    assert reviser_prompt["patchable_spans"] == reviser_prompt["revision_work_order"][
+        "patchable_spans"
+    ]
     assert all(
         span["patch_span_id"].startswith("span_")
-        and span["patch_target_id"] == reviser_prompt["selected_patch_target_id"]
         and span["exact_text"]
         for span in reviser_prompt["patchable_spans"]
     )
@@ -1013,7 +1206,7 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     )
     ablation_prompt = json.loads(ablation_request.input_text)
     assert ablation_prompt["allowed_executed_ablation_variant_ids"] == [
-        f"variant_{index:02d}" for index in range(1, 9)
+        f"ablation_variant_{index:03d}" for index in range(1, 9)
     ]
     assert "do not use short labels like v4" in ablation_prompt[
         "ablation_comparison_contract"
@@ -1046,6 +1239,7 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
 
     for artifact_type in (
         "autonomous_revision_subject_manifest",
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE,
         "revised_candidate_text",
         "revision_diff_report",
         "autonomous_closed_loop_gate_report",
@@ -1061,7 +1255,22 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert selected["references_live_reader_lab_evidence"] is True
     assert selected["reader_lab_evidence_artifacts"]
 
+    work_order = read_payload(
+        result.payload["artifact_paths"][AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
+    )
+    assert_valid_work_order_payload(
+        work_order=work_order,
+        candidate_text=candidate_text_from_reader_lab_packet(lab_payload["packet_dir"]),
+        expected_artifact_id=result.payload["artifact_ids"][
+            AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+        ],
+    )
+
     handle = read_payload(result.payload["artifact_paths"]["causal_handle_selection"])
+    assert handle["revision_work_order_id"] == "revision_work_order_001"
+    assert handle["revision_work_order_artifact_id"] == result.payload["artifact_ids"][
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+    ]
     assert handle["bounded_target"] is True
     assert handle["target_count"] == 1
     assert handle["does_not_rebuild_artifact"] is True
@@ -1092,9 +1301,15 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
 
     revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
     assert revised["assembled_by_controller"] is True
+    assert revised["work_order_artifact_id"] == result.payload["artifact_ids"][
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+    ]
     assert revised["source_patch_ids"] == ["patch_01"]
     assert revised["source_patch_span_ids"] == [
         patch_proposal["patches"][0]["patch_span_id"]
+    ]
+    assert revised["source_patch_target_ids"] == [
+        patch_proposal["patches"][0]["patch_target_id"]
     ]
     assert revised["bounded_recomposition"] is True
     assert revised["full_rewrite"] is False
@@ -1104,9 +1319,15 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
 
     diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
     assert diff["assembled_by_controller"] is True
+    assert diff["work_order_artifact_id"] == result.payload["artifact_ids"][
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+    ]
     assert diff["source_patch_ids"] == ["patch_01"]
     assert diff["source_patch_span_ids"] == [
         patch_proposal["patches"][0]["patch_span_id"]
+    ]
+    assert diff["source_patch_target_ids"] == [
+        patch_proposal["patches"][0]["patch_target_id"]
     ]
     assert diff["bounded_change"] is True
     assert diff["changed_spans"]
@@ -1117,6 +1338,7 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert all("changed_span_id" in span for span in diff["changed_spans"])
     assert all("patch_span_id" in span for span in diff["changed_spans"])
     assert all("source_patch_span_ids" in span for span in diff["changed_spans"])
+    assert all("source_patch_target_ids" in span for span in diff["changed_spans"])
     assert all(
         span["inside_target"] == span["within_selected_target"]
         for span in diff["changed_spans"]
@@ -1342,7 +1564,7 @@ def test_stubbed_openai_disallowed_patch_target_fails_before_revision_artifacts(
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "model-call failure" in result.payload["message"]
-    assert "belongs to target" in result.payload["message"]
+    assert "selected target is" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 3
     failed_call = result.payload["model_calls"][-1]
     assert failed_call["schema_name"] == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.name
@@ -1546,13 +1768,13 @@ def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "model-call failure" in result.payload["message"]
-    assert "belongs to target" in result.payload["message"]
+    assert "selected target is" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 3
     failed_call = result.payload["model_calls"][-1]
     assert failed_call["schema_name"] == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.name
     assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
     assert failed_call["parsed_output_artifact_id"] is None
-    assert "belongs to target" in result.payload["message"]
+    assert "selected target is" in result.payload["message"]
     assert "revision_patch_proposal" not in result.payload["artifact_ids"]
     assert "revised_candidate_text" not in result.payload["artifact_ids"]
     assert "revision_diff_report" not in result.payload["artifact_ids"]
@@ -1814,6 +2036,7 @@ def test_stubbed_openai_autonomous_revision_invalid_output_fails_closed(tmp_path
     assert revision_artifact_types == {
         "autonomous_revision_subject_manifest",
         "selected_failure_diagnosis",
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE,
         "causal_handle_selection",
     }
     assert final_report.refused is True

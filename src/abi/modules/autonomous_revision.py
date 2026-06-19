@@ -68,6 +68,7 @@ AUTONOMOUS_REVISION_MAX_MODEL_CALLS_DEFAULT = 12
 AUTONOMOUS_REVISION_ARTIFACT_TYPES = (
     "autonomous_revision_subject_manifest",
     "selected_failure_diagnosis",
+    "autonomous_revision_work_order",
     "causal_handle_selection",
     "revision_patch_proposal",
     "revised_candidate_text",
@@ -82,6 +83,14 @@ AUTONOMOUS_REVISION_ARTIFACT_TYPES = (
 AUTONOMOUS_REVISION_PROMPT_CONTRACT_PREFIX = "autonomous.revision"
 AUTONOMOUS_REVISION_FAKE_MODEL_PROVIDER = "fake"
 AUTONOMOUS_REVISION_FAKE_MODEL = "fake-autonomous-closed-loop-revision-v1"
+AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE = "autonomous_revision_work_order"
+AUTONOMOUS_REVISION_WORK_ORDER_ID = "revision_work_order_001"
+AUTONOMOUS_REVISION_ALLOWED_ABLATION_VARIANT_IDS = tuple(
+    f"ablation_variant_{index:03d}" for index in range(1, 9)
+)
+AUTONOMOUS_REVISION_ALLOWED_ABLATION_PROBE_IDS = tuple(
+    f"ablation_probe_{index:03d}" for index in range(1, 9)
+)
 AUTONOMOUS_REVISION_WORKERS = (
     AutonomousRevisionWorkerSpec(
         schema=AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA,
@@ -380,15 +389,36 @@ def _write_fake_revision_packet(
         ],
     )
 
+    payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE] = _build_revision_work_order(
+        subject,
+        payloads["selected_failure_diagnosis"],
+        fixture_only=True,
+    )
+    artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE] = writer.write_artifact(
+        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE,
+        payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE],
+        parent_ids=[
+            artifacts["autonomous_revision_subject_manifest"].id,
+            artifacts["selected_failure_diagnosis"].id,
+            subject.candidate_text.artifact_id,
+        ],
+    )
+    payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE][
+        "work_order_artifact_id"
+    ] = artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id
+
     payloads["causal_handle_selection"] = _build_causal_handle_selection(
         subject,
         payloads["selected_failure_diagnosis"],
+        payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE],
+        work_order_artifact_id=artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
     )
     artifacts["causal_handle_selection"] = writer.write_artifact(
         "causal_handle_selection",
         payloads["causal_handle_selection"],
         parent_ids=[
             artifacts["selected_failure_diagnosis"].id,
+            artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
             subject.lab_artifacts["targeted_recomposition_plan"].id,
             subject.lab_artifacts["hostile_reader_report"].id,
         ],
@@ -409,9 +439,11 @@ def _write_fake_revision_packet(
 
     controller_payloads = _build_controller_revision_from_patches(
         subject,
+        payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE],
         payloads["causal_handle_selection"],
         payloads["revision_patch_proposal"],
         fixture_only=True,
+        work_order_artifact_id=artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
     )
     payloads["revised_candidate_text"] = controller_payloads["revised_candidate_text"]
     artifacts["revised_candidate_text"] = writer.write_artifact(
@@ -420,6 +452,7 @@ def _write_fake_revision_packet(
         parent_ids=[
             artifacts["revision_patch_proposal"].id,
             artifacts["causal_handle_selection"].id,
+            artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
             subject.candidate_text.artifact_id,
         ],
     )
@@ -431,12 +464,14 @@ def _write_fake_revision_packet(
         parent_ids=[
             artifacts["revision_patch_proposal"].id,
             artifacts["causal_handle_selection"].id,
+            artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
             artifacts["revised_candidate_text"].id,
         ],
     )
 
     payloads["ablation_variant_set"] = _build_ablation_variant_set(
         subject,
+        payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE],
         payloads["causal_handle_selection"],
         payloads["revised_candidate_text"],
     )
@@ -445,6 +480,7 @@ def _write_fake_revision_packet(
         payloads["ablation_variant_set"],
         parent_ids=[
             artifacts["causal_handle_selection"].id,
+            artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
             artifacts["revised_candidate_text"].id,
             subject.lab_artifacts["counterfactual_ablation_plan"].id,
         ],
@@ -504,7 +540,9 @@ def _write_fake_revision_packet(
         payloads["autonomous_closed_loop_gate_report"],
         parent_ids=[
             artifacts["selected_failure_diagnosis"].id,
+            artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
             artifacts["causal_handle_selection"].id,
+            artifacts["revision_patch_proposal"].id,
             artifacts["revised_candidate_text"].id,
             artifacts["revision_diff_report"].id,
             artifacts["ablation_variant_set"].id,
@@ -667,13 +705,65 @@ def _run_live_autonomous_revision(
             )
         artifacts[worker.artifact_type] = result.parsed_artifact
         payloads[worker.artifact_type] = result.parsed_payload
+        if worker.schema == AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA:
+            try:
+                work_order = _build_revision_work_order(
+                    subject,
+                    result.parsed_payload,
+                    fixture_only=fixture_only,
+                )
+            except RevisionIntegrityError as error:
+                return _live_failure_result(
+                    client_name=client_name,
+                    model=model,
+                    subject=subject,
+                    packet_dir=output_dir,
+                    artifacts=artifacts,
+                    payloads=payloads,
+                    model_results=model_results,
+                    message=(
+                        "Autonomous revision stopped before downstream model calls by "
+                        f"work-order validation failure: {error}"
+                    ),
+                )
+            with connect(config.db_path) as connection:
+                writer = PacketWriter(
+                    connection=connection,
+                    run_id=subject.run_id,
+                    packet_dir=output_dir,
+                    lineage_id=AUTONOMOUS_REVISION_LINEAGE_ID,
+                    created_by="autonomous_closed_loop_revision_v1_controller",
+                    fixture_only=fixture_only,
+                    model_call_id=None,
+                )
+                payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE] = work_order
+                artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE] = (
+                    writer.write_artifact(
+                        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE,
+                        work_order,
+                        parent_ids=[
+                            artifacts["autonomous_revision_subject_manifest"].id,
+                            artifacts[
+                                AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA.artifact_type
+                            ].id,
+                            subject.candidate_text.artifact_id,
+                        ],
+                    )
+                )
+                payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE][
+                    "work_order_artifact_id"
+                ] = artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id
         if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
             try:
                 controller_payloads = _build_controller_revision_from_patches(
                     subject,
+                    payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE],
                     payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type],
                     result.parsed_payload,
                     fixture_only=fixture_only,
+                    work_order_artifact_id=artifacts[
+                        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+                    ].id,
                 )
             except RevisionIntegrityError as error:
                 return _live_failure_result(
@@ -708,6 +798,7 @@ def _run_live_autonomous_revision(
                     parent_ids=[
                         artifacts[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type].id,
                         artifacts[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type].id,
+                        artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
                         subject.candidate_text.artifact_id,
                     ],
                 )
@@ -721,6 +812,7 @@ def _run_live_autonomous_revision(
                         artifacts[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type].id,
                         artifacts["revised_candidate_text"].id,
                         artifacts[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type].id,
+                        artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
                     ],
                 )
 
@@ -909,19 +1001,34 @@ def _prompt_for_revision_worker(
         ],
         "not_human_data": True,
     }
-    if worker.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
-        selected_failure = payloads[AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA.artifact_type]
-        target_contract = _controller_target_contract_for_selected_failure(
-            subject,
-            selected_failure,
+    work_order_payload = payloads.get(AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE)
+    work_order_artifact = artifacts.get(AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE)
+    if isinstance(work_order_payload, dict):
+        prompt["revision_work_order"] = work_order_payload
+        prompt["revision_work_order_artifact_id"] = (
+            work_order_artifact.id if work_order_artifact is not None else None
         )
-        prompt["controller_owned_patch_target_inventory"] = target_contract
-        prompt["allowed_patch_targets"] = target_contract["allowed_patch_targets"]
+    if worker.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+        if not isinstance(work_order_payload, dict):
+            raise RevisionIntegrityError("causal handle prompt requires revision work order")
+        prompt["controller_owned_patch_target_inventory"] = {
+            "work_order_id": work_order_payload["work_order_id"],
+            "allowed_patch_targets": work_order_payload["allowed_patch_targets"],
+            "allowed_patch_target_ids": work_order_payload["allowed_patch_target_ids"],
+            "patchable_spans": work_order_payload["patchable_spans"],
+        }
+        prompt["allowed_patch_targets"] = work_order_payload["allowed_patch_targets"]
+        prompt["allowed_patch_target_ids"] = work_order_payload[
+            "allowed_patch_target_ids"
+        ]
+        prompt["allowed_patch_span_ids"] = work_order_payload["allowed_patch_span_ids"]
         prompt["causal_handle_target_contract"] = (
-            "Select exactly one selected_patch_target_id from allowed_patch_targets. "
+            "Select exactly one selected_patch_target_id from "
+            "revision_work_order.allowed_patch_target_ids. Optionally select "
+            "selected_patch_span_ids from revision_work_order.allowed_patch_span_ids. "
             "Do not define allowed_patch_targets, do not invent patch target IDs, and "
             "do not use target_region_description as an identifier. The controller owns "
-            "the target inventory and will reject any selected_patch_target_id outside it."
+            "the work-order inventory and will reject any selected ID outside it."
         )
     handle_payload = payloads.get(AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type)
     if isinstance(handle_payload, dict) and worker.schema in (
@@ -929,29 +1036,34 @@ def _prompt_for_revision_worker(
         AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
         AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
         AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
-        AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
-        AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA,
+            AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
+            AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA,
     ):
+        if not isinstance(work_order_payload, dict):
+            raise RevisionIntegrityError("revision worker prompt requires revision work order")
         selected_target = {
             "span_ref": handle_payload["span_ref"],
             **_target_contract_from_handle(handle_payload),
         }
         prompt["selected_target_contract"] = selected_target
         prompt["allowed_patch_targets"] = selected_target["allowed_patch_targets"]
+        prompt["allowed_patch_target_ids"] = work_order_payload["allowed_patch_target_ids"]
         if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
             prompt["selected_patch_target_id"] = handle_payload["selected_patch_target_id"]
-            prompt["patchable_spans"] = handle_payload["patchable_spans"]
+            prompt["patchable_spans"] = work_order_payload["patchable_spans"]
+            prompt["allowed_patch_span_ids"] = work_order_payload["allowed_patch_span_ids"]
     if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
         prompt["candidate_reviser_target_contract"] = (
             "Return patch operations only, not a full revised artifact. Each patch must "
-            "choose patch_target_id exactly from allowed_patch_targets and choose "
-            "patch_span_id exactly from patchable_spans. Do not invent patch_target_id "
-            "or patch_span_id values. Do not use target_region_description, exact_text, "
-            "or other prose descriptions as IDs. Do not provide authoritative "
-            "original_excerpt; the controller owns exact before-text and applies the "
-            "accepted patch to the chosen span. If outside-target text is needed, set "
-            "requires_target_expansion true with target_expansion_reason instead of "
-            "silently patching outside patchable_spans."
+            "choose patch_target_id exactly from revision_work_order.allowed_patch_target_ids "
+            "and choose patch_span_id exactly from revision_work_order.allowed_patch_span_ids. "
+            "Do not invent patch_target_id or patch_span_id values. Do not use "
+            "target_region_description, exact_text, or other prose descriptions as IDs. "
+            "Do not provide authoritative original_excerpt, before_text, text_window, "
+            "or target text; the controller owns exact before-text and applies the "
+            "accepted patch to the chosen work-order span. If outside-target text is "
+            "needed, set requires_target_expansion true with target_expansion_reason "
+            "instead of silently patching outside patchable_spans."
         )
     if worker.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
         prompt["revision_diff_integrity_contract"] = (
@@ -963,10 +1075,28 @@ def _prompt_for_revision_worker(
             "mark that changed span requires_target_expansion with target_expansion_reason. "
             "If there is no explicit expansion, all changed spans must remain inside target."
         )
+    if worker.schema == AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA:
+        if isinstance(work_order_payload, dict):
+            prompt["allowed_ablation_variant_ids"] = work_order_payload[
+                "allowed_ablation_variant_ids"
+            ]
+            prompt["allowed_ablation_probe_ids"] = work_order_payload[
+                "allowed_ablation_probe_ids"
+            ]
+            prompt["ablation_variant_contract"] = (
+                "Every generated variant_id must come from "
+                "revision_work_order.allowed_ablation_variant_ids. Planned probes use "
+                "allowed_ablation_probe_ids only when they are planned_only in later "
+                "comparison rows."
+            )
     if worker.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
         variant_set = payloads.get(AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type)
         executed_variant_ids = _executed_ablation_variant_ids(variant_set or {})
         prompt["allowed_executed_ablation_variant_ids"] = executed_variant_ids
+        if isinstance(work_order_payload, dict):
+            prompt["allowed_ablation_probe_ids"] = work_order_payload[
+                "allowed_ablation_probe_ids"
+            ]
         prompt["ablation_comparison_contract"] = (
             "Each executed comparison row must use executed_variant_id exactly from "
             "allowed_executed_ablation_variant_ids. If discussing a non-executed "
@@ -978,13 +1108,15 @@ def _prompt_for_revision_worker(
             AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS
         )
     if worker.schema == AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA:
-        prompt["allowed_provenance_source_tokens"] = list(
-            AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS
+        prompt["allowed_provenance_source_tokens"] = (
+            list(work_order_payload["allowed_provenance_tokens"])
+            if isinstance(work_order_payload, dict)
+            else list(AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS)
         )
         prompt["old_new_rival_provenance_contract"] = (
             "judgment_provenance values must be arrays containing only exact tokens "
-            "from allowed_provenance_source_tokens. Do not put sentences, quotes, "
-            "summaries, or explanations in judgment_provenance."
+            "from revision_work_order.allowed_provenance_tokens. Do not put sentences, "
+            "quotes, summaries, or explanations in judgment_provenance."
         )
         prompt["old_new_rival_rationale_contract"] = (
             "Put prose justification in judgment_rationale using the same judgment "
@@ -999,11 +1131,18 @@ def _validator_for_revision_worker(
     payloads: dict[str, dict[str, Any]],
 ):
     if worker.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+        work_order = payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
 
         def _validate_causal_handle(parsed_payload: dict[str, object]) -> None:
             try:
                 _attach_controller_target_contract(
                     subject=subject,
+                    work_order=work_order,
+                    work_order_artifact_id=(
+                        str(work_order["work_order_artifact_id"])
+                        if work_order.get("work_order_artifact_id")
+                        else None
+                    ),
                     handle=parsed_payload,
                     selected_failure=payloads[
                         AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA.artifact_type
@@ -1016,19 +1155,36 @@ def _validator_for_revision_worker(
 
     if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
         handle = payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
+        work_order = payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
 
         def _validate_patch_proposal(parsed_payload: dict[str, object]) -> None:
             try:
                 _build_controller_revision_from_patches(
                     subject,
+                    work_order,
                     handle,
                     parsed_payload,
                     fixture_only=False,
+                    work_order_artifact_id=None,
                 )
             except RevisionIntegrityError as error:
                 raise ModelValidationError(str(error)) from error
 
         return _validate_patch_proposal
+
+    if worker.schema == AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA:
+        work_order = payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
+
+        def _validate_variant_set(parsed_payload: dict[str, object]) -> None:
+            try:
+                _validate_ablation_variant_ids_against_work_order(
+                    parsed_payload,
+                    work_order,
+                )
+            except RevisionIntegrityError as error:
+                raise ModelValidationError(str(error)) from error
+
+        return _validate_variant_set
 
     if worker.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
 
@@ -1046,10 +1202,11 @@ def _validator_for_revision_worker(
 
     if worker.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
         variant_set = payloads[AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type]
+        work_order = payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
 
         def _validate_ablation(parsed_payload: dict[str, object]) -> None:
             try:
-                _validate_ablation_alignment(variant_set, parsed_payload)
+                _validate_ablation_alignment(variant_set, parsed_payload, work_order)
             except RevisionIntegrityError as error:
                 raise ModelValidationError(str(error)) from error
 
@@ -1064,6 +1221,11 @@ def _parent_ids_for_revision_worker(
     worker: AutonomousRevisionWorkerSpec,
 ) -> list[str]:
     parent_ids = [artifacts["autonomous_revision_subject_manifest"].id]
+    if (
+        worker.schema != AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA
+        and AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE in artifacts
+    ):
+        parent_ids.append(artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id)
     parent_ids.extend(
         artifacts[artifact_type].id
         for artifact_type in worker.parent_artifact_types
@@ -1104,6 +1266,257 @@ def _validate_revision_integrity(
     }
 
 
+def _build_revision_work_order(
+    subject: RevisionSubject,
+    selected_failure: dict[str, Any],
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    target_contract = _controller_target_contract_for_selected_failure(
+        subject,
+        selected_failure,
+    )
+    allowed_patch_targets = [
+        dict(target)
+        for target in target_contract["allowed_patch_targets"]
+        if isinstance(target, dict)
+    ]
+    patchable_spans: list[dict[str, object]] = []
+    for target in allowed_patch_targets:
+        patchable_spans.extend(_patchable_spans_for_target(subject, target))
+
+    plan_item = _plan_item_for_failure(
+        subject.lab_payloads["targeted_recomposition_plan"],
+        str(selected_failure["selected_failure_type"]),
+    )
+    evidence_names = _selected_failure_evidence_names(selected_failure)
+    evidence_refs = {
+        artifact_type: subject.lab_artifacts[artifact_type].id
+        for artifact_type in evidence_names
+        if artifact_type in subject.lab_artifacts
+    }
+    payload = {
+        "worker": "autonomous_revision_work_order_v1_controller",
+        "work_order_id": AUTONOMOUS_REVISION_WORK_ORDER_ID,
+        "run_id": subject.run_id,
+        "reader_lab_packet_dir": str(subject.reader_lab_packet_dir),
+        "reader_lab_packet_id": subject.reader_lab_packet_id,
+        "source_packet_dir": str(subject.source_packet_dir),
+        "source_packet_id": subject.source_packet_id,
+        "source_candidate": {
+            "label": subject.candidate_text.label,
+            "source_class": subject.candidate_text.source_class,
+            "artifact_id": subject.candidate_text.artifact_id,
+            "text_sha256": sha256_text(subject.candidate_text.text),
+            "word_count": subject.candidate_text.word_count,
+        },
+        "original_candidate_text_sha256": sha256_text(subject.candidate_text.text),
+        "strongest_rival_reference": (
+            {
+                "label": subject.strongest_rival.label,
+                "source_class": subject.strongest_rival.source_class,
+                "artifact_id": subject.strongest_rival.artifact_id,
+                "text_sha256": sha256_text(subject.strongest_rival.text),
+            }
+            if subject.strongest_rival is not None
+            else None
+        ),
+        "reader_lab_evidence_references": evidence_refs,
+        "selected_failure_reference": {
+            "selected_failure_type": selected_failure["selected_failure_type"],
+            "selected_diagnosis": selected_failure["selected_diagnosis"],
+            "severity": selected_failure["severity"],
+            "source_failure_index": selected_failure.get("source_failure_index"),
+            "source_failure_payload": selected_failure.get("source_failure_payload"),
+        },
+        "candidate_paragraph_inventory": _candidate_paragraph_inventory(
+            subject.candidate_text.text,
+        ),
+        "candidate_sentence_span_inventory": _candidate_sentence_span_inventory(
+            subject.candidate_text.text,
+        ),
+        "allowed_patch_targets": allowed_patch_targets,
+        "allowed_patch_target_ids": [
+            str(target["patch_target_id"]) for target in allowed_patch_targets
+        ],
+        "patchable_spans": patchable_spans,
+        "allowed_patch_span_ids": [
+            str(span["patch_span_id"]) for span in patchable_spans
+        ],
+        "allowed_ablation_variant_ids": list(
+            AUTONOMOUS_REVISION_ALLOWED_ABLATION_VARIANT_IDS
+        ),
+        "allowed_ablation_probe_ids": list(AUTONOMOUS_REVISION_ALLOWED_ABLATION_PROBE_IDS),
+        "allowed_provenance_tokens": list(AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS),
+        "protected_effects": list(plan_item["protected_effects"]),
+        "forbidden_changes": list(plan_item["forbidden_changes"]),
+        "controller_owned": True,
+        "fixture_only": fixture_only,
+        "not_human_data": True,
+        "no_phase_shift_claim": True,
+    }
+    _validate_revision_work_order_payload(subject, payload)
+    return payload
+
+
+def _validate_revision_work_order_payload(
+    subject: RevisionSubject,
+    work_order: dict[str, Any],
+) -> None:
+    candidate_text = subject.candidate_text.text
+    expected_hash = sha256_text(candidate_text)
+    if work_order.get("controller_owned") is not True:
+        raise RevisionIntegrityError("revision_work_order must be controller_owned")
+    if work_order.get("original_candidate_text_sha256") != expected_hash:
+        raise RevisionIntegrityError("revision_work_order candidate hash does not match")
+    source_candidate = work_order.get("source_candidate")
+    if not isinstance(source_candidate, dict):
+        raise RevisionIntegrityError("revision_work_order source_candidate is missing")
+    if source_candidate.get("text_sha256") != expected_hash:
+        raise RevisionIntegrityError("revision_work_order source candidate hash mismatch")
+
+    allowed_target_ids: set[str] = set()
+    for index, target in enumerate(work_order.get("allowed_patch_targets", [])):
+        if not isinstance(target, dict):
+            raise RevisionIntegrityError("revision_work_order allowed_patch_targets must be objects")
+        target_id = _canonical_control_id(
+            target.get("patch_target_id"),
+            "target_",
+            f"allowed_patch_targets[{index}].patch_target_id",
+        )
+        if target_id in allowed_target_ids:
+            raise RevisionIntegrityError(f"duplicate patch target id in work order: {target_id}")
+        allowed_target_ids.add(target_id)
+        text_window = str(target.get("text_window", ""))
+        if not text_window or text_window not in candidate_text:
+            raise RevisionIntegrityError(
+                f"work-order target {target_id!r} text_window is not an exact "
+                "candidate substring"
+            )
+
+    if set(work_order.get("allowed_patch_target_ids", [])) != allowed_target_ids:
+        raise RevisionIntegrityError("allowed_patch_target_ids do not match target inventory")
+
+    target_windows = {
+        str(target["patch_target_id"]): str(target["text_window"])
+        for target in work_order.get("allowed_patch_targets", [])
+        if isinstance(target, dict)
+    }
+    allowed_span_ids: set[str] = set()
+    for index, span in enumerate(work_order.get("patchable_spans", [])):
+        if not isinstance(span, dict):
+            raise RevisionIntegrityError("revision_work_order patchable_spans must be objects")
+        span_id = _canonical_control_id(
+            span.get("patch_span_id"),
+            "span_",
+            f"patchable_spans[{index}].patch_span_id",
+        )
+        if span_id in allowed_span_ids:
+            raise RevisionIntegrityError(f"duplicate patch span id in work order: {span_id}")
+        allowed_span_ids.add(span_id)
+        target_id = _canonical_control_id(
+            span.get("patch_target_id"),
+            "target_",
+            f"patchable_spans[{index}].patch_target_id",
+        )
+        if target_id not in target_windows:
+            raise RevisionIntegrityError(
+                f"work-order patchable span {span_id!r} references unknown target "
+                f"{target_id!r}"
+            )
+        exact_text = str(span.get("exact_text", ""))
+        if not exact_text or exact_text not in candidate_text:
+            raise RevisionIntegrityError(
+                f"work-order span {span_id!r} exact_text is not an exact candidate substring"
+            )
+        if exact_text not in target_windows[target_id]:
+            raise RevisionIntegrityError(
+                f"work-order span {span_id!r} points outside patch target {target_id!r}"
+            )
+        if span.get("source_text_sha256") != expected_hash:
+            raise RevisionIntegrityError(
+                f"work-order span {span_id!r} source_text_sha256 does not match candidate"
+            )
+
+    if set(work_order.get("allowed_patch_span_ids", [])) != allowed_span_ids:
+        raise RevisionIntegrityError("allowed_patch_span_ids do not match span inventory")
+
+    for index, item in enumerate(work_order.get("candidate_sentence_span_inventory", [])):
+        if not isinstance(item, dict):
+            raise RevisionIntegrityError("candidate sentence inventory entries must be objects")
+        _canonical_control_id(
+            item.get("candidate_span_id"),
+            "candidate_span_",
+            f"candidate_sentence_span_inventory[{index}].candidate_span_id",
+        )
+        exact_text = str(item.get("exact_text", ""))
+        if not exact_text or exact_text not in candidate_text:
+            raise RevisionIntegrityError(
+                "candidate sentence inventory exact_text is not an exact candidate substring"
+            )
+
+    for index, variant_id in enumerate(work_order.get("allowed_ablation_variant_ids", [])):
+        _canonical_control_id(
+            variant_id,
+            "ablation_variant_",
+            f"allowed_ablation_variant_ids[{index}]",
+        )
+    for index, probe_id in enumerate(work_order.get("allowed_ablation_probe_ids", [])):
+        _canonical_control_id(
+            probe_id,
+            "ablation_probe_",
+            f"allowed_ablation_probe_ids[{index}]",
+        )
+    allowed_tokens = list(work_order.get("allowed_provenance_tokens", []))
+    if set(allowed_tokens) != set(AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS):
+        raise RevisionIntegrityError("work-order provenance tokens do not match catalog")
+    for token in allowed_tokens:
+        if any(character.isspace() for character in token) or "/" in token:
+            raise RevisionIntegrityError(f"invalid provenance token in work order: {token!r}")
+
+
+def _selected_failure_evidence_names(selected_failure: dict[str, Any]) -> list[str]:
+    evidence = selected_failure.get("reader_lab_evidence_artifacts", [])
+    if isinstance(evidence, dict):
+        return [str(key) for key in evidence]
+    if isinstance(evidence, list):
+        return [str(item) for item in evidence]
+    return []
+
+
+def _candidate_paragraph_inventory(candidate_text: str) -> list[dict[str, object]]:
+    paragraphs = [part.strip() for part in candidate_text.split("\n\n") if part.strip()]
+    if not paragraphs and candidate_text.strip():
+        paragraphs = [candidate_text.strip()]
+    return [
+        {
+            "paragraph_id": f"paragraph_{index:03d}",
+            "paragraph_index": index - 1,
+            "text_sha256": sha256_text(paragraph),
+            "text_excerpt": paragraph[:240],
+            "word_count": len(_words(paragraph)),
+        }
+        for index, paragraph in enumerate(paragraphs, start=1)
+    ]
+
+
+def _candidate_sentence_span_inventory(candidate_text: str) -> list[dict[str, object]]:
+    spans = []
+    for index, sentence in enumerate(_sentences(candidate_text) or [candidate_text.strip()], start=1):
+        if not sentence.strip():
+            continue
+        spans.append(
+            {
+                "candidate_span_id": f"candidate_span_{index:03d}",
+                "paragraph_index": _paragraph_index_for_excerpt(candidate_text, sentence),
+                "sentence_index": index,
+                "exact_text": sentence,
+                "source_text_sha256": sha256_text(candidate_text),
+            }
+        )
+    return spans
+
+
 def _controller_target_contract_for_selected_failure(
     subject: RevisionSubject,
     selected_failure: dict[str, Any],
@@ -1135,16 +1548,16 @@ def _controller_target_contract_for_selected_failure(
 def _attach_controller_target_contract(
     *,
     subject: RevisionSubject,
+    work_order: dict[str, Any],
+    work_order_artifact_id: str | None,
     handle: dict[str, object],
     selected_failure: dict[str, Any],
 ) -> None:
-    target_contract = _controller_target_contract_for_selected_failure(
-        subject,
-        selected_failure,
-    )
+    _ = selected_failure
+    _validate_revision_work_order_payload(subject, work_order)
     allowed_targets = {
         str(target["patch_target_id"]): target
-        for target in target_contract["allowed_patch_targets"]
+        for target in work_order["allowed_patch_targets"]
         if isinstance(target, dict)
     }
     selected_target_id = str(handle["selected_patch_target_id"])
@@ -1181,11 +1594,7 @@ def _attach_controller_target_contract(
     }
     handle["target_region_label"] = selected_target["target_region_label"]
     handle["target_region_description"] = selected_target["target_region_description"]
-    all_targets = [
-        target
-        for target in target_contract["allowed_patch_targets"]
-        if isinstance(target, dict)
-    ]
+    all_targets = [target for target in work_order["allowed_patch_targets"] if isinstance(target, dict)]
     handle["allowed_span_refs"] = [selected_target["allowed_span_ref"]]
     handle["allowed_patch_targets"] = [
         selected_target,
@@ -1197,26 +1606,39 @@ def _attach_controller_target_contract(
     ]
     handle["protected_outside_spans"] = list(selected_target["protected_outside_spans"])
     handle["allowed_patch_targets_source"] = "controller_owned"
-    handle["patchable_spans"] = _patchable_spans_for_target(subject, selected_target)
+    handle["patchable_spans"] = [
+        span
+        for span in work_order["patchable_spans"]
+        if str(span["patch_target_id"]) == selected_target_id
+    ]
     handle["patchable_spans_source"] = "controller_owned"
+    handle["revision_work_order_id"] = work_order["work_order_id"]
+    handle["revision_work_order_artifact_id"] = work_order_artifact_id
+    handle["selected_patch_span_ids"] = [
+        str(span["patch_span_id"]) for span in handle["patchable_spans"]
+    ]
 
 
 def _build_controller_revision_from_patches(
     subject: RevisionSubject,
+    work_order: dict[str, Any],
     handle: dict[str, Any],
     patch_proposal: dict[str, Any],
     *,
     fixture_only: bool,
+    work_order_artifact_id: str | None,
 ) -> dict[str, dict[str, Any]]:
+    _validate_revision_work_order_payload(subject, work_order)
     original = subject.candidate_text.text
     revised = original
     patch_ids = []
     expansion_required = bool(patch_proposal["target_region_expanded"])
     expansion_reasons = []
-    allowed_targets = _allowed_patch_targets_by_id(handle)
-    patchable_spans = _patchable_spans_by_id(handle)
+    allowed_targets = _allowed_patch_targets_by_id(work_order)
+    patchable_spans = _patchable_spans_by_id(work_order)
     selected_target_region = str(handle["span_ref"]["region"])
     patch_span_ids = []
+    patch_target_ids = []
 
     for patch in patch_proposal["patches"]:
         target = _resolve_patch_target(
@@ -1225,6 +1647,12 @@ def _build_controller_revision_from_patches(
             target_region_label=str(handle["target_region_label"]),
             proposal_expands_target=bool(patch_proposal["target_region_expanded"]),
         )
+        if str(target["patch_target_id"]) != str(handle["selected_patch_target_id"]):
+            raise RevisionIntegrityError(
+                f"patch {patch['patch_id']} uses patch_target_id "
+                f"{target['patch_target_id']!r}; selected target is "
+                f"{handle['selected_patch_target_id']!r}"
+            )
         span = _resolve_patch_span(
             patch=patch,
             target=target,
@@ -1233,6 +1661,7 @@ def _build_controller_revision_from_patches(
         revised = _apply_patch_operation(revised, patch, target, span)
         patch_ids.append(str(patch["patch_id"]))
         patch_span_ids.append(str(span["patch_span_id"]))
+        patch_target_ids.append(str(target["patch_target_id"]))
         if bool(patch["requires_target_expansion"]):
             expansion_required = True
             expansion_reasons.append(str(patch["target_expansion_reason"]))
@@ -1247,6 +1676,7 @@ def _build_controller_revision_from_patches(
         target_region=selected_target_region,
         patch_ids=patch_ids,
         patch_span_ids=patch_span_ids,
+        patch_target_ids=patch_target_ids,
         expansion_reason=_first_nonempty(
             [
                 str(patch_proposal["expansion_reason"]),
@@ -1257,8 +1687,11 @@ def _build_controller_revision_from_patches(
     diff_payload = {
         "worker": "revision_diff_report_v1_controller",
         "assembled_by_controller": True,
+        "work_order_id": work_order["work_order_id"],
+        "work_order_artifact_id": work_order_artifact_id,
         "source_patch_ids": patch_ids,
         "source_patch_span_ids": patch_span_ids,
+        "source_patch_target_ids": patch_target_ids,
         "source_patch_proposal_id": patch_proposal["proposal_id"],
         "full_rewrite": False,
         "bounded_change": True,
@@ -1304,8 +1737,11 @@ def _build_controller_revision_from_patches(
     revised_payload = {
         "worker": "bounded_targeted_recomposer_v1_controller",
         "assembled_by_controller": True,
+        "work_order_id": work_order["work_order_id"],
+        "work_order_artifact_id": work_order_artifact_id,
         "source_patch_ids": patch_ids,
         "source_patch_span_ids": patch_span_ids,
+        "source_patch_target_ids": patch_target_ids,
         "source_patch_proposal_id": patch_proposal["proposal_id"],
         "candidate_id": candidate_id,
         "source_candidate_artifact_id": subject.candidate_text.artifact_id,
@@ -1493,6 +1929,7 @@ def _controller_changed_spans_from_patches(
     target_region: str,
     patch_ids: list[str],
     patch_span_ids: list[str],
+    patch_target_ids: list[str],
     expansion_reason: str,
 ) -> list[dict[str, object]]:
     spans = _reported_changed_spans_for_texts(
@@ -1505,6 +1942,7 @@ def _controller_changed_spans_from_patches(
     for span in spans:
         span["source_patch_ids"] = patch_ids
         span["source_patch_span_ids"] = patch_span_ids
+        span["source_patch_target_ids"] = patch_target_ids
         span["patch_span_id"] = patch_span_ids[0] if len(patch_span_ids) == 1 else ""
         span["reason"] = f"controller-applied patch ids: {patch_id_summary}"
         if bool(span["requires_target_expansion"]):
@@ -1611,13 +2049,17 @@ def _validate_ablation_integrity(payloads: dict[str, dict[str, Any]]) -> dict[st
     return _validate_ablation_alignment(
         payloads["ablation_variant_set"],
         payloads["ablation_reread_comparison"],
+        payloads.get(AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE),
     )
 
 
 def _validate_ablation_alignment(
     variant_set: dict[str, Any],
     comparison: dict[str, Any],
+    work_order: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if work_order is not None:
+        _validate_ablation_variant_ids_against_work_order(variant_set, work_order)
     variants_by_id = {
         str(variant["variant_id"]): variant
         for variant in variant_set["variants"]
@@ -1648,6 +2090,14 @@ def _validate_ablation_alignment(
                 continue
             if not planned_probe_id:
                 invalid_rows.append(f"{row_id} is planned_only but has no planned_probe_id")
+                continue
+            if work_order is not None and str(planned_probe_id) not in set(
+                work_order["allowed_ablation_probe_ids"]
+            ):
+                invalid_rows.append(
+                    f"{row_id} planned_probe_id {planned_probe_id!r} is not in "
+                    "revision_work_order.allowed_ablation_probe_ids"
+                )
                 continue
             planned_only_rows.append(str(planned_probe_id))
             predicted_rows.append(str(planned_probe_id))
@@ -1693,6 +2143,23 @@ def _validate_ablation_alignment(
     }
 
 
+def _validate_ablation_variant_ids_against_work_order(
+    variant_set: dict[str, Any],
+    work_order: dict[str, Any],
+) -> None:
+    allowed = set(work_order["allowed_ablation_variant_ids"])
+    invalid = [
+        str(variant["variant_id"])
+        for variant in variant_set.get("variants", [])
+        if isinstance(variant, dict) and str(variant.get("variant_id")) not in allowed
+    ]
+    if invalid:
+        raise RevisionIntegrityError(
+            "ablation_variant_set variant IDs are not in revision_work_order: "
+            + ", ".join(sorted(invalid))
+        )
+
+
 def _executed_ablation_variant_ids(variant_set: dict[str, Any]) -> list[str]:
     variants = variant_set.get("variants")
     if not isinstance(variants, list):
@@ -1710,17 +2177,19 @@ def _validate_old_new_rival_provenance(
 ) -> dict[str, Any]:
     comparison = payloads["old_new_rival_comparison"]
     provenance = comparison["judgment_provenance"]
+    work_order = payloads.get(AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE)
+    allowed = (
+        set(work_order["allowed_provenance_tokens"])
+        if isinstance(work_order, dict)
+        else set(AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS)
+    )
     invalid = []
     for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS:
         sources = list(provenance.get(key, []))
         if not sources:
             invalid.append(f"{key} has no provenance")
             continue
-        unsupported = [
-            source
-            for source in sources
-            if source not in AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS
-        ]
+        unsupported = [source for source in sources if source not in allowed]
         if unsupported:
             invalid.append(f"{key} has unsupported provenance: {unsupported}")
     if subject.strongest_rival is not None and "strongest_rival_text" not in provenance[
@@ -1734,7 +2203,7 @@ def _validate_old_new_rival_provenance(
     return {
         "judgment_count": len(AUTONOMOUS_REVISION_JUDGMENT_KEYS),
         "all_judgments_have_provenance": True,
-        "allowed_sources": sorted(AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS),
+        "allowed_sources": sorted(allowed),
     }
 
 
@@ -1796,7 +2265,7 @@ def _reported_changed_spans_for_texts(
 
 
 def _target_region_contract(region: str, *, candidate_text: str = "") -> dict[str, object]:
-    label = "_".join(_words(region)[:8]) or "target_region"
+    label = "_".join(_slug_terms(region)[:8]) or "target_region"
     target = _patch_target_for_region(region, candidate_text)
     return {
         "target_region_label": f"target_region:{label}",
@@ -1811,7 +2280,7 @@ def _target_region_contract(region: str, *, candidate_text: str = "") -> dict[st
 
 
 def _patch_target_for_region(region: str, candidate_text: str) -> dict[str, object]:
-    label = "_".join(_words(region)[:8]) or "target_region"
+    label = "_".join(_slug_terms(region)[:8]) or "target_region"
     return {
         "patch_target_id": _patch_target_id_for_region(region),
         "target_region_label": f"target_region:{label}",
@@ -1964,9 +2433,21 @@ def _target_contract_from_handle(handle: dict[str, Any]) -> dict[str, object]:
 
 def _patch_target_id_for_region(region: str) -> str:
     lowered = region.lower()
+    if "opening sentence" in lowered:
+        return "target_opening_sentence"
     if "first two" in lowered and ("pivot" in lowered or "image-to-interpretation" in lowered):
         return "target_opening_first_pivots"
-    words = _words(region)
+    if "ending" in lowered and ("return" in lowered or "closure" in lowered):
+        return "target_ending_return_closure"
+    if "final image" in lowered:
+        return "target_final_image"
+    if "middle" in lowered and ("abstract" in lowered or "bridge" in lowered):
+        return "target_middle_abstract_bridge"
+    if "middle" in lowered:
+        return "target_middle_conceptual_ladder"
+    if "unlicensed" in lowered or "scale" in lowered:
+        return "target_unlicensed_scale_bridge"
+    words = _slug_terms(region)
     compact = "_".join(words[:8])
     return f"target_{compact or 'region'}"
 
@@ -2183,6 +2664,7 @@ def _fake_model_causal_handle_payload(
         )
     )
     patch_target = _first_allowed_patch_target(target_contract)
+    allowed_targets = list(target_contract.get("allowed_patch_targets", [patch_target]))
     return {
         "bounded_target": True,
         "target_count": 1,
@@ -2197,8 +2679,8 @@ def _fake_model_causal_handle_payload(
         },
         "target_region_label": str(patch_target["target_region_label"]),
         "target_region_description": str(patch_target["target_region_description"]),
-        "allowed_span_refs": list(target_contract["allowed_span_refs"]),
-        "protected_outside_spans": list(target_contract["protected_outside_spans"]),
+        "allowed_span_refs": [str(patch_target["allowed_span_ref"])],
+        "protected_outside_spans": list(patch_target["protected_outside_spans"]),
         "quoted_text": quoted,
         "causal_handle": str(plan_item["causal_handle"]),
         "local_law_hypothesis": (
@@ -2220,6 +2702,7 @@ def _fake_model_causal_handle_payload(
         "uncertainty": "internal model evidence can guide revision but cannot finalize",
         "protected_effects": list(plan_item["protected_effects"]),
         "forbidden_changes": list(plan_item["forbidden_changes"]),
+        "allowed_patch_targets": allowed_targets,
         "not_human_data": True,
     }
 
@@ -2338,6 +2821,10 @@ def _fake_model_ablation_variants_payload(
     handle = prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
     revised = _prior_revised_candidate_payload(prompt, prior_payloads)
     revised_text = str(revised["text"])
+    allowed_variant_ids = list(
+        prompt.get("allowed_ablation_variant_ids")
+        or AUTONOMOUS_REVISION_ALLOWED_ABLATION_VARIANT_IDS
+    )
     operations = (
         (
             "remove_suspected_causal_handle",
@@ -2384,7 +2871,7 @@ def _fake_model_ablation_variants_payload(
         "targeted_causal_handle": str(handle["causal_handle"]),
         "variants": [
             {
-                "variant_id": f"variant_{index:02d}",
+                "variant_id": str(allowed_variant_ids[index - 1]),
                 "operation": operation,
                 "variant_probe": description,
                 "ablation_probe": "compare internal first-read/reread deltas",
@@ -2724,6 +3211,9 @@ def _build_selected_failure(subject: RevisionSubject) -> dict[str, Any]:
 def _build_causal_handle_selection(
     subject: RevisionSubject,
     selected_failure: dict[str, Any],
+    work_order: dict[str, Any],
+    *,
+    work_order_artifact_id: str | None,
 ) -> dict[str, Any]:
     plan_item = _plan_item_for_failure(
         subject.lab_payloads["targeted_recomposition_plan"],
@@ -2732,11 +3222,8 @@ def _build_causal_handle_selection(
     candidate = subject.candidate_text
     quoted = _first_sentence(candidate.text)
     handle = str(plan_item["causal_handle"])
-    target_contract = _controller_target_contract_for_selected_failure(
-        subject,
-        selected_failure,
-    )
-    patch_target = _first_allowed_patch_target(target_contract)
+    _validate_revision_work_order_payload(subject, work_order)
+    patch_target = _first_allowed_patch_target(work_order)
     payload = {
         "worker": "causal_handle_selector_v1_fake",
         "bounded_target": True,
@@ -2749,7 +3236,11 @@ def _build_causal_handle_selection(
             "region": patch_target["allowed_span_ref"],
             "selection_basis": "smallest local handle connected to selected failure",
         },
-        **target_contract,
+        "target_region_label": patch_target["target_region_label"],
+        "target_region_description": patch_target["target_region_description"],
+        "allowed_span_refs": [patch_target["allowed_span_ref"]],
+        "allowed_patch_targets": list(work_order["allowed_patch_targets"]),
+        "protected_outside_spans": list(patch_target["protected_outside_spans"]),
         "allowed_patch_targets_source": "controller_owned",
         "quoted_text": quoted,
         "causal_handle": handle,
@@ -2776,9 +3267,18 @@ def _build_causal_handle_selection(
         "protected_effects": list(plan_item["protected_effects"]),
         "forbidden_changes": list(plan_item["forbidden_changes"]),
         "fixture_only": True,
+        "revision_work_order_id": work_order["work_order_id"],
+        "revision_work_order_artifact_id": work_order_artifact_id,
     }
-    payload["patchable_spans"] = _patchable_spans_for_target(subject, patch_target)
+    payload["patchable_spans"] = [
+        span
+        for span in work_order["patchable_spans"]
+        if str(span["patch_target_id"]) == str(patch_target["patch_target_id"])
+    ]
     payload["patchable_spans_source"] = "controller_owned"
+    payload["selected_patch_span_ids"] = [
+        str(span["patch_span_id"]) for span in payload["patchable_spans"]
+    ]
     return payload
 
 
@@ -2899,12 +3399,15 @@ def _build_revision_diff_report(
 
 def _build_ablation_variant_set(
     subject: RevisionSubject,
+    work_order: dict[str, Any],
     handle_selection: dict[str, Any],
     revised_candidate: dict[str, Any],
 ) -> dict[str, Any]:
+    _validate_revision_work_order_payload(subject, work_order)
     original = subject.candidate_text.text
     revised = str(revised_candidate["text"])
     handle = str(handle_selection["causal_handle"])
+    variant_ids = list(work_order["allowed_ablation_variant_ids"])
     operations = (
         (
             "remove_suspected_causal_handle",
@@ -2949,10 +3452,12 @@ def _build_ablation_variant_set(
     )
     return {
         "worker": "ablation_variant_set_v1_fake",
+        "work_order_id": work_order["work_order_id"],
+        "work_order_artifact_id": work_order.get("work_order_artifact_id"),
         "targeted_causal_handle": handle,
         "variants": [
             {
-                "variant_id": f"variant_{index:02d}",
+                "variant_id": variant_ids[index - 1],
                 "operation": operation,
                 "variant_probe": description,
                 "ablation_probe": "compare internal first-read/reread deltas against revised candidate",
@@ -3659,6 +4164,31 @@ def _sentences(text: str) -> list[str]:
 
 def _words(text: str) -> list[str]:
     return [word.strip(".,;:!?()[]{}\"'").lower() for word in text.split() if word.strip()]
+
+
+def _slug_terms(text: str) -> list[str]:
+    terms = []
+    for raw_word in text.lower().split():
+        cleaned = "".join(character for character in raw_word if character.isalnum())
+        if cleaned:
+            terms.append(cleaned)
+    return terms
+
+
+def _canonical_control_id(value: object, prefix: str, label: str) -> str:
+    if not isinstance(value, str):
+        raise RevisionIntegrityError(f"{label} must be a string")
+    if not value.startswith(prefix):
+        raise RevisionIntegrityError(f"{label} must start with {prefix!r}")
+    if value != value.lower():
+        raise RevisionIntegrityError(f"{label} must be lowercase")
+    if "__" in value or value.endswith("_"):
+        raise RevisionIntegrityError(f"{label} must not contain empty slug parts")
+    if not all(character.isalnum() or character == "_" for character in value):
+        raise RevisionIntegrityError(
+            f"{label} must use only lowercase letters, digits, and underscores"
+        )
+    return value
 
 
 def _contains(text: str, terms: tuple[str, ...]) -> bool:

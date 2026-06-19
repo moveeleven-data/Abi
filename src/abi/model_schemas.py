@@ -3370,7 +3370,7 @@ def _validate_revision_patch_target(payload: dict[str, Any], label: str) -> dict
 def _validate_patch_target_id(value: object, label: str) -> None:
     if not isinstance(value, str):
         raise ModelValidationError(f"{label} must be a string")
-    if not value.startswith("target_") or any(character.isspace() for character in value):
+    if not _is_canonical_revision_id(value, "target_"):
         raise ModelValidationError(
             f"{label} must be a canonical patch target id such as target_opening_first_pivots"
         )
@@ -3379,11 +3379,21 @@ def _validate_patch_target_id(value: object, label: str) -> None:
 def _validate_patch_span_id(value: object, label: str) -> None:
     if not isinstance(value, str):
         raise ModelValidationError(f"{label} must be a string")
-    if not value.startswith("span_") or any(character.isspace() for character in value):
+    if not _is_canonical_revision_id(value, "span_"):
         raise ModelValidationError(
             f"{label} must be a canonical patch span id such as "
             "span_target_opening_first_pivots_p02_s01"
         )
+
+
+def _is_canonical_revision_id(value: str, prefix: str) -> bool:
+    if not value.startswith(prefix):
+        return False
+    if value != value.lower():
+        return False
+    if "__" in value or value.endswith("_"):
+        return False
+    return all(character.isalnum() or character == "_" for character in value)
 
 
 def _validate_revision_patch(payload: dict[str, Any], label: str) -> dict[str, object]:

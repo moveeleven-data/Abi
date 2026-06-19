@@ -174,6 +174,8 @@ def _build_autonomous_revision_prompt(input_text: str) -> str:
     return (
         "Return strict JSON matching the schema for one autonomous closed-loop revision "
         "worker. Use the reader-lab evidence and prior_outputs supplied in the prompt. "
+        "Treat revision_work_order as the only legal source for target, span, "
+        "ablation, and provenance IDs; do not invent or redefine control-plane IDs. "
         "Keep the recomposition bounded to the selected causal handle; do not rewrite "
         "the whole artifact. Preserve domestic object-world pressure, morning stillness, "
         "incremental patterning, quiet philosophical pressure, and strongest-rival "
