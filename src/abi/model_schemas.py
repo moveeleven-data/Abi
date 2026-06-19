@@ -373,11 +373,15 @@ AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA = WorkerSchema(
     artifact_type="causal_handle_selection",
 )
 
-AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA = WorkerSchema(
-    name="AutonomousRevisionRevisedCandidateOutput",
+AUTONOMOUS_REVISION_PATCH_PROPOSAL_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionPatchProposalOutput",
     version="1",
-    artifact_type="revised_candidate_text",
+    artifact_type="revision_patch_proposal",
 )
+
+# Compatibility alias for older revision-worker call sites. The model worker now
+# proposes bounded patches; the controller owns revised_candidate_text assembly.
+AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA = AUTONOMOUS_REVISION_PATCH_PROPOSAL_SCHEMA
 
 AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA = WorkerSchema(
     name="AutonomousRevisionDiffReportOutput",
@@ -412,8 +416,7 @@ AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA = WorkerSchema(
 AUTONOMOUS_REVISION_MODEL_SCHEMAS = (
     AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
-    AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
-    AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
+    AUTONOMOUS_REVISION_PATCH_PROPOSAL_SCHEMA,
     AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
     AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
     AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
@@ -1462,6 +1465,61 @@ def _revision_changed_span_schema() -> dict[str, Any]:
     )
 
 
+AUTONOMOUS_REVISION_PATCH_OPERATIONS = (
+    "replace",
+    "insert_after",
+    "insert_before",
+    "delete",
+    "compress",
+)
+
+
+def _revision_patch_operation_schema() -> dict[str, Any]:
+    return {
+        "type": "string",
+        "enum": list(AUTONOMOUS_REVISION_PATCH_OPERATIONS),
+    }
+
+
+def _revision_patch_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "patch_id": {"type": "string"},
+            "target_span_ref": _revision_span_ref_schema(),
+            "target_region_label": {"type": "string"},
+            "operation": _revision_patch_operation_schema(),
+            "original_excerpt": {"type": "string"},
+            "replacement_text": {"type": "string"},
+            "inserted_text": {"type": "string"},
+            "failure_addressed": {"type": "string"},
+            "causal_handle_id": {"type": "string"},
+            "protected_effects": _string_array_schema(),
+            "forbidden_changes_respected": _string_array_schema(),
+            "requires_target_expansion": {"type": "boolean"},
+            "target_expansion_reason": {"type": "string"},
+            "confidence": {"type": "number"},
+            "uncertainty": {"type": "string"},
+        },
+        [
+            "patch_id",
+            "target_span_ref",
+            "target_region_label",
+            "operation",
+            "original_excerpt",
+            "replacement_text",
+            "inserted_text",
+            "failure_addressed",
+            "causal_handle_id",
+            "protected_effects",
+            "forbidden_changes_respected",
+            "requires_target_expansion",
+            "target_expansion_reason",
+            "confidence",
+            "uncertainty",
+        ],
+    )
+
+
 def _revision_variant_schema() -> dict[str, Any]:
     return _object_schema(
         {
@@ -1656,15 +1714,18 @@ def autonomous_revision_causal_handle_json_schema() -> dict[str, Any]:
 def autonomous_revision_revised_candidate_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
-            "candidate_id": {"type": "string"},
+            "proposal_id": {"type": "string"},
             "source_candidate_artifact_id": {"type": "string"},
-            "text": {"type": "string"},
             "targeted_causal_handle": {"type": "string"},
-            "bounded_recomposition": {"type": "boolean"},
+            "target_region_label": {"type": "string"},
+            "patches": {"type": "array", "items": _revision_patch_schema()},
+            "bounded_patch_set": {"type": "boolean"},
             "full_rewrite": {"type": "boolean"},
-            "changed_region": {"type": "string"},
-            "preserved_protected_effects": _string_array_schema(),
-            "forbidden_changes_honored": _string_array_schema(),
+            "target_region_expanded": {"type": "boolean"},
+            "expanded_target_region": {"type": "string"},
+            "expansion_reason": {"type": "string"},
+            "protected_effects": _string_array_schema(),
+            "forbidden_changes_respected": _string_array_schema(),
             "non_final": {"type": "boolean"},
             "candidate_only": {"type": "boolean"},
             "not_human_validated": {"type": "boolean"},
@@ -1676,15 +1737,18 @@ def autonomous_revision_revised_candidate_json_schema() -> dict[str, Any]:
             "not_human_data": {"type": "boolean"},
         },
         [
-            "candidate_id",
+            "proposal_id",
             "source_candidate_artifact_id",
-            "text",
             "targeted_causal_handle",
-            "bounded_recomposition",
+            "target_region_label",
+            "patches",
+            "bounded_patch_set",
             "full_rewrite",
-            "changed_region",
-            "preserved_protected_effects",
-            "forbidden_changes_honored",
+            "target_region_expanded",
+            "expanded_target_region",
+            "expansion_reason",
+            "protected_effects",
+            "forbidden_changes_respected",
             "non_final",
             "candidate_only",
             "not_human_validated",
@@ -2907,17 +2971,32 @@ def _validate_autonomous_revision_causal_handle(payload: dict[str, Any]) -> dict
 
 def _validate_autonomous_revision_revised_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     for key in (
-        "candidate_id",
+        "proposal_id",
         "source_candidate_artifact_id",
-        "text",
         "targeted_causal_handle",
-        "changed_region",
+        "target_region_label",
+        "expanded_target_region",
+        "expansion_reason",
     ):
         _require_type(payload, key, str)
-    for key in ("preserved_protected_effects", "forbidden_changes_honored"):
+    _require_object_list(payload, "patches")
+    patches = [
+        _validate_revision_patch(patch, f"patches[{index}]")
+        for index, patch in enumerate(payload["patches"])
+    ]
+    if not patches:
+        raise ModelValidationError("patches must not be empty")
+    for key in ("protected_effects", "forbidden_changes_respected"):
         _require_string_list(payload, key)
-    _require_true(payload, "bounded_recomposition")
+    _require_true(payload, "bounded_patch_set")
     _require_false(payload, "full_rewrite")
+    _require_type(payload, "target_region_expanded", bool)
+    if payload["target_region_expanded"]:
+        for key in ("expanded_target_region", "expansion_reason"):
+            if not payload[key].strip():
+                raise ModelValidationError(
+                    f"{key} is required when target_region_expanded is true"
+                )
     _require_true(payload, "non_final")
     _require_true(payload, "candidate_only")
     _require_true(payload, "not_human_validated")
@@ -2927,18 +3006,19 @@ def _validate_autonomous_revision_revised_candidate(payload: dict[str, Any]) -> 
     _require_false(payload, "phase_shift_claim")
     _require_true(payload, "no_phase_shift_claim")
     _require_true(payload, "not_human_data")
-    if len(payload["text"].split()) < 20:
-        raise ModelValidationError("revised candidate text is too short for closed-loop revision")
     return {
-        "candidate_id": payload["candidate_id"],
+        "proposal_id": payload["proposal_id"],
         "source_candidate_artifact_id": payload["source_candidate_artifact_id"],
-        "text": payload["text"],
         "targeted_causal_handle": payload["targeted_causal_handle"],
-        "bounded_recomposition": True,
+        "target_region_label": payload["target_region_label"],
+        "patches": patches,
+        "bounded_patch_set": True,
         "full_rewrite": False,
-        "changed_region": payload["changed_region"],
-        "preserved_protected_effects": payload["preserved_protected_effects"],
-        "forbidden_changes_honored": payload["forbidden_changes_honored"],
+        "target_region_expanded": payload["target_region_expanded"],
+        "expanded_target_region": payload["expanded_target_region"],
+        "expansion_reason": payload["expansion_reason"],
+        "protected_effects": payload["protected_effects"],
+        "forbidden_changes_respected": payload["forbidden_changes_respected"],
         "non_final": True,
         "candidate_only": True,
         "not_human_validated": True,
@@ -3202,6 +3282,67 @@ def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, obj
     validated["inside_target"] = payload["inside_target"]
     validated["within_selected_target"] = payload["within_selected_target"]
     validated["requires_target_expansion"] = payload["requires_target_expansion"]
+    return validated
+
+
+def _validate_revision_patch(payload: dict[str, Any], label: str) -> dict[str, object]:
+    validated = _validate_object(
+        payload,
+        label,
+        (
+            "patch_id",
+            "target_region_label",
+            "operation",
+            "original_excerpt",
+            "replacement_text",
+            "inserted_text",
+            "failure_addressed",
+            "causal_handle_id",
+            "target_expansion_reason",
+            "uncertainty",
+        ),
+    )
+    _require_type(payload, "target_span_ref", dict, field_prefix=f"{label}.")
+    validated["target_span_ref"] = _validate_revision_span_ref(
+        payload["target_span_ref"],
+        f"{label}.target_span_ref",
+    )
+    if payload["operation"] not in AUTONOMOUS_REVISION_PATCH_OPERATIONS:
+        raise ModelValidationError(
+            f"{label}.operation must be one of {list(AUTONOMOUS_REVISION_PATCH_OPERATIONS)}"
+        )
+    _require_string_list(payload, "protected_effects", field_prefix=f"{label}.")
+    _require_string_list(payload, "forbidden_changes_respected", field_prefix=f"{label}.")
+    _require_type(payload, "requires_target_expansion", bool, field_prefix=f"{label}.")
+    _require_number(payload, "confidence", field_prefix=f"{label}.")
+    operation = str(payload["operation"])
+    original_excerpt = str(payload["original_excerpt"]).strip()
+    replacement_text = str(payload["replacement_text"]).strip()
+    inserted_text = str(payload["inserted_text"]).strip()
+    if operation in {"replace", "compress"} and (
+        not original_excerpt or not replacement_text
+    ):
+        raise ModelValidationError(
+            f"{label}.original_excerpt and replacement_text are required for {operation}"
+        )
+    if operation in {"insert_after", "insert_before"} and (
+        not original_excerpt or not inserted_text
+    ):
+        raise ModelValidationError(
+            f"{label}.original_excerpt and inserted_text are required for {operation}"
+        )
+    if operation == "delete" and not original_excerpt:
+        raise ModelValidationError(f"{label}.original_excerpt is required for delete")
+    if payload["requires_target_expansion"] and not payload[
+        "target_expansion_reason"
+    ].strip():
+        raise ModelValidationError(
+            f"{label}.target_expansion_reason is required when target expansion is required"
+        )
+    validated["protected_effects"] = payload["protected_effects"]
+    validated["forbidden_changes_respected"] = payload["forbidden_changes_respected"]
+    validated["requires_target_expansion"] = payload["requires_target_expansion"]
+    validated["confidence"] = payload["confidence"]
     return validated
 
 

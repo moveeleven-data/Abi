@@ -69,6 +69,7 @@ AUTONOMOUS_REVISION_ARTIFACT_TYPES = (
     "autonomous_revision_subject_manifest",
     "selected_failure_diagnosis",
     "causal_handle_selection",
+    "revision_patch_proposal",
     "revised_candidate_text",
     "revision_diff_report",
     "ablation_variant_set",
@@ -96,17 +97,8 @@ AUTONOMOUS_REVISION_WORKERS = (
     AutonomousRevisionWorkerSpec(
         schema=AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
         worker_role=WorkerRole.AUTONOMOUS_REVISION_CANDIDATE_REVISER,
-        prompt_contract_id=f"{AUTONOMOUS_REVISION_PROMPT_CONTRACT_PREFIX}.candidate_reviser.v1",
+        prompt_contract_id=f"{AUTONOMOUS_REVISION_PROMPT_CONTRACT_PREFIX}.patch_reviser.v1",
         parent_artifact_types=(AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type,),
-    ),
-    AutonomousRevisionWorkerSpec(
-        schema=AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
-        worker_role=WorkerRole.AUTONOMOUS_REVISION_DIFF_REPORTER,
-        prompt_contract_id=f"{AUTONOMOUS_REVISION_PROMPT_CONTRACT_PREFIX}.diff_reporter.v1",
-        parent_artifact_types=(
-            AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type,
-            AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type,
-        ),
     ),
     AutonomousRevisionWorkerSpec(
         schema=AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
@@ -114,7 +106,7 @@ AUTONOMOUS_REVISION_WORKERS = (
         prompt_contract_id=f"{AUTONOMOUS_REVISION_PROMPT_CONTRACT_PREFIX}.ablation_variants.v1",
         parent_artifact_types=(
             AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type,
-            AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type,
+            "revised_candidate_text",
         ),
     ),
     AutonomousRevisionWorkerSpec(
@@ -128,7 +120,7 @@ AUTONOMOUS_REVISION_WORKERS = (
         worker_role=WorkerRole.AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARATOR,
         prompt_contract_id=f"{AUTONOMOUS_REVISION_PROMPT_CONTRACT_PREFIX}.old_new_rival.v1",
         parent_artifact_types=(
-            AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type,
+            "revised_candidate_text",
             AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA.artifact_type,
             AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA.artifact_type,
         ),
@@ -402,28 +394,42 @@ def _write_fake_revision_packet(
         ],
     )
 
-    payloads["revised_candidate_text"] = _build_revised_candidate_text(
+    payloads["revision_patch_proposal"] = _build_revision_patch_proposal(
         subject,
         payloads["causal_handle_selection"],
     )
-    artifacts["revised_candidate_text"] = writer.write_artifact(
-        "revised_candidate_text",
-        payloads["revised_candidate_text"],
+    artifacts["revision_patch_proposal"] = writer.write_artifact(
+        "revision_patch_proposal",
+        payloads["revision_patch_proposal"],
         parent_ids=[
             artifacts["causal_handle_selection"].id,
             subject.candidate_text.artifact_id,
         ],
     )
 
-    payloads["revision_diff_report"] = _build_revision_diff_report(
+    controller_payloads = _build_controller_revision_from_patches(
         subject,
         payloads["causal_handle_selection"],
-        payloads["revised_candidate_text"],
+        payloads["revision_patch_proposal"],
+        fixture_only=True,
     )
+    payloads["revised_candidate_text"] = controller_payloads["revised_candidate_text"]
+    artifacts["revised_candidate_text"] = writer.write_artifact(
+        "revised_candidate_text",
+        payloads["revised_candidate_text"],
+        parent_ids=[
+            artifacts["revision_patch_proposal"].id,
+            artifacts["causal_handle_selection"].id,
+            subject.candidate_text.artifact_id,
+        ],
+    )
+
+    payloads["revision_diff_report"] = controller_payloads["revision_diff_report"]
     artifacts["revision_diff_report"] = writer.write_artifact(
         "revision_diff_report",
         payloads["revision_diff_report"],
         parent_ids=[
+            artifacts["revision_patch_proposal"].id,
             artifacts["causal_handle_selection"].id,
             artifacts["revised_candidate_text"].id,
         ],
@@ -661,6 +667,62 @@ def _run_live_autonomous_revision(
             )
         artifacts[worker.artifact_type] = result.parsed_artifact
         payloads[worker.artifact_type] = result.parsed_payload
+        if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+            try:
+                controller_payloads = _build_controller_revision_from_patches(
+                    subject,
+                    payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type],
+                    result.parsed_payload,
+                    fixture_only=fixture_only,
+                )
+            except RevisionIntegrityError as error:
+                return _live_failure_result(
+                    client_name=client_name,
+                    model=model,
+                    subject=subject,
+                    packet_dir=output_dir,
+                    artifacts=artifacts,
+                    payloads=payloads,
+                    model_results=model_results,
+                    message=(
+                        "Autonomous revision stopped by controller patch validation "
+                        f"failure: {error}"
+                    ),
+                )
+            with connect(config.db_path) as connection:
+                writer = PacketWriter(
+                    connection=connection,
+                    run_id=subject.run_id,
+                    packet_dir=output_dir,
+                    lineage_id=AUTONOMOUS_REVISION_LINEAGE_ID,
+                    created_by="autonomous_closed_loop_revision_v1_controller",
+                    fixture_only=fixture_only,
+                    model_call_id=None,
+                )
+                payloads["revised_candidate_text"] = controller_payloads[
+                    "revised_candidate_text"
+                ]
+                artifacts["revised_candidate_text"] = writer.write_artifact(
+                    "revised_candidate_text",
+                    payloads["revised_candidate_text"],
+                    parent_ids=[
+                        artifacts[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type].id,
+                        artifacts[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type].id,
+                        subject.candidate_text.artifact_id,
+                    ],
+                )
+                payloads["revision_diff_report"] = controller_payloads[
+                    "revision_diff_report"
+                ]
+                artifacts["revision_diff_report"] = writer.write_artifact(
+                    "revision_diff_report",
+                    payloads["revision_diff_report"],
+                    parent_ids=[
+                        artifacts[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type].id,
+                        artifacts["revised_candidate_text"].id,
+                        artifacts[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type].id,
+                    ],
+                )
 
     try:
         integrity_report = _validate_revision_integrity(subject, payloads)
@@ -863,10 +925,10 @@ def _prompt_for_revision_worker(
         prompt["selected_target_contract"] = selected_target
     if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
         prompt["candidate_reviser_target_contract"] = (
-            "Edit only inside selected_target_contract.allowed_span_refs. Do not silently "
-            "change outside that target. If the selected causal handle truly requires a "
-            "larger target, keep the revision bounded and make the diff reporter declare "
-            "target_region_expanded with changed spans outside the original target."
+            "Return patch operations only, not a full revised artifact. Each patch must "
+            "target selected_target_contract.allowed_span_refs unless it explicitly marks "
+            "requires_target_expansion with a target_expansion_reason. The controller, "
+            "not the model, applies accepted patches and assembles revised_candidate_text."
         )
     if worker.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
         prompt["revision_diff_integrity_contract"] = (
@@ -913,6 +975,22 @@ def _validator_for_revision_worker(
     worker: AutonomousRevisionWorkerSpec,
     payloads: dict[str, dict[str, Any]],
 ):
+    if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+        handle = payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
+
+        def _validate_patch_proposal(parsed_payload: dict[str, object]) -> None:
+            try:
+                _build_controller_revision_from_patches(
+                    subject,
+                    handle,
+                    parsed_payload,
+                    fixture_only=False,
+                )
+            except RevisionIntegrityError as error:
+                raise ModelValidationError(str(error)) from error
+
+        return _validate_patch_proposal
+
     if worker.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
 
         def _validate_diff(parsed_payload: dict[str, object]) -> None:
@@ -985,6 +1063,226 @@ def _validate_revision_integrity(
         "ablation": ablation_report,
         "old_new_rival_provenance": provenance_report,
     }
+
+
+def _build_controller_revision_from_patches(
+    subject: RevisionSubject,
+    handle: dict[str, Any],
+    patch_proposal: dict[str, Any],
+    *,
+    fixture_only: bool,
+) -> dict[str, dict[str, Any]]:
+    original = subject.candidate_text.text
+    revised = original
+    patch_ids = []
+    expansion_required = bool(patch_proposal["target_region_expanded"])
+    expansion_reasons = []
+    allowed_span_refs = [str(ref) for ref in handle["allowed_span_refs"]]
+    selected_target_region = str(handle["span_ref"]["region"])
+
+    for patch in patch_proposal["patches"]:
+        _validate_patch_target(
+            patch=patch,
+            allowed_span_refs=allowed_span_refs,
+            target_region_label=str(handle["target_region_label"]),
+            proposal_expands_target=bool(patch_proposal["target_region_expanded"]),
+        )
+        revised = _apply_patch_operation(revised, patch)
+        patch_ids.append(str(patch["patch_id"]))
+        if bool(patch["requires_target_expansion"]):
+            expansion_required = True
+            expansion_reasons.append(str(patch["target_expansion_reason"]))
+
+    if revised == original:
+        raise RevisionIntegrityError("patch proposal produced no text change")
+
+    candidate_id = f"autonomous_revision_{sha256_text(revised)[:12]}"
+    changed_spans = _controller_changed_spans_from_patches(
+        original=original,
+        revised=revised,
+        target_region=selected_target_region,
+        patch_ids=patch_ids,
+        expansion_reason=_first_nonempty(
+            [
+                str(patch_proposal["expansion_reason"]),
+                *expansion_reasons,
+            ]
+        ),
+    )
+    diff_payload = {
+        "worker": "revision_diff_report_v1_controller",
+        "assembled_by_controller": True,
+        "source_patch_ids": patch_ids,
+        "source_patch_proposal_id": patch_proposal["proposal_id"],
+        "full_rewrite": False,
+        "bounded_change": True,
+        "operation_type": _operation_summary(patch_proposal["patches"]),
+        "target_region": selected_target_region,
+        **_target_contract_from_handle(handle),
+        "causal_handle": str(handle["causal_handle"]),
+        "operation": {
+            "type": _operation_summary(patch_proposal["patches"]),
+            "target_region": selected_target_region,
+            "causal_handle": str(handle["causal_handle"]),
+            "source_patch_ids": patch_ids,
+        },
+        "original_excerpt": _first_sentence(original),
+        "revised_excerpt": _first_two_sentences(revised),
+        "changed_spans": changed_spans,
+        "target_region_expanded": expansion_required,
+        "expanded_target_region": (
+            str(patch_proposal["expanded_target_region"]) if expansion_required else ""
+        ),
+        "expansion_reason": _first_nonempty(
+            [
+                str(patch_proposal["expansion_reason"]),
+                *expansion_reasons,
+            ]
+        )
+        if expansion_required
+        else "",
+        "target_expansion_justification": _first_nonempty(
+            [
+                str(patch_proposal["expansion_reason"]),
+                *expansion_reasons,
+            ]
+        )
+        if expansion_required
+        else "",
+        "protected_effects_preserved": list(patch_proposal["protected_effects"]),
+        "forbidden_changes_honored": list(patch_proposal["forbidden_changes_respected"]),
+        "explanation": "Controller assembled the authoritative diff from accepted patches.",
+        "fixture_only": fixture_only,
+        "not_human_data": True,
+    }
+    revised_payload = {
+        "worker": "bounded_targeted_recomposer_v1_controller",
+        "assembled_by_controller": True,
+        "source_patch_ids": patch_ids,
+        "source_patch_proposal_id": patch_proposal["proposal_id"],
+        "candidate_id": candidate_id,
+        "source_candidate_artifact_id": subject.candidate_text.artifact_id,
+        "text": revised,
+        "text_sha256": sha256_text(revised),
+        "original_text_sha256": sha256_text(original),
+        "targeted_causal_handle": str(handle["causal_handle"]),
+        "bounded_recomposition": True,
+        "full_rewrite": False,
+        "changed_region": selected_target_region,
+        "target_region_expanded": expansion_required,
+        "preserved_protected_effects": list(patch_proposal["protected_effects"]),
+        "forbidden_changes_honored": list(patch_proposal["forbidden_changes_respected"]),
+        "non_final": True,
+        "candidate_only": True,
+        "not_human_validated": True,
+        "human_validated": False,
+        "not_finalization_eligible": True,
+        "finalization_eligible": False,
+        "phase_shift_claim": False,
+        "no_phase_shift_claim": True,
+        "no_final_claim": True,
+        "fixture_only": fixture_only,
+        "not_human_data": True,
+    }
+    payloads = {
+        "revised_candidate_text": revised_payload,
+        "revision_diff_report": diff_payload,
+    }
+    _validate_diff_integrity(
+        subject,
+        {
+            "causal_handle_selection": handle,
+            "revised_candidate_text": revised_payload,
+            "revision_diff_report": diff_payload,
+        },
+    )
+    return payloads
+
+
+def _validate_patch_target(
+    *,
+    patch: dict[str, Any],
+    allowed_span_refs: list[str],
+    target_region_label: str,
+    proposal_expands_target: bool,
+) -> None:
+    patch_id = str(patch["patch_id"])
+    target_span_ref = patch["target_span_ref"]
+    patch_region = str(target_span_ref["region"])
+    region_allowed = any(
+        _region_matches_target(patch_region, allowed)
+        or _region_matches_target(allowed, patch_region)
+        for allowed in allowed_span_refs
+    )
+    label_allowed = str(patch["target_region_label"]) == target_region_label
+    if region_allowed and label_allowed and not bool(patch["requires_target_expansion"]):
+        return
+    expansion_reported = (
+        proposal_expands_target
+        and bool(patch["requires_target_expansion"])
+        and bool(str(patch["target_expansion_reason"]).strip())
+    )
+    if not expansion_reported:
+        raise RevisionIntegrityError(
+            f"patch {patch_id} targets disallowed span {patch_region!r} "
+            f"without explicit target expansion"
+        )
+
+
+def _apply_patch_operation(text: str, patch: dict[str, Any]) -> str:
+    operation = str(patch["operation"])
+    original_excerpt = str(patch["original_excerpt"])
+    replacement_text = str(patch["replacement_text"])
+    inserted_text = str(patch["inserted_text"])
+    patch_id = str(patch["patch_id"])
+    if original_excerpt not in text:
+        raise RevisionIntegrityError(
+            f"patch {patch_id} original_excerpt does not appear in candidate text"
+        )
+    if operation in {"replace", "compress"}:
+        return text.replace(original_excerpt, replacement_text, 1)
+    if operation == "delete":
+        return text.replace(original_excerpt, "", 1)
+    if operation == "insert_after":
+        return text.replace(original_excerpt, f"{original_excerpt} {inserted_text}", 1)
+    if operation == "insert_before":
+        return text.replace(original_excerpt, f"{inserted_text} {original_excerpt}", 1)
+    raise RevisionIntegrityError(f"patch {patch_id} has unsupported operation {operation!r}")
+
+
+def _controller_changed_spans_from_patches(
+    *,
+    original: str,
+    revised: str,
+    target_region: str,
+    patch_ids: list[str],
+    expansion_reason: str,
+) -> list[dict[str, object]]:
+    spans = _reported_changed_spans_for_texts(
+        original,
+        revised,
+        target_region,
+        "controller-applied patch operation",
+    )
+    patch_id_summary = ",".join(patch_ids)
+    for span in spans:
+        span["source_patch_ids"] = patch_ids
+        span["reason"] = f"controller-applied patch ids: {patch_id_summary}"
+        if bool(span["requires_target_expansion"]):
+            span["target_expansion_reason"] = expansion_reason
+    return spans
+
+
+def _operation_summary(patches: list[dict[str, Any]]) -> str:
+    operations = sorted({str(patch["operation"]) for patch in patches})
+    return "+".join(operations)
+
+
+def _first_nonempty(values: list[str]) -> str:
+    for value in values:
+        if value.strip():
+            return value.strip()
+    return ""
 
 
 def _validate_diff_integrity(
@@ -1483,18 +1781,40 @@ def _fake_model_revised_candidate_payload(
 ) -> dict[str, Any]:
     candidate = prompt["candidate"]
     original = str(candidate["text"])
-    revision = _bounded_revision(original)
     handle = prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
+    first_sentence = _first_sentence(original)
+    inserted_text = _revision_insertion_text()
     return {
-        "candidate_id": f"autonomous_live_revision_{sha256_text(revision)[:12]}",
+        "proposal_id": f"revision_patch_{sha256_text(first_sentence + inserted_text)[:12]}",
         "source_candidate_artifact_id": str(candidate["artifact_id"]),
-        "text": revision,
         "targeted_causal_handle": str(handle["causal_handle"]),
-        "bounded_recomposition": True,
+        "target_region_label": str(handle["target_region_label"]),
+        "patches": [
+            {
+                "patch_id": "patch_01",
+                "target_span_ref": dict(handle["span_ref"]),
+                "target_region_label": str(handle["target_region_label"]),
+                "operation": "insert_after",
+                "original_excerpt": first_sentence,
+                "replacement_text": "",
+                "inserted_text": inserted_text,
+                "failure_addressed": str(handle["suspected_failure"]),
+                "causal_handle_id": str(handle["causal_handle"]),
+                "protected_effects": list(handle["protected_effects"]),
+                "forbidden_changes_respected": list(handle["forbidden_changes"]),
+                "requires_target_expansion": False,
+                "target_expansion_reason": "",
+                "confidence": 0.62,
+                "uncertainty": "patch proposal is model-guided internal evidence only",
+            }
+        ],
+        "bounded_patch_set": True,
         "full_rewrite": False,
-        "changed_region": str(handle["span_ref"]["region"]),
-        "preserved_protected_effects": list(handle["protected_effects"]),
-        "forbidden_changes_honored": list(handle["forbidden_changes"]),
+        "target_region_expanded": False,
+        "expanded_target_region": "",
+        "expansion_reason": "",
+        "protected_effects": list(handle["protected_effects"]),
+        "forbidden_changes_respected": list(handle["forbidden_changes"]),
         "non_final": True,
         "candidate_only": True,
         "not_human_validated": True,
@@ -1513,7 +1833,7 @@ def _fake_model_diff_payload(
 ) -> dict[str, Any]:
     original = str(prompt["candidate"]["text"])
     handle = prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
-    revised = prior_payloads[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type]
+    revised = _prior_revised_candidate_payload(prompt, prior_payloads)
     target_region = str(handle["span_ref"]["region"])
     target_contract = _target_contract_from_handle(handle)
     return {
@@ -1548,7 +1868,7 @@ def _fake_model_ablation_variants_payload(
 ) -> dict[str, Any]:
     original = str(prompt["candidate"]["text"])
     handle = prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
-    revised = prior_payloads[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type]
+    revised = _prior_revised_candidate_payload(prompt, prior_payloads)
     revised_text = str(revised["text"])
     operations = (
         (
@@ -1649,7 +1969,7 @@ def _fake_model_old_new_rival_payload(
     prior_payloads: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     original = str(prompt["candidate"]["text"])
-    revised = prior_payloads[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type]
+    revised = _prior_revised_candidate_payload(prompt, prior_payloads)
     rival = prompt.get("strongest_rival")
     original_score = _score_text(original)
     revised_score = _score_text(str(revised["text"]))
@@ -1681,6 +2001,19 @@ def _fake_model_old_new_rival_payload(
         "judgment_rationale": _default_judgment_rationale(rival_score is not None),
         "not_human_data": True,
     }
+
+
+def _prior_revised_candidate_payload(
+    prompt: dict[str, Any],
+    prior_payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    prior_outputs = prompt.get("prior_outputs")
+    if isinstance(prior_outputs, dict) and isinstance(
+        prior_outputs.get("revised_candidate_text"),
+        dict,
+    ):
+        return prior_outputs["revised_candidate_text"]
+    return prior_payloads["revised_candidate_text"]
 
 
 def _fake_model_local_law_payload(
@@ -1931,25 +2264,45 @@ def _build_causal_handle_selection(
     }
 
 
-def _build_revised_candidate_text(
+def _build_revision_patch_proposal(
     subject: RevisionSubject,
     handle_selection: dict[str, Any],
 ) -> dict[str, Any]:
     original = subject.candidate_text.text
-    revision = _bounded_revision(original)
+    first_sentence = _first_sentence(original)
+    inserted_text = _revision_insertion_text()
     return {
-        "worker": "bounded_targeted_recomposer_v1_fake",
-        "candidate_id": f"autonomous_revision_{sha256_text(revision)[:12]}",
+        "worker": "revision_patch_proposal_v1_fake",
+        "proposal_id": f"revision_patch_{sha256_text(first_sentence + inserted_text)[:12]}",
         "source_candidate_artifact_id": subject.candidate_text.artifact_id,
-        "text": revision,
-        "text_sha256": sha256_text(revision),
-        "original_text_sha256": sha256_text(original),
         "targeted_causal_handle": handle_selection["causal_handle"],
-        "bounded_recomposition": True,
+        "target_region_label": handle_selection["target_region_label"],
+        "patches": [
+            {
+                "patch_id": "patch_01",
+                "target_span_ref": dict(handle_selection["span_ref"]),
+                "target_region_label": handle_selection["target_region_label"],
+                "operation": "insert_after",
+                "original_excerpt": first_sentence,
+                "replacement_text": "",
+                "inserted_text": inserted_text,
+                "failure_addressed": handle_selection["suspected_failure"],
+                "causal_handle_id": handle_selection["causal_handle"],
+                "protected_effects": list(handle_selection["protected_effects"]),
+                "forbidden_changes_respected": list(handle_selection["forbidden_changes"]),
+                "requires_target_expansion": False,
+                "target_expansion_reason": "",
+                "confidence": 0.62,
+                "uncertainty": "fake deterministic patch proposal cannot prove reader effect",
+            }
+        ],
+        "bounded_patch_set": True,
         "full_rewrite": False,
-        "changed_region": handle_selection["span_ref"]["region"],
-        "preserved_protected_effects": list(handle_selection["protected_effects"]),
-        "forbidden_changes_honored": list(handle_selection["forbidden_changes"]),
+        "target_region_expanded": False,
+        "expanded_target_region": "",
+        "expansion_reason": "",
+        "protected_effects": list(handle_selection["protected_effects"]),
+        "forbidden_changes_respected": list(handle_selection["forbidden_changes"]),
         "non_final": True,
         "candidate_only": True,
         "not_human_validated": True,
@@ -1959,6 +2312,7 @@ def _build_revised_candidate_text(
         "phase_shift_claim": False,
         "no_phase_shift_claim": True,
         "fixture_only": True,
+        "not_human_data": True,
     }
 
 
@@ -2560,10 +2914,7 @@ def _plan_item_for_failure(recomposition_plan: dict[str, Any], failure_type: str
 
 def _bounded_revision(original: str) -> str:
     sentences = _sentences(original)
-    insertion = (
-        "One ring of damp wood had darkened beneath the table leg. "
-        "It did not explain the night; it made the room answer to the morning."
-    )
+    insertion = _revision_insertion_text()
     if not sentences:
         return insertion
     if insertion.lower() in original.lower():
@@ -2573,6 +2924,13 @@ def _bounded_revision(original: str) -> str:
     if remainder:
         return f"{first} {insertion} {remainder}".strip()
     return f"{first} {insertion}"
+
+
+def _revision_insertion_text() -> str:
+    return (
+        "One ring of damp wood had darkened beneath the table leg. "
+        "It did not explain the night; it made the room answer to the morning."
+    )
 
 
 def _move_first_sentence_to_end(text: str) -> str:

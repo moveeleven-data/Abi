@@ -13,6 +13,7 @@ from abi.model_calls import MODEL_CALL_SUCCESS, MODEL_CALL_VALIDATION_FAILED, li
 from abi.model_schemas import (
     AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS,
     AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
+    AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
     AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
     AUTONOMOUS_REVISION_JUDGMENT_KEYS,
@@ -234,15 +235,15 @@ def valid_ablation_comparison_payload() -> dict[str, object]:
     }
 
 
-class UnreportedMaterialChangeClient(FakeAutonomousRevisionModelClient):
+class FullTextInjectionClient(FakeAutonomousRevisionModelClient):
     def generate(self, request):
         raw_output = super().generate(request)
         if request.schema != AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
             return raw_output
         payload = json.loads(raw_output)
         payload["text"] = (
-            str(payload["text"])
-            + " The cup by the sill made a second record that the diff never names."
+            "This injected full-text rewrite should not become authoritative. "
+            "The controller must ignore it and apply only accepted patches."
         )
         return dump_json(payload)
 
@@ -267,29 +268,36 @@ class TargetRegionViolationClient(FakeAutonomousRevisionModelClient):
         return raw_output
 
 
+class DisallowedPatchTargetClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+            patch = payload["patches"][0]
+            patch["target_span_ref"]["region"] = "ending paragraph only"
+            patch["target_region_label"] = "target_region:ending_paragraph_only"
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
 class ExplicitTargetExpansionClient(TargetRegionViolationClient):
     def generate(self, request):
         raw_output = super().generate(request)
         payload = json.loads(raw_output)
-        if request.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
-            payload["target_region"] = "opening paragraph plus ending paragraph"
+        if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
             payload["target_region_expanded"] = True
             payload["expanded_target_region"] = "opening paragraph plus ending paragraph"
             payload["expansion_reason"] = (
                 "The selected ending pressure depends on the opening object record."
             )
-            payload["target_expansion_justification"] = (
-                "The selected ending pressure depends on the opening object record, "
-                "so the repair explicitly expands the target."
+            patch = payload["patches"][0]
+            patch["target_span_ref"]["region"] = "opening paragraph"
+            patch["target_region_label"] = "target_region:opening_paragraph"
+            patch["requires_target_expansion"] = True
+            patch["target_expansion_reason"] = (
+                "Opening change is required to make the selected ending pressure legible."
             )
-            for span in payload["changed_spans"]:
-                span["inside_target"] = False
-                span["within_selected_target"] = False
-                span["requires_target_expansion"] = True
-                span["target_expansion_reason"] = (
-                    "Opening change is required to make the selected ending pressure legible."
-                )
-                span["region"] = "opening paragraph"
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
         return raw_output
@@ -402,8 +410,8 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
     assert result.payload["client"] == "fake"
     assert set(result.payload["artifact_ids"]) == set(AUTONOMOUS_REVISION_ARTIFACT_TYPES)
     assert result.payload["counts"] == {
-        "autonomous_revision_artifacts": 11,
-        "required_autonomous_revision_artifacts": 11,
+        "autonomous_revision_artifacts": 12,
+        "required_autonomous_revision_artifacts": 12,
         "model_calls": 0,
         "recorded_autonomous_gates": 5,
     }
@@ -438,8 +446,15 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
     ):
         assert handle[key]
 
+    patch_proposal = read_payload(result.payload["artifact_paths"]["revision_patch_proposal"])
+    assert patch_proposal["patches"]
+    assert patch_proposal["full_rewrite"] is False
+    assert patch_proposal["bounded_patch_set"] is True
+
     revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
     assert revised["text"]
+    assert revised["assembled_by_controller"] is True
+    assert revised["source_patch_ids"] == ["patch_01"]
     assert revised["bounded_recomposition"] is True
     assert revised["full_rewrite"] is False
     assert revised["non_final"] is True
@@ -450,9 +465,11 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
     assert revised["phase_shift_claim"] is False
 
     diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
+    assert diff["assembled_by_controller"] is True
+    assert diff["source_patch_ids"] == ["patch_01"]
     assert diff["full_rewrite"] is False
     assert diff["bounded_change"] is True
-    assert diff["operation"]["type"] == "append_local_consequence"
+    assert diff["operation"]["type"] == "insert_after"
 
     variants = read_payload(result.payload["artifact_paths"]["ablation_variant_set"])
     operations = {variant["operation"] for variant in variants["variants"]}
@@ -627,7 +644,15 @@ def test_autonomous_revision_model_schemas_are_strict_objects():
         assert exposed["required"]
         assert_strict_object_schema(exposed, path=schema.name)
 
-    variants_schema = json_schema_for_worker_schema(AUTONOMOUS_REVISION_MODEL_SCHEMAS[4])
+    patch_schema = json_schema_for_worker_schema(AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA)
+    patch_item = patch_schema["properties"]["patches"]["items"]
+    assert patch_item["type"] == "object"
+    assert patch_item["additionalProperties"] is False
+    assert "target_span_ref" in patch_item["required"]
+
+    variants_schema = json_schema_for_worker_schema(
+        AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA
+    )
     variant_item = variants_schema["properties"]["variants"]["items"]
     assert variant_item["type"] == "object"
     assert variant_item["additionalProperties"] is False
@@ -744,14 +769,14 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert result.payload["model"] == "stub-autonomous-revision-model"
     assert set(result.payload["artifact_ids"]) == set(AUTONOMOUS_REVISION_ARTIFACT_TYPES)
     assert result.payload["counts"] == {
-        "autonomous_revision_artifacts": 11,
-        "required_autonomous_revision_artifacts": 11,
-        "model_calls": 8,
+        "autonomous_revision_artifacts": 12,
+        "required_autonomous_revision_artifacts": 12,
+        "model_calls": 7,
         "recorded_autonomous_gates": 5,
     }
 
     model_calls = result.payload["model_calls"]
-    assert len(model_calls) == 8
+    assert len(model_calls) == 7
     assert {call["status"] for call in model_calls} == {MODEL_CALL_SUCCESS}
     assert {call["provider"] for call in model_calls} == {"openai"}
     assert {call["model"] for call in model_calls} == {"stub-autonomous-revision-model"}
@@ -762,7 +787,7 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     )
 
     client = clients[0]
-    assert len(client.requests) == 8
+    assert len(client.requests) == 7
     assert "reader_lab_payloads" in client.requests[0].input_text
     assert "source_texts" in client.requests[0].input_text
     reviser_request = next(
@@ -773,15 +798,10 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     reviser_prompt = json.loads(reviser_request.input_text)
     assert "selected_target_contract" in reviser_prompt
     assert "candidate_reviser_target_contract" in reviser_prompt
-    diff_request = next(
-        request
-        for request in client.requests
-        if request.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA
+    assert "Return patch operations only" in reviser_prompt["candidate_reviser_target_contract"]
+    assert not any(
+        request.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA for request in client.requests
     )
-    diff_prompt = json.loads(diff_request.input_text)
-    assert "selected_target_contract" in diff_prompt
-    assert "revision_diff_integrity_contract" in diff_prompt
-    assert "target_region_expanded" in diff_prompt["revision_diff_integrity_contract"]
     ablation_request = next(
         request
         for request in client.requests
@@ -809,7 +829,7 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
 
-    assert len(revision_calls) == 8
+    assert len(revision_calls) == 7
     artifact_by_type = {artifact.type: artifact for artifact in artifacts}
     for artifact_type in model_artifact_types:
         artifact = artifact_by_type[artifact_type]
@@ -822,6 +842,8 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
 
     for artifact_type in (
         "autonomous_revision_subject_manifest",
+        "revised_candidate_text",
+        "revision_diff_report",
         "autonomous_closed_loop_gate_report",
         "autonomous_closed_loop_packet",
     ):
@@ -843,7 +865,15 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert handle["allowed_span_refs"]
     assert handle["protected_outside_spans"]
 
+    patch_proposal = read_payload(result.payload["artifact_paths"]["revision_patch_proposal"])
+    assert patch_proposal["patches"]
+    assert "text" not in patch_proposal
+    assert patch_proposal["bounded_patch_set"] is True
+    assert patch_proposal["full_rewrite"] is False
+
     revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
+    assert revised["assembled_by_controller"] is True
+    assert revised["source_patch_ids"] == ["patch_01"]
     assert revised["bounded_recomposition"] is True
     assert revised["full_rewrite"] is False
     assert revised["non_final"] is True
@@ -851,6 +881,8 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert revised["not_finalization_eligible"] is True
 
     diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
+    assert diff["assembled_by_controller"] is True
+    assert diff["source_patch_ids"] == ["patch_01"]
     assert diff["bounded_change"] is True
     assert diff["changed_spans"]
     assert diff["target_region_expanded"] is False
@@ -925,7 +957,7 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert "paper" not in final_report.message.lower()
 
 
-def test_stubbed_openai_unreported_material_change_fails_closed(tmp_path):
+def test_stubbed_openai_full_text_injection_is_not_authoritative(tmp_path):
     config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
     clients: list[FakeAutonomousRevisionModelClient] = []
 
@@ -936,29 +968,17 @@ def test_stubbed_openai_unreported_material_change_fails_closed(tmp_path):
         allow_live_model=True,
         api_key="stub-key",
         model="stub-autonomous-revision-model",
-        client_factory=custom_revision_factory(clients, UnreportedMaterialChangeClient),
+        client_factory=custom_revision_factory(clients, FullTextInjectionClient),
     )
 
-    assert result.exit_code == 1
-    assert result.payload["accepted"] is False
-    assert "model-call failure" in result.payload["message"]
-    assert "revision_diff_report does not cover material text changes" in result.payload[
-        "message"
-    ]
-    assert result.payload["counts"]["model_calls"] == 4
-    failed_call = result.payload["model_calls"][-1]
-    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA.name
-    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
-    assert failed_call["parsed_output_artifact_id"] is None
-    assert "change_id=" in result.payload["message"]
-    assert "revision_diff_report" not in result.payload["artifact_ids"]
-    assert "ablation_variant_set" not in result.payload["artifact_ids"]
-    assert "ablation_reread_comparison" not in result.payload["artifact_ids"]
-    assert "old_new_rival_comparison" not in result.payload["artifact_ids"]
-    assert "local_law_case_note" not in result.payload["artifact_ids"]
-    assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
-    assert "autonomous_closed_loop_gate_report" not in result.payload["artifact_ids"]
-    assert result.payload["gate_report"] is None
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    patch_proposal = read_payload(result.payload["artifact_paths"]["revision_patch_proposal"])
+    revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
+    assert "text" not in patch_proposal
+    assert "injected full-text rewrite" not in revised["text"]
+    assert revised["assembled_by_controller"] is True
+    assert revised["source_patch_ids"] == ["patch_01"]
 
     with connect(config.db_path) as connection:
         revision_calls = [
@@ -972,9 +992,48 @@ def test_stubbed_openai_unreported_material_change_fails_closed(tmp_path):
             if artifact.type in AUTONOMOUS_REVISION_ARTIFACT_TYPES
         }
 
-    assert len(revision_calls) == 4
-    assert "revision_diff_report" not in revision_artifact_types
-    assert "ablation_variant_set" not in revision_artifact_types
+    assert len(revision_calls) == 7
+    assert "revision_patch_proposal" in revision_artifact_types
+    assert "revised_candidate_text" in revision_artifact_types
+    assert "revision_diff_report" in revision_artifact_types
+
+
+def test_stubbed_openai_disallowed_patch_target_fails_before_revision_artifacts(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, DisallowedPatchTargetClient),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "model-call failure" in result.payload["message"]
+    assert "targets disallowed span" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 3
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    for artifact_type in (
+        "revision_patch_proposal",
+        "revised_candidate_text",
+        "revision_diff_report",
+        "ablation_variant_set",
+        "ablation_reread_comparison",
+        "old_new_rival_comparison",
+        "local_law_case_note",
+        "autonomous_closed_loop_gate_report",
+        "autonomous_closed_loop_packet",
+    ):
+        assert artifact_type not in result.payload["artifact_ids"]
+    assert result.payload["gate_report"] is None
 
 
 def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
@@ -995,13 +1054,15 @@ def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
     assert result.payload["accepted"] is False
     assert "model-call failure" in result.payload["message"]
     assert "changes outside selected target region" in result.payload["message"]
-    assert result.payload["counts"]["model_calls"] == 4
+    assert result.payload["counts"]["model_calls"] == 3
     failed_call = result.payload["model_calls"][-1]
-    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA.name
+    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.name
     assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
     assert failed_call["parsed_output_artifact_id"] is None
     assert "inside_target=False" in result.payload["message"]
     assert "expansion_absent=True" in result.payload["message"]
+    assert "revision_patch_proposal" not in result.payload["artifact_ids"]
+    assert "revised_candidate_text" not in result.payload["artifact_ids"]
     assert "revision_diff_report" not in result.payload["artifact_ids"]
     assert "ablation_variant_set" not in result.payload["artifact_ids"]
     assert "ablation_reread_comparison" not in result.payload["artifact_ids"]
@@ -1028,7 +1089,9 @@ def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
 
-    assert len(revision_calls) == 4
+    assert len(revision_calls) == 3
+    assert "revision_patch_proposal" not in revision_artifact_types
+    assert "revised_candidate_text" not in revision_artifact_types
     assert "revision_diff_report" not in revision_artifact_types
     assert "ablation_variant_set" not in revision_artifact_types
     assert "autonomous_closed_loop_packet" not in revision_artifact_types
@@ -1120,7 +1183,7 @@ def test_stubbed_openai_invalid_ablation_alignment_fails_closed(tmp_path):
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "ablation_reread_comparison rows are not aligned" in result.payload["message"]
-    assert result.payload["counts"]["model_calls"] == 6
+    assert result.payload["counts"]["model_calls"] == 5
     failed_call = result.payload["model_calls"][-1]
     assert failed_call["schema_name"] == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA.name
     assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
@@ -1145,7 +1208,7 @@ def test_stubbed_openai_invalid_ablation_alignment_fails_closed(tmp_path):
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
 
-    assert len(revision_calls) == 6
+    assert len(revision_calls) == 5
     revision_artifact_types = {
         artifact.type
         for artifact in artifacts
@@ -1179,7 +1242,7 @@ def test_stubbed_openai_invalid_old_new_provenance_fails_closed(tmp_path):
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "model-call failure" in result.payload["message"]
-    assert result.payload["counts"]["model_calls"] == 7
+    assert result.payload["counts"]["model_calls"] == 6
     failed_call = result.payload["model_calls"][-1]
     assert (
         failed_call["schema_name"]
@@ -1205,7 +1268,7 @@ def test_stubbed_openai_invalid_old_new_provenance_fails_closed(tmp_path):
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
 
-    assert len(revision_calls) == 7
+    assert len(revision_calls) == 6
     revision_artifact_types = {
         artifact.type
         for artifact in artifacts
