@@ -11,6 +11,7 @@ from abi.controller.state import AUTONOMOUS_CLOSED_LOOP_REVISION_ACTIVE_PHASE, g
 from abi.db import connect
 from abi.model_calls import MODEL_CALL_SUCCESS, MODEL_CALL_VALIDATION_FAILED, list_model_calls
 from abi.model_schemas import (
+    AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS,
     AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
     AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
@@ -199,6 +200,40 @@ def valid_old_new_rival_payload() -> dict[str, object]:
     }
 
 
+def valid_ablation_comparison_payload() -> dict[str, object]:
+    return {
+        "candidate_label": "Text A",
+        "comparison_rows": [
+            {
+                "row_id": "comparison_variant_01",
+                "executed_variant_id": "variant_01",
+                "planned_probe_id": None,
+                "operation": "remove_suspected_causal_handle",
+                "planned_only": False,
+                "evidence_basis": "actual_ablation_variant",
+                "comparison_summary": "Executed variant isolates the suspected handle.",
+                "predicted_or_observed_effect": "reread pressure decreases predictably",
+                "rationale": "Uses an actual generated ablation variant, not a planned probe.",
+                "not_human_data": True,
+            },
+            {
+                "row_id": "comparison_planned_probe_01",
+                "executed_variant_id": None,
+                "planned_probe_id": "planned_probe_01",
+                "operation": "move_motif_earlier_later",
+                "planned_only": True,
+                "evidence_basis": "planned_ablation_probe",
+                "comparison_summary": "Planned probe is recorded without claiming execution.",
+                "predicted_or_observed_effect": "predicted effect only",
+                "rationale": "The probe has no generated variant yet.",
+                "not_human_data": True,
+            },
+        ],
+        "summary": "Ablation rows keep executed variants separate from planned probes.",
+        "not_human_data": True,
+    }
+
+
 class UnreportedMaterialChangeClient(FakeAutonomousRevisionModelClient):
     def generate(self, request):
         raw_output = super().generate(request)
@@ -249,13 +284,15 @@ class PlannedOnlyAblationClient(FakeAutonomousRevisionModelClient):
         if request.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
             payload["comparison_rows"].append(
                 {
-                    "variant_id": "planned_probe_99",
+                    "row_id": "comparison_planned_probe_99",
+                    "executed_variant_id": None,
+                    "planned_probe_id": "planned_probe_99",
                     "operation": "move_motif_earlier_later",
-                    "predicted_reread_pressure_delta": "planned_probe_only",
-                    "local_law_read": "planned probe, not executed ablation evidence",
-                    "pass_fail_criterion": "requires a generated variant before evidence use",
                     "planned_only": True,
-                    "evidence_basis": "planned_probe_only",
+                    "evidence_basis": "planned_ablation_probe",
+                    "comparison_summary": "planned probe, not executed ablation evidence",
+                    "predicted_or_observed_effect": "planned_probe_only",
+                    "rationale": "requires a generated variant before evidence use",
                     "not_human_data": True,
                 }
             )
@@ -271,13 +308,15 @@ class InvalidAblationComparisonClient(FakeAutonomousRevisionModelClient):
         if request.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
             payload["comparison_rows"].append(
                 {
-                    "variant_id": "missing_variant_99",
+                    "row_id": "comparison_missing_variant_99",
+                    "executed_variant_id": "missing_variant_99",
+                    "planned_probe_id": None,
                     "operation": "move_motif_earlier_later",
-                    "predicted_reread_pressure_delta": "claimed_executed_without_variant",
-                    "local_law_read": "bad row should fail controller integrity",
-                    "pass_fail_criterion": "must reference a variant or be planned_only",
                     "planned_only": False,
-                    "evidence_basis": "actual_variant_predicted_effect",
+                    "evidence_basis": "actual_ablation_variant",
+                    "comparison_summary": "bad row should fail before artifact registration",
+                    "predicted_or_observed_effect": "claimed_executed_without_variant",
+                    "rationale": "must reference a variant or be planned_only",
                     "not_human_data": True,
                 }
             )
@@ -576,6 +615,40 @@ def test_autonomous_revision_model_schemas_are_strict_objects():
     assert variant_item["additionalProperties"] is False
 
 
+def test_ablation_comparison_schema_distinguishes_executed_and_planned_rows():
+    schema = json_schema_for_worker_schema(AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA)
+    row_schema = schema["properties"]["comparison_rows"]["items"]
+
+    assert "variant_id" not in row_schema["properties"]
+    assert row_schema["properties"]["evidence_basis"]["enum"] == list(
+        AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS
+    )
+
+    parsed = parse_and_validate_structured_output(
+        dump_json(valid_ablation_comparison_payload()),
+        AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
+    )
+
+    executed_row = parsed["comparison_rows"][0]
+    planned_row = parsed["comparison_rows"][1]
+    assert executed_row["executed_variant_id"] == "variant_01"
+    assert executed_row["planned_probe_id"] is None
+    assert planned_row["planned_only"] is True
+    assert planned_row["executed_variant_id"] is None
+    assert planned_row["planned_probe_id"] == "planned_probe_01"
+
+
+def test_ablation_comparison_rejects_planned_row_with_executed_variant_id():
+    payload = valid_ablation_comparison_payload()
+    payload["comparison_rows"][1]["executed_variant_id"] = "variant_99"
+
+    with pytest.raises(ModelValidationError, match="executed_variant_id must be null"):
+        parse_and_validate_structured_output(
+            dump_json(payload),
+            AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
+        )
+
+
 def test_old_new_rival_provenance_schema_exposes_allowed_tokens():
     schema = json_schema_for_worker_schema(
         AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA
@@ -664,6 +737,18 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert len(client.requests) == 8
     assert "reader_lab_payloads" in client.requests[0].input_text
     assert "source_texts" in client.requests[0].input_text
+    ablation_request = next(
+        request
+        for request in client.requests
+        if request.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA
+    )
+    ablation_prompt = json.loads(ablation_request.input_text)
+    assert ablation_prompt["allowed_executed_ablation_variant_ids"] == [
+        f"variant_{index:02d}" for index in range(1, 9)
+    ]
+    assert "do not use short labels like v4" in ablation_prompt[
+        "ablation_comparison_contract"
+    ].lower()
 
     model_artifact_types = {schema.artifact_type for schema in AUTONOMOUS_REVISION_MODEL_SCHEMAS}
     with connect(config.db_path) as connection:
@@ -725,9 +810,14 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     variants = read_payload(result.payload["artifact_paths"]["ablation_variant_set"])
     assert variants["variants"]
     assert all(variant["executed"] is True for variant in variants["variants"])
+    executed_variant_ids = {variant["variant_id"] for variant in variants["variants"]}
     ablation = read_payload(result.payload["artifact_paths"]["ablation_reread_comparison"])
     assert ablation["comparison_rows"]
     assert all(row["planned_only"] is False for row in ablation["comparison_rows"])
+    assert {
+        row["executed_variant_id"] for row in ablation["comparison_rows"]
+    } == executed_variant_ids
+    assert {row["planned_probe_id"] for row in ablation["comparison_rows"]} == {None}
 
     comparison = read_payload(result.payload["artifact_paths"]["old_new_rival_comparison"])
     assert comparison["strongest_rival_present"] is True
@@ -866,11 +956,20 @@ def test_stubbed_openai_planned_only_ablation_is_not_executed_evidence(tmp_path)
     ablation = read_payload(result.payload["artifact_paths"]["ablation_reread_comparison"])
     planned_rows = [row for row in ablation["comparison_rows"] if row["planned_only"]]
     assert planned_rows
+    assert all(row["executed_variant_id"] is None for row in planned_rows)
+    assert all(row["planned_probe_id"] for row in planned_rows)
+    assert {row["evidence_basis"] for row in planned_rows} == {"planned_ablation_probe"}
 
     gate_report = read_payload(result.payload["artifact_paths"]["autonomous_closed_loop_gate_report"])
     evidence = gate_report["ablation_evidence"]
     assert evidence["planned_only_comparison_row_count"] == len(planned_rows)
+    assert evidence["planned_only_ablation_probe_count"] == len(planned_rows)
     assert evidence["ablation_variants_executed"] is True
+    assert evidence["executed_comparison_row_count"] == len(ablation["comparison_rows"]) - len(
+        planned_rows
+    )
+    assert evidence["predicted_only_comparison_row_count"] == len(ablation["comparison_rows"])
+    assert evidence["actual_ablation_comparison_evidence_count"] == 0
     assert evidence["ablation_comparison_predicted_only"] is True
     assert evidence["ablation_comparison_actually_evaluated"] is False
 
@@ -892,7 +991,43 @@ def test_stubbed_openai_invalid_ablation_alignment_fails_closed(tmp_path):
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "ablation_reread_comparison rows are not aligned" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 6
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "ablation_reread_comparison" not in result.payload["artifact_ids"]
+    assert "old_new_rival_comparison" not in result.payload["artifact_ids"]
+    assert "local_law_case_note" not in result.payload["artifact_ids"]
+    assert "autonomous_closed_loop_gate_report" not in result.payload["artifact_ids"]
     assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
+    assert result.payload["gate_report"] is None
+
+    with connect(config.db_path) as connection:
+        artifacts = list_artifacts(connection, result.payload["run_id"])
+        revision_calls = [
+            call
+            for call in list_model_calls(connection, run_id=result.payload["run_id"])
+            if call.prompt_contract_id.startswith("autonomous.revision.")
+        ]
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(revision_calls) == 6
+    revision_artifact_types = {
+        artifact.type
+        for artifact in artifacts
+        if artifact.type in AUTONOMOUS_REVISION_ARTIFACT_TYPES
+    }
+    assert "ablation_reread_comparison" not in revision_artifact_types
+    assert "old_new_rival_comparison" not in revision_artifact_types
+    assert "local_law_case_note" not in revision_artifact_types
+    assert "autonomous_closed_loop_gate_report" not in revision_artifact_types
+    assert "autonomous_closed_loop_packet" not in revision_artifact_types
+    assert final_report.refused is True
 
 
 def test_stubbed_openai_invalid_old_new_provenance_fails_closed(tmp_path):

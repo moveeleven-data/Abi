@@ -179,7 +179,9 @@ def _build_autonomous_revision_prompt(input_text: str) -> str:
         "incremental patterning, quiet philosophical pressure, and strongest-rival "
         "pressure. For old/new rival comparison, use judgment_provenance only for exact "
         "allowed source tokens supplied in the prompt packet; put explanatory prose in "
-        "judgment_rationale, never in provenance arrays. Do not claim finality, "
+        "judgment_rationale, never in provenance arrays. For ablation comparison, "
+        "executed rows must use exact allowed executed_variant_id values; non-executed "
+        "probes must be planned_only with planned_probe_id. Do not claim finality, "
         "validation, phase shift, human evidence, or paper readiness. Prompt packet:\n"
         f"{input_text}"
     )

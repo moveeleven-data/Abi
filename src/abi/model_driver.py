@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -67,6 +68,7 @@ class WorkerRequest:
     fixture_only: bool | None = True
     output_dir: str | None = None
     register_parsed_artifact: bool = True
+    parsed_payload_validator: Callable[[dict[str, object]], None] | None = None
 
     def input_hash(self) -> str:
         return sha256_text(
@@ -80,6 +82,7 @@ class WorkerRequest:
                     "input_artifact_ids": list(self.input_artifact_ids),
                     "input_packet_path": self.input_packet_path,
                     "register_parsed_artifact": self.register_parsed_artifact,
+                    "has_parsed_payload_validator": self.parsed_payload_validator is not None,
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -202,6 +205,8 @@ class ModelDriver:
         raw_output_path.write_text(raw_output, encoding="utf-8", newline="\n")
         try:
             parsed_payload = parse_and_validate_structured_output(raw_output, request.schema)
+            if request.parsed_payload_validator is not None:
+                request.parsed_payload_validator(parsed_payload)
         except ModelValidationError as error:
             return self._record_result(
                 request=request,

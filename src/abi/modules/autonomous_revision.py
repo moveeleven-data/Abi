@@ -25,6 +25,7 @@ from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_
 from abi.model_driver import ModelClient, ModelClientError, ModelDriver, ModelDriverResult
 from abi.model_driver import WorkerRequest
 from abi.model_schemas import (
+    AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS,
     AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
     AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
@@ -36,6 +37,7 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS,
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
     AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA,
+    ModelValidationError,
     WorkerRole,
     WorkerSchema,
 )
@@ -633,10 +635,16 @@ def _run_live_autonomous_revision(
                 parent_ids=parent_ids,
                 fixture_only=fixture_only,
                 output_dir=str(output_dir),
+                parsed_payload_validator=_validator_for_revision_worker(worker, payloads),
             )
         )
         model_results.append(result)
         if not result.accepted or result.parsed_payload is None or result.parsed_artifact is None:
+            details = (
+                f": {result.model_call.error_message}"
+                if result.model_call.error_message
+                else "."
+            )
             return _live_failure_result(
                 client_name=client_name,
                 model=model,
@@ -645,7 +653,7 @@ def _run_live_autonomous_revision(
                 artifacts=artifacts,
                 payloads=payloads,
                 model_results=model_results,
-                message="Autonomous revision stopped by model-call failure.",
+                message="Autonomous revision stopped by model-call failure" + details,
             )
         artifacts[worker.artifact_type] = result.parsed_artifact
         payloads[worker.artifact_type] = result.parsed_payload
@@ -835,6 +843,20 @@ def _prompt_for_revision_worker(
         ],
         "not_human_data": True,
     }
+    if worker.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
+        variant_set = payloads.get(AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type)
+        executed_variant_ids = _executed_ablation_variant_ids(variant_set or {})
+        prompt["allowed_executed_ablation_variant_ids"] = executed_variant_ids
+        prompt["ablation_comparison_contract"] = (
+            "Each executed comparison row must use executed_variant_id exactly from "
+            "allowed_executed_ablation_variant_ids. If discussing a non-executed "
+            "operation or probe, set planned_only true, set executed_variant_id null, "
+            "and provide planned_probe_id. Do not invent executed IDs and do not use "
+            "short labels like v4 or A4 unless that exact ID appears in the allowed list."
+        )
+        prompt["allowed_ablation_evidence_basis"] = list(
+            AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS
+        )
     if worker.schema == AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA:
         prompt["allowed_provenance_source_tokens"] = list(
             AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS
@@ -849,6 +871,24 @@ def _prompt_for_revision_worker(
             "keys. Rationale may explain the judgment, but provenance remains token-only."
         )
     return _canonical_json(prompt)
+
+
+def _validator_for_revision_worker(
+    worker: AutonomousRevisionWorkerSpec,
+    payloads: dict[str, dict[str, Any]],
+):
+    if worker.schema != AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
+        return None
+
+    variant_set = payloads[AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type]
+
+    def _validate(parsed_payload: dict[str, object]) -> None:
+        try:
+            _validate_ablation_alignment(variant_set, parsed_payload)
+        except RevisionIntegrityError as error:
+            raise ModelValidationError(str(error)) from error
+
+    return _validate
 
 
 def _parent_ids_for_revision_worker(
@@ -960,8 +1000,16 @@ def _validate_diff_integrity(
 
 
 def _validate_ablation_integrity(payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    variant_set = payloads["ablation_variant_set"]
-    comparison = payloads["ablation_reread_comparison"]
+    return _validate_ablation_alignment(
+        payloads["ablation_variant_set"],
+        payloads["ablation_reread_comparison"],
+    )
+
+
+def _validate_ablation_alignment(
+    variant_set: dict[str, Any],
+    comparison: dict[str, Any],
+) -> dict[str, Any]:
     variants_by_id = {
         str(variant["variant_id"]): variant
         for variant in variant_set["variants"]
@@ -978,24 +1026,40 @@ def _validate_ablation_integrity(payloads: dict[str, dict[str, Any]]) -> dict[st
     predicted_rows = []
 
     for row in comparison["comparison_rows"]:
-        variant_id = str(row["variant_id"])
         planned_only = bool(row["planned_only"])
-        if variant_id not in variants_by_id:
-            if not planned_only:
+        executed_variant_id = row.get("executed_variant_id")
+        planned_probe_id = row.get("planned_probe_id")
+        row_id = str(row["row_id"])
+
+        if planned_only:
+            if executed_variant_id is not None:
                 invalid_rows.append(
-                    f"{variant_id} is not in ablation_variant_set and is not planned_only"
+                    f"{row_id} is planned_only but has executed_variant_id "
+                    f"{executed_variant_id}"
                 )
-            else:
-                planned_only_rows.append(variant_id)
+                continue
+            if not planned_probe_id:
+                invalid_rows.append(f"{row_id} is planned_only but has no planned_probe_id")
+                continue
+            planned_only_rows.append(str(planned_probe_id))
+            predicted_rows.append(str(planned_probe_id))
             continue
-        if variant_id not in executed_variant_ids and not planned_only:
+
+        if not executed_variant_id:
+            invalid_rows.append(f"{row_id} has no executed_variant_id and is not planned_only")
+            continue
+        variant_id = str(executed_variant_id)
+        if variant_id not in variants_by_id:
+            invalid_rows.append(
+                f"{variant_id} is not in ablation_variant_set and is not planned_only"
+            )
+            continue
+        if variant_id not in executed_variant_ids:
             invalid_rows.append(f"{variant_id} references an unexecuted variant")
             continue
-        if planned_only:
-            planned_only_rows.append(variant_id)
-        else:
-            executed_rows.append(variant_id)
-        if row["evidence_basis"] == "actual_ablation_reread_evaluation" and not planned_only:
+
+        executed_rows.append(variant_id)
+        if row["evidence_basis"] == "actual_ablation_reread_evaluation":
             actual_evaluation_rows.append(variant_id)
         else:
             predicted_rows.append(variant_id)
@@ -1019,6 +1083,17 @@ def _validate_ablation_integrity(payloads: dict[str, dict[str, Any]]) -> dict[st
         "planned_only_rows": planned_only_rows,
         "executed_rows": executed_rows,
     }
+
+
+def _executed_ablation_variant_ids(variant_set: dict[str, Any]) -> list[str]:
+    variants = variant_set.get("variants")
+    if not isinstance(variants, list):
+        return []
+    return [
+        str(variant["variant_id"])
+        for variant in variants
+        if isinstance(variant, dict) and bool(variant.get("executed"))
+    ]
 
 
 def _validate_old_new_rival_provenance(
@@ -1404,15 +1479,17 @@ def _fake_model_ablation_comparison_payload(
         "candidate_label": str(prompt["candidate"]["label"]),
         "comparison_rows": [
             {
-                "variant_id": str(variant["variant_id"]),
+                "row_id": f"comparison_{str(variant['variant_id'])}",
+                "executed_variant_id": str(variant["variant_id"]),
+                "planned_probe_id": None,
                 "operation": str(variant["operation"]),
-                "predicted_reread_pressure_delta": _variant_delta(str(variant["operation"])),
-                "local_law_read": (
+                "planned_only": False,
+                "evidence_basis": "actual_ablation_variant",
+                "comparison_summary": (
                     "probe only; local field decides whether the feature is treasure or junk"
                 ),
-                "pass_fail_criterion": "isolate the handle without scaffold leakage",
-                "planned_only": False,
-                "evidence_basis": "actual_variant_predicted_effect",
+                "predicted_or_observed_effect": _variant_delta(str(variant["operation"])),
+                "rationale": "executed generated variant, not human reader evidence",
                 "not_human_data": True,
             }
             for variant in variants["variants"]
@@ -1876,18 +1953,20 @@ def _build_ablation_comparison(
         overlap = len(candidate_terms & terms)
         rows.append(
             {
-                "variant_id": variant["variant_id"],
+                "row_id": f"comparison_{variant['variant_id']}",
+                "executed_variant_id": variant["variant_id"],
+                "planned_probe_id": None,
                 "operation": variant["operation"],
-                "predicted_reread_pressure_delta": _variant_delta(str(variant["operation"])),
-                "local_law_read": (
+                "planned_only": False,
+                "evidence_basis": "actual_ablation_variant",
+                "comparison_summary": (
                     "probe only; feature is neither good nor bad until the local field accepts it"
                 ),
-                "word_overlap_with_original": overlap,
-                "pass_fail_criterion": (
-                    "useful if it isolates the handle without adding scaffold leakage"
+                "predicted_or_observed_effect": _variant_delta(str(variant["operation"])),
+                "rationale": (
+                    "executed fake variant with word overlap "
+                    f"{overlap}; useful only if it isolates the handle without leakage"
                 ),
-                "planned_only": False,
-                "evidence_basis": "actual_variant_predicted_effect",
                 "not_human_data": True,
             }
         )
@@ -2096,8 +2175,17 @@ def _build_closed_loop_gate_report(
             "planned_only_comparison_row_count": int(
                 ablation_integrity.get("planned_only_row_count", 0)
             ),
+            "planned_only_ablation_probe_count": int(
+                ablation_integrity.get("planned_only_row_count", 0)
+            ),
             "executed_comparison_row_count": int(
                 ablation_integrity.get("executed_row_count", 0)
+            ),
+            "predicted_only_comparison_row_count": int(
+                ablation_integrity.get("predicted_row_count", 0)
+            ),
+            "actual_ablation_comparison_evidence_count": int(
+                ablation_integrity.get("actual_evaluation_row_count", 0)
             ),
         },
         "unresolved_blockers": unresolved,
