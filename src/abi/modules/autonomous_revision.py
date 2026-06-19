@@ -1050,8 +1050,10 @@ def _prompt_for_revision_worker(
         prompt["allowed_patch_target_ids"] = work_order_payload["allowed_patch_target_ids"]
         if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
             prompt["selected_patch_target_id"] = handle_payload["selected_patch_target_id"]
-            prompt["patchable_spans"] = work_order_payload["patchable_spans"]
-            prompt["allowed_patch_span_ids"] = work_order_payload["allowed_patch_span_ids"]
+            prompt["patchable_spans"] = handle_payload["patchable_spans"]
+            prompt["allowed_patch_span_ids"] = [
+                str(span["patch_span_id"]) for span in handle_payload["patchable_spans"]
+            ]
     if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
         prompt["candidate_reviser_target_contract"] = (
             "Return patch operations only, not a full revised artifact. Each patch must "
@@ -1276,14 +1278,27 @@ def _build_revision_work_order(
         subject,
         selected_failure,
     )
-    allowed_patch_targets = [
-        dict(target)
-        for target in target_contract["allowed_patch_targets"]
-        if isinstance(target, dict)
-    ]
+    paragraph_inventory = _candidate_paragraph_inventory(subject.candidate_text.text)
+    sentence_inventory = _candidate_sentence_span_inventory(subject.candidate_text.text)
+    allowed_patch_targets: list[dict[str, object]] = []
     patchable_spans: list[dict[str, object]] = []
-    for target in allowed_patch_targets:
-        patchable_spans.extend(_patchable_spans_for_target(subject, target))
+    for target in target_contract["allowed_patch_targets"]:
+        if not isinstance(target, dict):
+            continue
+        target_payload = dict(target)
+        spans = _patchable_spans_for_target(
+            subject,
+            target_payload,
+            sentence_inventory,
+        )
+        target_payload["member_patch_span_ids"] = [
+            str(span["patch_span_id"]) for span in spans
+        ]
+        target_payload["preview_text"] = _preview_text_for_spans(spans)
+        target_payload["text_window"] = target_payload["preview_text"]
+        target_payload["text_window_authoritative"] = False
+        allowed_patch_targets.append(target_payload)
+        patchable_spans.extend(spans)
 
     plan_item = _plan_item_for_failure(
         subject.lab_payloads["targeted_recomposition_plan"],
@@ -1311,6 +1326,7 @@ def _build_revision_work_order(
             "word_count": subject.candidate_text.word_count,
         },
         "original_candidate_text_sha256": sha256_text(subject.candidate_text.text),
+        "candidate_text_length": len(subject.candidate_text.text),
         "strongest_rival_reference": (
             {
                 "label": subject.strongest_rival.label,
@@ -1329,12 +1345,6 @@ def _build_revision_work_order(
             "source_failure_index": selected_failure.get("source_failure_index"),
             "source_failure_payload": selected_failure.get("source_failure_payload"),
         },
-        "candidate_paragraph_inventory": _candidate_paragraph_inventory(
-            subject.candidate_text.text,
-        ),
-        "candidate_sentence_span_inventory": _candidate_sentence_span_inventory(
-            subject.candidate_text.text,
-        ),
         "allowed_patch_targets": allowed_patch_targets,
         "allowed_patch_target_ids": [
             str(target["patch_target_id"]) for target in allowed_patch_targets
@@ -1355,6 +1365,9 @@ def _build_revision_work_order(
         "not_human_data": True,
         "no_phase_shift_claim": True,
     }
+    payload["paragraph_inventory"] = paragraph_inventory
+    payload["candidate_paragraph_inventory"] = paragraph_inventory
+    payload["candidate_sentence_span_inventory"] = sentence_inventory
     _validate_revision_work_order_payload(subject, payload)
     return payload
 
@@ -1374,8 +1387,26 @@ def _validate_revision_work_order_payload(
         raise RevisionIntegrityError("revision_work_order source_candidate is missing")
     if source_candidate.get("text_sha256") != expected_hash:
         raise RevisionIntegrityError("revision_work_order source candidate hash mismatch")
+    if work_order.get("candidate_text_length") != len(candidate_text):
+        raise RevisionIntegrityError("revision_work_order candidate_text_length mismatch")
+
+    _validate_offset_inventory(
+        candidate_text,
+        work_order.get("paragraph_inventory", []),
+        id_prefix="paragraph_",
+        id_key="paragraph_id",
+        label="paragraph_inventory",
+    )
+    _validate_offset_inventory(
+        candidate_text,
+        work_order.get("candidate_sentence_span_inventory", []),
+        id_prefix="candidate_span_",
+        id_key="candidate_span_id",
+        label="candidate_sentence_span_inventory",
+    )
 
     allowed_target_ids: set[str] = set()
+    target_member_ids: dict[str, set[str]] = {}
     for index, target in enumerate(work_order.get("allowed_patch_targets", [])):
         if not isinstance(target, dict):
             raise RevisionIntegrityError("revision_work_order allowed_patch_targets must be objects")
@@ -1387,22 +1418,25 @@ def _validate_revision_work_order_payload(
         if target_id in allowed_target_ids:
             raise RevisionIntegrityError(f"duplicate patch target id in work order: {target_id}")
         allowed_target_ids.add(target_id)
-        text_window = str(target.get("text_window", ""))
-        if not text_window or text_window not in candidate_text:
+        member_ids = target.get("member_patch_span_ids")
+        if not isinstance(member_ids, list) or not member_ids:
             raise RevisionIntegrityError(
-                f"work-order target {target_id!r} text_window is not an exact "
-                "candidate substring"
+                f"work-order target {target_id!r} has no member_patch_span_ids"
             )
+        target_member_ids[target_id] = {
+            _canonical_control_id(
+                member_id,
+                "span_",
+                f"allowed_patch_targets[{index}].member_patch_span_ids",
+            )
+            for member_id in member_ids
+        }
 
     if set(work_order.get("allowed_patch_target_ids", [])) != allowed_target_ids:
         raise RevisionIntegrityError("allowed_patch_target_ids do not match target inventory")
 
-    target_windows = {
-        str(target["patch_target_id"]): str(target["text_window"])
-        for target in work_order.get("allowed_patch_targets", [])
-        if isinstance(target, dict)
-    }
     allowed_span_ids: set[str] = set()
+    span_target_ids: dict[str, str] = {}
     for index, span in enumerate(work_order.get("patchable_spans", [])):
         if not isinstance(span, dict):
             raise RevisionIntegrityError("revision_work_order patchable_spans must be objects")
@@ -1419,27 +1453,41 @@ def _validate_revision_work_order_payload(
             "target_",
             f"patchable_spans[{index}].patch_target_id",
         )
-        if target_id not in target_windows:
+        if target_id not in allowed_target_ids:
             raise RevisionIntegrityError(
                 f"work-order patchable span {span_id!r} references unknown target "
                 f"{target_id!r}"
             )
-        exact_text = str(span.get("exact_text", ""))
-        if not exact_text or exact_text not in candidate_text:
-            raise RevisionIntegrityError(
-                f"work-order span {span_id!r} exact_text is not an exact candidate substring"
-            )
-        if exact_text not in target_windows[target_id]:
-            raise RevisionIntegrityError(
-                f"work-order span {span_id!r} points outside patch target {target_id!r}"
-            )
+        _validate_text_slice(
+            candidate_text,
+            span,
+            label=f"patchable_spans[{index}]",
+        )
         if span.get("source_text_sha256") != expected_hash:
             raise RevisionIntegrityError(
                 f"work-order span {span_id!r} source_text_sha256 does not match candidate"
             )
+        span_target_ids[span_id] = target_id
 
     if set(work_order.get("allowed_patch_span_ids", [])) != allowed_span_ids:
         raise RevisionIntegrityError("allowed_patch_span_ids do not match span inventory")
+
+    for target_id, member_ids in target_member_ids.items():
+        missing = sorted(member_id for member_id in member_ids if member_id not in allowed_span_ids)
+        if missing:
+            raise RevisionIntegrityError(
+                f"work-order target {target_id!r} references missing patch spans: {missing}"
+            )
+        wrong_target = sorted(
+            member_id
+            for member_id in member_ids
+            if span_target_ids.get(member_id) != target_id
+        )
+        if wrong_target:
+            raise RevisionIntegrityError(
+                f"work-order target {target_id!r} references spans from another target: "
+                f"{wrong_target}"
+            )
 
     for index, item in enumerate(work_order.get("candidate_sentence_span_inventory", [])):
         if not isinstance(item, dict):
@@ -1449,11 +1497,6 @@ def _validate_revision_work_order_payload(
             "candidate_span_",
             f"candidate_sentence_span_inventory[{index}].candidate_span_id",
         )
-        exact_text = str(item.get("exact_text", ""))
-        if not exact_text or exact_text not in candidate_text:
-            raise RevisionIntegrityError(
-                "candidate sentence inventory exact_text is not an exact candidate substring"
-            )
 
     for index, variant_id in enumerate(work_order.get("allowed_ablation_variant_ids", [])):
         _canonical_control_id(
@@ -1484,37 +1527,119 @@ def _selected_failure_evidence_names(selected_failure: dict[str, Any]) -> list[s
     return []
 
 
+def _validate_offset_inventory(
+    candidate_text: str,
+    entries: object,
+    *,
+    id_prefix: str,
+    id_key: str,
+    label: str,
+) -> None:
+    if not isinstance(entries, list) or not entries:
+        raise RevisionIntegrityError(f"{label} must be a non-empty list")
+    seen_ids: set[str] = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise RevisionIntegrityError(f"{label}[{index}] must be an object")
+        entry_id = _canonical_control_id(
+            entry.get(id_key),
+            id_prefix,
+            f"{label}[{index}].{id_key}",
+        )
+        if entry_id in seen_ids:
+            raise RevisionIntegrityError(f"{label} has duplicate id {entry_id!r}")
+        seen_ids.add(entry_id)
+        _validate_text_slice(candidate_text, entry, label=f"{label}[{index}]")
+
+
+def _validate_text_slice(
+    candidate_text: str,
+    payload: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    char_start = payload.get("char_start")
+    char_end = payload.get("char_end")
+    exact_text = payload.get("exact_text")
+    if not isinstance(char_start, int) or not isinstance(char_end, int):
+        raise RevisionIntegrityError(f"{label} char_start/char_end must be integers")
+    if char_start < 0 or char_end < 0 or char_start >= char_end:
+        raise RevisionIntegrityError(f"{label} char_start/char_end are invalid")
+    if char_end > len(candidate_text):
+        raise RevisionIntegrityError(f"{label} char_end is outside candidate text")
+    if not isinstance(exact_text, str) or not exact_text:
+        raise RevisionIntegrityError(f"{label} exact_text must be non-empty")
+    if candidate_text[char_start:char_end] != exact_text:
+        raise RevisionIntegrityError(
+            f"{label} exact_text does not match candidate_text[char_start:char_end]"
+        )
+
+
 def _candidate_paragraph_inventory(candidate_text: str) -> list[dict[str, object]]:
-    paragraphs = [part.strip() for part in candidate_text.split("\n\n") if part.strip()]
-    if not paragraphs and candidate_text.strip():
-        paragraphs = [candidate_text.strip()]
+    ranges = _paragraph_ranges(candidate_text)
     return [
         {
+            "id": f"paragraph_{index:03d}",
             "paragraph_id": f"paragraph_{index:03d}",
             "paragraph_index": index - 1,
-            "text_sha256": sha256_text(paragraph),
-            "text_excerpt": paragraph[:240],
-            "word_count": len(_words(paragraph)),
+            "char_start": start,
+            "char_end": end,
+            "exact_text": exact_text,
+            "text_sha256": sha256_text(exact_text),
+            "text_excerpt": exact_text[:240],
+            "word_count": len(_words(exact_text)),
         }
-        for index, paragraph in enumerate(paragraphs, start=1)
+        for index, (start, end, exact_text) in enumerate(ranges, start=1)
     ]
 
 
 def _candidate_sentence_span_inventory(candidate_text: str) -> list[dict[str, object]]:
     spans = []
+    cursor = 0
     for index, sentence in enumerate(_sentences(candidate_text) or [candidate_text.strip()], start=1):
         if not sentence.strip():
             continue
+        start = candidate_text.find(sentence, cursor)
+        if start < 0:
+            start = candidate_text.find(sentence)
+        if start < 0:
+            raise RevisionIntegrityError(
+                f"candidate sentence inventory cannot locate exact sentence {index}"
+            )
+        end = start + len(sentence)
+        cursor = end
         spans.append(
             {
+                "id": f"candidate_span_{index:03d}",
                 "candidate_span_id": f"candidate_span_{index:03d}",
                 "paragraph_index": _paragraph_index_for_excerpt(candidate_text, sentence),
                 "sentence_index": index,
+                "char_start": start,
+                "char_end": end,
                 "exact_text": sentence,
                 "source_text_sha256": sha256_text(candidate_text),
             }
         )
     return spans
+
+
+def _paragraph_ranges(candidate_text: str) -> list[tuple[int, int, str]]:
+    ranges = []
+    cursor = 0
+    for paragraph in [part.strip() for part in candidate_text.split("\n\n") if part.strip()]:
+        start = candidate_text.find(paragraph, cursor)
+        if start < 0:
+            start = candidate_text.find(paragraph)
+        if start < 0:
+            raise RevisionIntegrityError("candidate paragraph inventory cannot locate paragraph")
+        end = start + len(paragraph)
+        ranges.append((start, end, paragraph))
+        cursor = end
+    if not ranges and candidate_text.strip():
+        stripped = candidate_text.strip()
+        start = candidate_text.find(stripped)
+        ranges.append((start, start + len(stripped), stripped))
+    return ranges
 
 
 def _controller_target_contract_for_selected_failure(
@@ -1630,7 +1755,6 @@ def _build_controller_revision_from_patches(
 ) -> dict[str, dict[str, Any]]:
     _validate_revision_work_order_payload(subject, work_order)
     original = subject.candidate_text.text
-    revised = original
     patch_ids = []
     expansion_required = bool(patch_proposal["target_region_expanded"])
     expansion_reasons = []
@@ -1639,6 +1763,7 @@ def _build_controller_revision_from_patches(
     selected_target_region = str(handle["span_ref"]["region"])
     patch_span_ids = []
     patch_target_ids = []
+    patch_applications: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
     for patch in patch_proposal["patches"]:
         target = _resolve_patch_target(
@@ -1658,14 +1783,15 @@ def _build_controller_revision_from_patches(
             target=target,
             patchable_spans=patchable_spans,
         )
-        revised = _apply_patch_operation(revised, patch, target, span)
         patch_ids.append(str(patch["patch_id"]))
         patch_span_ids.append(str(span["patch_span_id"]))
         patch_target_ids.append(str(target["patch_target_id"]))
+        patch_applications.append((patch, span))
         if bool(patch["requires_target_expansion"]):
             expansion_required = True
             expansion_reasons.append(str(patch["target_expansion_reason"]))
 
+    revised = _apply_patch_operations_by_offset(original, patch_applications)
     if revised == original:
         raise RevisionIntegrityError("patch proposal produced no text change")
 
@@ -1867,58 +1993,50 @@ def _resolve_patch_span(
     return span
 
 
-def _apply_patch_operation(
+def _apply_patch_operations_by_offset(
     text: str,
-    patch: dict[str, Any],
-    target: dict[str, Any],
-    span: dict[str, Any],
+    patch_applications: list[tuple[dict[str, Any], dict[str, Any]]],
 ) -> str:
+    ordered = sorted(
+        patch_applications,
+        key=lambda item: (int(item[1]["char_start"]), int(item[1]["char_end"])),
+    )
+    parts = []
+    cursor = 0
+    for patch, span in ordered:
+        patch_id = str(patch["patch_id"])
+        char_start = int(span["char_start"])
+        char_end = int(span["char_end"])
+        before_text = str(span["exact_text"])
+        if char_start < cursor:
+            raise RevisionIntegrityError(
+                f"patch {patch_id} overlaps an earlier controller-owned patch span"
+            )
+        if text[char_start:char_end] != before_text:
+            raise RevisionIntegrityError(
+                f"patch {patch_id} patch_span_id {span['patch_span_id']!r} exact_text "
+                "does not match candidate slice"
+            )
+        parts.append(text[cursor:char_start])
+        parts.append(_patched_span_text(patch, before_text))
+        cursor = char_end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def _patched_span_text(patch: dict[str, Any], before_text: str) -> str:
     operation = str(patch["operation"])
-    before_text = str(span["exact_text"])
     replacement_text = str(patch["replacement_text"])
     inserted_text = str(patch["inserted_text"])
     patch_id = str(patch["patch_id"])
-    target_window = str(target["text_window"])
-    if before_text not in target_window:
-        raise RevisionIntegrityError(
-            f"patch {patch_id} patch_span_id {span['patch_span_id']!r} exact_text "
-            f"does not appear inside patch target {target['patch_target_id']!r}"
-        )
-    if target_window not in text:
-        raise RevisionIntegrityError(
-            f"patch target {target['patch_target_id']!r} text_window does not appear in "
-            "candidate text"
-        )
-    if before_text not in text:
-        raise RevisionIntegrityError(
-            f"patch {patch_id} patch_span_id {span['patch_span_id']!r} exact_text "
-            "does not appear in candidate text"
-        )
-    target_start = text.index(target_window)
-    target_end = target_start + len(target_window)
-    before_target = text[:target_start]
-    target_text = text[target_start:target_end]
-    after_target = text[target_end:]
     if operation in {"replace", "compress"}:
-        changed_target = target_text.replace(before_text, replacement_text, 1)
-        return before_target + changed_target + after_target
+        return replacement_text
     if operation == "delete":
-        changed_target = target_text.replace(before_text, "", 1)
-        return before_target + changed_target + after_target
+        return ""
     if operation == "insert_after":
-        changed_target = target_text.replace(
-            before_text,
-            f"{before_text} {inserted_text}",
-            1,
-        )
-        return before_target + changed_target + after_target
+        return f"{before_text} {inserted_text}"
     if operation == "insert_before":
-        changed_target = target_text.replace(
-            before_text,
-            f"{inserted_text} {before_text}",
-            1,
-        )
-        return before_target + changed_target + after_target
+        return f"{inserted_text} {before_text}"
     raise RevisionIntegrityError(f"patch {patch_id} has unsupported operation {operation!r}")
 
 
@@ -2281,12 +2399,16 @@ def _target_region_contract(region: str, *, candidate_text: str = "") -> dict[st
 
 def _patch_target_for_region(region: str, candidate_text: str) -> dict[str, object]:
     label = "_".join(_slug_terms(region)[:8]) or "target_region"
+    preview_text = _target_text_window(candidate_text, region)
     return {
         "patch_target_id": _patch_target_id_for_region(region),
         "target_region_label": f"target_region:{label}",
         "target_region_description": region,
         "allowed_span_ref": region,
-        "text_window": _target_text_window(candidate_text, region),
+        "preview_text": preview_text,
+        "text_window": preview_text,
+        "text_window_authoritative": False,
+        "member_patch_span_ids": [],
         "paragraph_index": _target_paragraph_index(region),
         "protected_outside_spans": [f"all candidate spans outside {region}"],
     }
@@ -2315,25 +2437,25 @@ def _controller_patch_target_inventory(
 def _patchable_spans_for_target(
     subject: RevisionSubject,
     target: dict[str, object],
+    sentence_inventory: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    target_window = str(target["text_window"])
     candidate_text = subject.candidate_text.text
-    if target_window not in candidate_text:
-        raise RevisionIntegrityError(
-            f"patch target {target['patch_target_id']!r} text_window does not appear in "
-            "candidate text"
-        )
-    span_texts = _sentences(target_window) or [target_window.strip()]
+    selected = _candidate_spans_for_target_region(
+        sentence_inventory,
+        str(target["allowed_span_ref"]),
+    )
     spans = []
     used_ids: set[str] = set()
-    for index, exact_text in enumerate(span_texts, start=1):
+    for index, candidate_span in enumerate(selected, start=1):
+        exact_text = str(candidate_span["exact_text"])
         if not exact_text.strip():
             continue
-        paragraph_index = _paragraph_index_for_excerpt(candidate_text, exact_text)
+        paragraph_index = int(candidate_span["paragraph_index"])
+        sentence_index = int(candidate_span["sentence_index"])
         span_id = _patch_span_id(
             str(target["patch_target_id"]),
             paragraph_index=paragraph_index,
-            sentence_index=index,
+            sentence_index=sentence_index,
         )
         while span_id in used_ids:
             span_id = f"{span_id}_{len(used_ids) + 1:02d}"
@@ -2342,12 +2464,21 @@ def _patchable_spans_for_target(
             {
                 "patch_span_id": span_id,
                 "patch_target_id": target["patch_target_id"],
+                "source_candidate_span_id": candidate_span["candidate_span_id"],
+                "char_start": int(candidate_span["char_start"]),
+                "char_end": int(candidate_span["char_end"]),
                 "paragraph_index": paragraph_index,
-                "sentence_index": index,
+                "sentence_index": sentence_index,
                 "span_index": index,
                 "exact_text": exact_text,
-                "context_before": _context_before(target_window, exact_text),
-                "context_after": _context_after(target_window, exact_text),
+                "context_before": _context_before_by_offset(
+                    candidate_text,
+                    int(candidate_span["char_start"]),
+                ),
+                "context_after": _context_after_by_offset(
+                    candidate_text,
+                    int(candidate_span["char_end"]),
+                ),
                 "source_text_sha256": sha256_text(candidate_text),
                 "protected": False,
                 "protected_reason": "",
@@ -2358,6 +2489,61 @@ def _patchable_spans_for_target(
             f"patch target {target['patch_target_id']!r} exposes no patchable spans"
         )
     return spans
+
+
+def _candidate_spans_for_target_region(
+    sentence_inventory: list[dict[str, object]],
+    region: str,
+) -> list[dict[str, object]]:
+    if not sentence_inventory:
+        return []
+    lowered = region.lower()
+    paragraph_indexes = sorted({int(span["paragraph_index"]) for span in sentence_inventory})
+    first_paragraph = min(paragraph_indexes)
+    last_paragraph = max(paragraph_indexes)
+    middle_paragraph = paragraph_indexes[len(paragraph_indexes) // 2]
+
+    if "whole" in lowered or "artifact" in lowered:
+        return list(sentence_inventory)
+    if "ending" in lowered or "return closure" in lowered:
+        return [
+            span
+            for span in sentence_inventory
+            if int(span["paragraph_index"]) == last_paragraph
+        ]
+    if "middle" in lowered:
+        return [
+            span
+            for span in sentence_inventory
+            if int(span["paragraph_index"]) == middle_paragraph
+        ]
+    if "first two" in lowered and (
+        "pivot" in lowered or "image-to-interpretation" in lowered
+    ):
+        return [
+            span
+            for span in sentence_inventory
+            if int(span["paragraph_index"]) in {first_paragraph, first_paragraph + 1}
+        ][:8]
+    if "opening sentence" in lowered or "final image" in lowered:
+        return [sentence_inventory[0]]
+    if "opening" in lowered:
+        return [
+            span
+            for span in sentence_inventory
+            if int(span["paragraph_index"]) == first_paragraph
+        ][:4]
+    return [sentence_inventory[0]]
+
+
+def _preview_text_for_spans(spans: list[dict[str, object]]) -> str:
+    if not spans:
+        return ""
+    if len(spans) <= 3:
+        return " ".join(str(span["exact_text"]) for span in spans)
+    first = " ".join(str(span["exact_text"]) for span in spans[:2])
+    last = str(spans[-1]["exact_text"])
+    return f"{first} [...] {last}"
 
 
 def _patchable_spans_by_id(handle: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -2405,6 +2591,18 @@ def _context_after(container: str, exact_text: str) -> str:
         return ""
     start = index + len(exact_text)
     return container[start:].strip()[:180]
+
+
+def _context_before_by_offset(text: str, char_start: int) -> str:
+    if char_start <= 0:
+        return ""
+    return text[:char_start].strip()[-180:]
+
+
+def _context_after_by_offset(text: str, char_end: int) -> str:
+    if char_end >= len(text):
+        return ""
+    return text[char_end:].strip()[:180]
 
 
 def _target_contract_from_handle(handle: dict[str, Any]) -> dict[str, object]:

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import abi.modules.autonomous_revision as autonomous_revision_module
 from abi.artifacts import list_artifacts
 from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
@@ -583,6 +584,7 @@ def assert_valid_work_order_payload(
     assert work_order["work_order_id"] == "revision_work_order_001"
     assert work_order.get("work_order_artifact_id") in {expected_artifact_id, None}
     assert work_order["source_candidate"]["text_sha256"]
+    assert work_order["candidate_text_length"] == len(candidate_text)
     assert work_order["original_candidate_text_sha256"] == work_order["source_candidate"][
         "text_sha256"
     ]
@@ -595,19 +597,26 @@ def assert_valid_work_order_payload(
     assert set(work_order["allowed_provenance_tokens"]) == set(
         AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS
     )
+    span_ids = {span["patch_span_id"] for span in work_order["patchable_spans"]}
+    for paragraph in work_order["paragraph_inventory"]:
+        assert candidate_text[paragraph["char_start"] : paragraph["char_end"]] == paragraph[
+            "exact_text"
+        ]
+    for item in work_order["candidate_sentence_span_inventory"]:
+        assert item["candidate_span_id"].startswith("candidate_span_")
+        assert candidate_text[item["char_start"] : item["char_end"]] == item["exact_text"]
     for target in work_order["allowed_patch_targets"]:
         assert target["patch_target_id"].startswith("target_")
         assert "/" not in target["patch_target_id"]
         assert " " not in target["patch_target_id"]
-        assert target["text_window"] in candidate_text
+        assert target["text_window_authoritative"] is False
+        assert target["member_patch_span_ids"]
+        assert set(target["member_patch_span_ids"]) <= span_ids
     for span in work_order["patchable_spans"]:
         assert span["patch_span_id"].startswith("span_")
         assert "/" not in span["patch_span_id"]
         assert " " not in span["patch_span_id"]
-        assert span["exact_text"] in candidate_text
-    for item in work_order["candidate_sentence_span_inventory"]:
-        assert item["candidate_span_id"].startswith("candidate_span_")
-        assert item["exact_text"] in candidate_text
+        assert candidate_text[span["char_start"] : span["char_end"]] == span["exact_text"]
 
 
 def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkeypatch):
@@ -810,7 +819,11 @@ def test_autonomous_revision_fake_creates_closed_loop_artifacts(tmp_path, monkey
             lambda payload: payload["patchable_spans"][0].update(
                 {"exact_text": "not present in the candidate"}
             ),
-            "exact_text is not an exact candidate substring",
+            "exact_text does not match candidate_text",
+        ),
+        (
+            lambda payload: payload["patchable_spans"][0].update({"char_end": 0}),
+            "char_start/char_end are invalid",
         ),
     ],
 )
@@ -835,6 +848,33 @@ def test_revision_work_order_rejects_noncanonical_or_invalid_inventory(
 
     with pytest.raises(RevisionIntegrityError, match=message):
         _validate_revision_work_order_payload(subject, mutated)
+
+
+def test_revision_work_order_allows_nonliteral_target_preview_when_member_spans_are_valid(
+    tmp_path,
+):
+    config, lab_payload = build_reader_lab_packet(tmp_path)
+    result = run_autonomous_revision(
+        config,
+        client_name="fake",
+        reader_lab_packet=lab_payload["packet_dir"],
+    )
+    assert result.exit_code == 0
+    subject = revision_subject_from_reader_lab_packet(config, lab_payload["packet_dir"])
+    work_order = read_payload(
+        result.payload["artifact_paths"][AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
+    )
+    mutated = json.loads(json.dumps(work_order))
+    target = next(
+        item
+        for item in mutated["allowed_patch_targets"]
+        if item["patch_target_id"] == "target_opening_first_pivots"
+    )
+    target["preview_text"] = "opening image span [...] non-contiguous advisory preview"
+    target["text_window"] = target["preview_text"]
+    assert target["text_window"] not in subject.candidate_text.text
+
+    _validate_revision_work_order_payload(subject, mutated)
 
 
 def test_invalid_work_order_construction_fails_before_downstream_model_calls(
@@ -876,6 +916,46 @@ def test_invalid_work_order_construction_fails_before_downstream_model_calls(
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "work-order validation failure" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "causal_handle_selection" not in result.payload["artifact_ids"]
+    assert AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE not in result.payload["artifact_ids"]
+    assert len(clients[0].requests) == 1
+
+
+def test_invalid_work_order_span_offsets_fail_before_downstream_model_calls(
+    tmp_path,
+    monkeypatch,
+):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+    original_builder = autonomous_revision_module._patchable_spans_for_target
+
+    def _bad_spans(subject, target, sentence_inventory):
+        spans = original_builder(subject, target, sentence_inventory)
+        spans[0] = dict(spans[0])
+        spans[0]["char_end"] = int(spans[0]["char_end"]) + 1
+        return spans
+
+    monkeypatch.setattr(
+        autonomous_revision_module,
+        "_patchable_spans_for_target",
+        _bad_spans,
+    )
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=revision_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "work-order validation failure" in result.payload["message"]
+    assert "exact_text does not match candidate_text" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 1
     assert "causal_handle_selection" not in result.payload["artifact_ids"]
     assert AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE not in result.payload["artifact_ids"]
@@ -1177,11 +1257,19 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
         "allowed_patch_targets"
     ][0]["patch_target_id"]
     assert reviser_prompt["patchable_spans"]
-    assert reviser_prompt["patchable_spans"] == reviser_prompt["revision_work_order"][
-        "patchable_spans"
-    ]
+    selected_target = next(
+        target
+        for target in reviser_prompt["revision_work_order"]["allowed_patch_targets"]
+        if target["patch_target_id"] == reviser_prompt["selected_patch_target_id"]
+    )
+    assert {
+        span["patch_span_id"] for span in reviser_prompt["patchable_spans"]
+    } == set(selected_target["member_patch_span_ids"])
     assert all(
         span["patch_span_id"].startswith("span_")
+        and span["patch_target_id"] == reviser_prompt["selected_patch_target_id"]
+        and isinstance(span["char_start"], int)
+        and isinstance(span["char_end"], int)
         and span["exact_text"]
         for span in reviser_prompt["patchable_spans"]
     )
@@ -1467,7 +1555,15 @@ def test_stubbed_openai_broad_target_uses_canonical_patch_target_id(tmp_path):
     patch_proposal = read_payload(result.payload["artifact_paths"]["revision_patch_proposal"])
     diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
     assert handle["allowed_patch_targets"][0]["patch_target_id"] == "target_opening_first_pivots"
+    assert handle["patchable_spans"]
+    assert all(
+        span["patch_target_id"] == "target_opening_first_pivots"
+        for span in handle["patchable_spans"]
+    )
     assert patch_proposal["patches"][0]["patch_target_id"] == "target_opening_first_pivots"
+    assert patch_proposal["patches"][0]["patch_span_id"] in {
+        span["patch_span_id"] for span in handle["patchable_spans"]
+    }
     assert diff["allowed_patch_targets"][0]["patch_target_id"] == "target_opening_first_pivots"
     assert diff["target_region_expanded"] is False
 
