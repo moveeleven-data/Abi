@@ -1,45 +1,113 @@
 # Project Abi
 
-Abi v0.1 is an autonomous creative-engine scaffold. The active path is internal: source material moves through Abi Ear, Minimal Reread, candidate/baseline/rival set construction, internal reader-state workers, failure diagnosis, targeted recomposition, counterfactual ablation, rival preservation, and fail-closed autonomous finalization.
+Abi v0.1 is an internal autonomous creative-engine scaffold. It is built around
+deterministic packet generation, immutable artifact lineage, structured model-call
+records, and fail-closed controller gates.
 
-Abi is not a public-validation harness right now. Human readers, browser ChatGPT reader sessions, paper-grade validation, and external study tooling are outside the core engine path.
+The current active path is internal: source material can move through candidate and
+baseline packet construction, an autonomous internal reader lab, failure diagnosis,
+targeted recomposition planning, counterfactual ablation planning, strongest-rival
+pressure checks, and autonomous closed-loop revision.
 
-## Project Status
+Abi is not currently a public validation harness, a paper-ready evaluation system, or a
+final writing product.
 
-- Current implemented surface: deterministic infrastructure, artifact/run registries, guarded model-call records, Abi Ear, Minimal Reread, production/candidate scaffolds, pilot candidate/baseline/rival artifact sets, strongest-rival import, Autonomous Internal Reader Lab v1 fake packets plus guarded model-driver-backed internal workers, and Autonomous Closed-Loop Revision v1 fake packets.
-- Active finalization profile: `autonomous_creative_candidate`.
-- Current finalization status: fail-closed until internal autonomous gates are explicitly satisfied.
-- Legacy external profile: `final_artifact` remains present as historical/external validation policy, but it is not the active development path.
-- Current OpenAI status: guarded paths exist; no live call runs unless explicitly opted in.
+## Current Status
 
-## Quickstart
+Implemented today:
 
-Install locally:
+- Python package and CLI: `abi`
+- SQLite-backed run, artifact, gate, and model-call state
+- Immutable JSON artifact envelopes with hashes and parent IDs
+- Deterministic Abi Ear and Minimal Reread demo packets
+- Deterministic production-harness and pilot artifact-set scaffolds
+- Strongest-rival import into pilot packets
+- Sealed model-driver layer with structured-output validation
+- Guarded fake/stub and opt-in live-worker paths
+- Autonomous Internal Reader Lab v1
+- Autonomous Closed-Loop Revision v1
+- Policy-driven finalization profiles
+
+The active finalization profile is:
+
+```text
+autonomous_creative_candidate
+```
+
+That profile is intentionally fail-closed until its internal gates are present and
+passing.
+
+## What Abi Does
+
+Abi records work as packets under `runs/<run_id>/.../packet_NNNN/`. Each packet contains
+JSON artifacts wrapped in a normalized envelope:
+
+```text
+schema_version
+artifact_type
+run_id
+lineage_id
+parent_ids
+created_by
+fixture_only
+model_call_id
+payload
+```
+
+Artifacts are registered in SQLite with SHA-256 hashes and parent IDs. Model-shaped
+outputs are validated against local schemas before any parsed artifact is registered.
+Invalid model output records a failed model call and stops packet assembly.
+
+Finalization is controlled only by controller/finalization code. Workers can produce
+evidence and blocker reports, but workers cannot finalize Abi.
+
+## Current Non-Claims
+
+Do not claim from this repo state that:
+
+- Abi has produced a final artifact.
+- Abi has proven phase-shift-level writing.
+- Abi has passed real human validation.
+- Abi has beaten a strongest rival.
+- Abi has cleared hostile final audit.
+- Fixture or fake-client outputs are real validation evidence.
+
+The current system is an engineering workbench for internal autonomous revision, not a
+completed validation claim.
+
+## Local Verification
+
+Install in editable mode with developer tools:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Run the basic checks:
+Run checks:
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m pytest
+```
+
+Inspect current state:
+
+```powershell
 .\.venv\Scripts\abi.exe status
 .\.venv\Scripts\abi.exe finalization status --profile autonomous_creative_candidate
 ```
 
-Expected finalization behavior:
+Expected behavior:
 
 ```powershell
 .\.venv\Scripts\abi.exe finalize --profile autonomous_creative_candidate
 ```
 
-That command should refuse until the internal autonomous gates are present and passing.
+This should refuse unless all required autonomous gates are satisfied.
 
-## Current Capabilities
+## Useful Local Commands
 
-Deterministic local demos:
+Deterministic demos:
 
 ```powershell
 .\.venv\Scripts\abi.exe ear demo
@@ -47,139 +115,63 @@ Deterministic local demos:
 .\.venv\Scripts\abi.exe harness demo
 ```
 
-Fake-client and candidate packet paths:
+Candidate and autonomous fake paths:
 
 ```powershell
-.\.venv\Scripts\abi.exe model-driver demo
-.\.venv\Scripts\abi.exe ear live-demo --client fake
-.\.venv\Scripts\abi.exe reread live-demo --client fake
-.\.venv\Scripts\abi.exe production live-demo --client fake
 .\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
-.\.venv\Scripts\abi.exe autonomous reader-lab --client fake --packet-dir <packet_dir>
+.\.venv\Scripts\abi.exe autonomous reader-lab --client fake --packet-dir <pilot_packet_dir>
 .\.venv\Scripts\abi.exe autonomous revise --client fake --reader-lab-packet <reader_lab_packet_dir>
 ```
 
-Guarded model-driver-backed internal reader workers:
-
-```powershell
-.\.venv\Scripts\abi.exe autonomous reader-lab --client openai --packet-dir <packet_dir> --allow-live-model --max-model-calls 12
-```
-
-Strongest-rival preservation:
-
-```powershell
-.\.venv\Scripts\abi.exe pilot import-rival --packet-dir <packet_dir> --rival-file <rival_file>
-```
-
-Inspection commands:
+Inspection:
 
 ```powershell
 .\.venv\Scripts\abi.exe artifact list
-.\.venv\Scripts\abi.exe artifact show <artifact_id>
-.\.venv\Scripts\abi.exe run list
-.\.venv\Scripts\abi.exe run show <run_id>
 .\.venv\Scripts\abi.exe run latest
 .\.venv\Scripts\abi.exe model-call list
-.\.venv\Scripts\abi.exe model-call show <model_call_id>
-```
-
-Controller and gate inspection:
-
-```powershell
+.\.venv\Scripts\abi.exe gate list
 .\.venv\Scripts\abi.exe controller status
 .\.venv\Scripts\abi.exe controller blockers
 .\.venv\Scripts\abi.exe controller demo
-.\.venv\Scripts\abi.exe gate list
-.\.venv\Scripts\abi.exe finalization status
-.\.venv\Scripts\abi.exe finalization status --profile autonomous_creative_candidate
 ```
 
-## Current Non-Claims
+Some live model paths exist, but they are guarded, opt-in only, and not required for the
+local fake/demo workflows.
 
-Do not claim from this repo state that:
-
-- Abi produces phase-shift-level writing.
-- Abi has proven autonomous creative success from the internal reader lab or revision loop.
-- Abi has beaten a strongest rival.
-- Abi has passed hostile internal audit.
-- Any generated candidate is final.
-- External human or public validation is part of the active runtime.
-
-Fixture and fake-client outputs are engineering artifacts. They do not satisfy autonomous finalization gates by themselves.
-
-## Guarded OpenAI Usage
-
-OpenAI-backed commands refuse unless `--allow-live-model` is passed. Commands that pass that flag also require `OPENAI_API_KEY`. The default live model is code-defined and can be overridden with `ABI_OPENAI_MODEL`.
-
-Examples that refuse without opt-in:
-
-```powershell
-.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_germ_analysis
-.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_field_model
-.\.venv\Scripts\abi.exe ear live-demo --client openai
-.\.venv\Scripts\abi.exe reread live-demo --client openai
-.\.venv\Scripts\abi.exe production live-demo --client openai
-.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source
-.\.venv\Scripts\abi.exe autonomous reader-lab --client openai --packet-dir <packet_dir>
-.\.venv\Scripts\abi.exe autonomous revise --client openai --reader-lab-packet <reader_lab_packet_dir>
-```
-
-Opt-in examples:
-
-```powershell
-.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_germ_analysis --allow-live-model
-.\.venv\Scripts\abi.exe model-driver live-demo --worker abi_ear_field_model --allow-live-model
-.\.venv\Scripts\abi.exe ear live-demo --client openai --allow-live-model --max-model-calls 8
-.\.venv\Scripts\abi.exe reread live-demo --client openai --allow-live-model --max-model-calls 12
-.\.venv\Scripts\abi.exe production live-demo --client openai --allow-live-model --max-model-calls 24
-.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source --allow-live-model --max-model-calls 36
-.\.venv\Scripts\abi.exe autonomous reader-lab --client openai --packet-dir <packet_dir> --allow-live-model --max-model-calls 12
-.\.venv\Scripts\abi.exe autonomous revise --client openai --reader-lab-packet <reader_lab_packet_dir> --allow-live-model --max-model-calls 12
-```
-
-Do not run live OpenAI commands casually. Install optional live dependencies only for an intentional manual live smoke test:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[live]"
-```
-
-## Private Source Material Warning
-
-The repository may be public. Do not commit private source material.
-
-Use ignored local paths for private source files:
+## Repository Map
 
 ```text
-inputs/private/
+src/abi/                      runtime package
+src/abi/controller/           gates, controller decisions, finalization policy
+src/abi/modules/              packet-producing pipelines
+tests/                        regression tests
+fixtures/                     non-private fixture inputs
+context/                      frozen phase specs and historical context
+docs/                         operator handoff and historical protocol docs
+tools/setup_context_scripts/  phase context setup scripts
 ```
 
-The pilot artifact-set command hashes source files and records filenames. Private source contents may be sent to OpenAI only during explicit `--allow-live-model` runs and must stay out of tracked docs.
+Runtime and private files are intentionally ignored:
 
-## Autonomous Roadmap
+```text
+db/*.sqlite
+runs/*
+outputs/*
+inputs/private/
+.env
+```
 
-The current development milestone is **Autonomous Closed-Loop Revision v1**.
+## Documentation
 
-Do not use browser ChatGPT sessions as ad hoc readers. Do not use external humans as core Abi evaluators.
-
-Near-term work should focus on:
-
-1. Repeat closed-loop revision as a second autonomous cycle.
-2. Expand internal reader-state and recomposition workers beyond deterministic fake mode.
-3. Preserve strongest-rival pressure through every internal comparison.
-4. Keep fail-closed `autonomous_creative_candidate` readiness.
-
-## Where To Find Docs
+Start here:
 
 - [Docs index](docs/INDEX.md)
+- [Context README](context/README.md)
 - [Core realignment context](context/24_CORE_REALIGNMENT_REMOVE_HUMAN_PAPER_VALIDATION.md)
 - [Architecture freeze](context/00_ARCHITECTURE_FREEZE.md)
 - [Gate policy v2 spec](context/19_FINALIZATION_GATE_POLICY_V2_SPEC.md)
-- [Phase 14 operator handoff](docs/phase14_operator_handoff/operator_handoff.md)
+- [Operator handoff](docs/phase14_operator_handoff/operator_handoff.md)
 - [Known blockers](docs/phase14_operator_handoff/known_blockers.md)
-- [Frozen context specs](context/README.md)
 
-Setup context scripts live under:
-
-```text
-tools/setup_context_scripts/
-```
+The `context/` files are frozen phase specs. They are useful historical records, but not
+all of them are current runtime instructions.
