@@ -53,6 +53,7 @@ from abi.modules.production_run import (
 from abi.modules.pilot_artifact_set import (
     PILOT_ARTIFACT_SET_CLIENTS,
     PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT,
+    import_pilot_rival,
     run_pilot_artifact_set,
 )
 from abi.modules.reread import run_reread_demo
@@ -271,6 +272,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for pilot artifact-set workers.",
     )
+    pilot_import_rival_parser = pilot_subparsers.add_parser(
+        "import-rival",
+        help="Import a strongest-rival text into an existing pilot packet.",
+    )
+    pilot_import_rival_parser.add_argument(
+        "--packet-dir",
+        type=Path,
+        required=True,
+        help="Existing pilot packet directory to derive from.",
+    )
+    pilot_import_rival_parser.add_argument(
+        "--rival-file",
+        type=Path,
+        required=True,
+        help="Private strongest-rival text file to import as Text D.",
+    )
     calibration_parser = subparsers.add_parser(
         "calibration",
         help="Run deterministic human calibration commands",
@@ -409,6 +426,12 @@ def main(argv: list[str] | None = None) -> int:
             source_dir=args.source_dir,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
+        )
+    if args.command == "pilot" and args.pilot_command == "import-rival":
+        return _cmd_pilot_import_rival(
+            config,
+            packet_dir=args.packet_dir,
+            rival_file=args.rival_file,
         )
     if args.command == "calibration" and args.calibration_command == "demo":
         return _cmd_calibration_demo(config)
@@ -646,6 +669,21 @@ def _cmd_pilot_artifact_set(
         source_dir=source_dir,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_pilot_import_rival(
+    config: AbiConfig,
+    *,
+    packet_dir: Path,
+    rival_file: Path,
+) -> int:
+    result = import_pilot_rival(
+        config,
+        packet_dir=packet_dir,
+        rival_file=rival_file,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code

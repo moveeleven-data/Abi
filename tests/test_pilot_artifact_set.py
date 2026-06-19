@@ -443,6 +443,120 @@ def test_stubbed_openai_pilot_fails_closed_on_json_baseline_text(tmp_path, monke
     assert "pilot_packet" not in result.payload["artifact_ids"]
 
 
+def test_pilot_import_rival_rebuilds_reader_bundle_without_mutating_source_packet(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    source_dir = write_sources(tmp_path)
+    rival_dir = tmp_path / "inputs" / "private" / "pilot_001"
+    rival_dir.mkdir(parents=True)
+    rival_file = rival_dir / "strongest_rival_text_d.md"
+    rival_text = (
+        "The cup waited by the window with the first light standing inside it. "
+        "Dust held the sill in a thin line, and the room seemed to remember every "
+        "touch by refusing to arrange itself into comfort."
+    )
+    rival_file.write_text(rival_text, encoding="utf-8", newline="\n")
+    config = config_for(tmp_path)
+    original = run_pilot_artifact_set(config, client_name="fake", source_dir=source_dir)
+    original_bundle_path = Path(original.payload["artifact_paths"]["pilot_blinded_reader_bundle"])
+    original_packet_path = Path(original.payload["artifact_paths"]["pilot_packet"])
+    original_bundle_text = original_bundle_path.read_text(encoding="utf-8")
+    original_packet_text = original_packet_path.read_text(encoding="utf-8")
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "pilot",
+            "import-rival",
+            "--packet-dir",
+            str(original.payload["packet_dir"]),
+            "--rival-file",
+            str(rival_file),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["source_packet_dir"] == original.payload["packet_dir"]
+    assert payload["packet_id"] == "packet_0002"
+    assert payload["packet_dir"] != original.payload["packet_dir"]
+    assert set(payload["new_artifact_ids"]) == {
+        "pilot_strongest_rival_import",
+        "pilot_strongest_rival_slot",
+        "pilot_neutral_label_map_private",
+        "pilot_blinded_reader_bundle",
+        "pilot_artifact_set_manifest",
+        "pilot_readiness_report",
+        "pilot_packet",
+    }
+    assert original_bundle_path.read_text(encoding="utf-8") == original_bundle_text
+    assert original_packet_path.read_text(encoding="utf-8") == original_packet_text
+    assert not (Path(original.payload["packet_dir"]) / "pilot_strongest_rival_import.json").exists()
+
+    import_envelope = json.loads(
+        Path(payload["new_artifact_paths"]["pilot_strongest_rival_import"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert import_envelope["artifact_type"] == "pilot_strongest_rival_import"
+    assert import_envelope["fixture_only"] is False
+    assert import_envelope["model_call_id"] is None
+    import_payload = import_envelope["payload"]
+    assert import_payload["source_class"] == "strongest_rival"
+    assert import_payload["non_final"] is True
+    assert import_payload["candidate_only"] is False
+    assert import_payload["not_finalization_eligible"] is True
+    assert import_payload["no_phase_shift_claim"] is True
+    assert import_payload["strongest_rival_comparison_passed"] is False
+
+    private_map = read_payload(payload["new_artifact_paths"]["pilot_neutral_label_map_private"])
+    assert private_map["private"] is True
+    assert private_map["label_map"]["Text A"]["source_class"] == "abi_candidate"
+    assert private_map["label_map"]["Text B"]["source_class"] == "direct_prompt_baseline"
+    assert private_map["label_map"]["Text C"]["source_class"] == "raw_model_baseline"
+    assert private_map["label_map"]["Text D"]["source_class"] == "strongest_rival"
+    assert private_map["label_map"]["Text D"]["included_for_readers"] is True
+
+    bundle = read_payload(payload["new_artifact_paths"]["pilot_blinded_reader_bundle"])
+    assert set(bundle) == {"reader_items"}
+    assert [item["label"] for item in bundle["reader_items"]] == [
+        "Text A",
+        "Text B",
+        "Text C",
+        "Text D",
+    ]
+    assert bundle["reader_items"][3]["text"] == rival_text
+    bundle_text = json.dumps(bundle, sort_keys=True).lower()
+    for forbidden in ("source_class", "abi_candidate", "direct_prompt_baseline", "raw_model_baseline"):
+        assert forbidden not in bundle_text
+
+    slot = read_payload(payload["new_artifact_paths"]["pilot_strongest_rival_slot"])
+    assert slot["slot_status"] == "imported"
+    assert slot["placeholder_only"] is False
+    assert slot["imported_rival_artifact_id"] == payload["new_artifact_ids"][
+        "pilot_strongest_rival_import"
+    ]
+    assert slot["strongest_rival_gate_satisfied"] is False
+    assert slot["strongest_rival_comparison_passed"] is False
+
+    with connect(config.db_path) as connection:
+        gates = list_gates(connection, payload["run_id"])
+        final_report = check_finalization(
+            connection,
+            run_id=payload["run_id"],
+            profile=GATE_PROFILE_FINAL_ARTIFACT,
+        )
+
+    assert not ({gate.gate_name for gate in gates} & set(FINAL_ARTIFACT_REQUIRED_GATES))
+    assert final_report.refused is True
+    assert "strongest_rival_comparison_passed" in final_report.missing_gates
+
+
 def test_pilot_cli_fake_and_openai_guard(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     source_dir = write_sources(tmp_path)

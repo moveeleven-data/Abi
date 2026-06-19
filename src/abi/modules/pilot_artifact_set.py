@@ -9,11 +9,12 @@ import os
 from pathlib import Path
 import re
 
-from abi.artifacts import ArtifactRecord
+from abi.artifacts import ArtifactRecord, get_artifact
 from abi.config import AbiConfig
 from abi.controller.state import (
     PHASE16_FIRST_REAL_CANDIDATE_SET_ACTIVE_PHASE,
     ensure_active_run,
+    get_run,
     set_active_phase,
 )
 from abi.db import connect
@@ -27,7 +28,7 @@ from abi.model_schemas import (
     WorkerRole,
     WorkerSchema,
 )
-from abi.packets import PacketWriter, create_packet_dir
+from abi.packets import PacketWriter, create_packet_dir, read_json_file
 
 
 PILOT_ARTIFACT_SET_LINEAGE_ID = "phase16_first_real_candidate_set"
@@ -74,6 +75,16 @@ PILOT_ARTIFACT_SET_ARTIFACT_TYPES = (
     "pilot_readiness_report",
     "pilot_packet",
 )
+PILOT_RIVAL_IMPORT_ARTIFACT_TYPE = "pilot_strongest_rival_import"
+PILOT_RIVAL_DERIVED_ARTIFACT_TYPES = (
+    PILOT_RIVAL_IMPORT_ARTIFACT_TYPE,
+    "pilot_strongest_rival_slot",
+    "pilot_neutral_label_map_private",
+    "pilot_blinded_reader_bundle",
+    "pilot_artifact_set_manifest",
+    "pilot_readiness_report",
+    "pilot_packet",
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +92,12 @@ class PilotArtifactSetResult:
     exit_code: int
     payload: dict[str, object]
     model_results: tuple[ModelDriverResult, ...] = ()
+
+
+@dataclass(frozen=True)
+class PilotRivalImportResult:
+    exit_code: int
+    payload: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -209,6 +226,241 @@ def run_pilot_artifact_set(
         fixture_only=client_name == PILOT_ARTIFACT_SET_CLIENT_FAKE,
         source_dir=source_root,
         model_client=model_client,
+    )
+
+
+def import_pilot_rival(
+    config: AbiConfig,
+    *,
+    packet_dir: Path | str,
+    rival_file: Path | str,
+) -> PilotRivalImportResult:
+    source_packet_dir = _resolve_path(config, packet_dir)
+    rival_path = _resolve_path(config, rival_file)
+    if not source_packet_dir.exists() or not source_packet_dir.is_dir():
+        return _rival_import_refusal(
+            packet_dir=source_packet_dir,
+            rival_file=rival_path,
+            message=f"Pilot rival import refused; packet directory not found: {source_packet_dir}",
+        )
+    if not rival_path.exists() or not rival_path.is_file():
+        return _rival_import_refusal(
+            packet_dir=source_packet_dir,
+            rival_file=rival_path,
+            message=f"Pilot rival import refused; rival file not found: {rival_path}",
+        )
+
+    try:
+        packet_envelope = read_json_file(source_packet_dir / "pilot_packet.json")
+        packet_payload = packet_envelope["payload"]
+        run_id = str(packet_envelope["run_id"])
+        base_artifact_ids = dict(packet_payload["artifact_ids"])
+    except (KeyError, TypeError, FileNotFoundError, json.JSONDecodeError) as error:
+        return _rival_import_refusal(
+            packet_dir=source_packet_dir,
+            rival_file=rival_path,
+            message=f"Pilot rival import refused; invalid pilot packet: {error}",
+        )
+
+    required_base_types = (
+        "pilot_source_manifest",
+        "pilot_generation_plan",
+        "pilot_abi_candidate_ref",
+        "pilot_direct_prompt_baseline",
+        "pilot_raw_model_baseline",
+        "pilot_strongest_rival_slot",
+    )
+    missing = [artifact_type for artifact_type in required_base_types if artifact_type not in base_artifact_ids]
+    if missing:
+        return _rival_import_refusal(
+            packet_dir=source_packet_dir,
+            rival_file=rival_path,
+            message=f"Pilot rival import refused; missing base artifact IDs: {', '.join(missing)}",
+        )
+
+    rival_text = rival_path.read_text(encoding="utf-8", errors="replace").strip()
+    if not rival_text:
+        return _rival_import_refusal(
+            packet_dir=source_packet_dir,
+            rival_file=rival_path,
+            message="Pilot rival import refused; rival text is empty.",
+        )
+
+    derived_packet_dir = create_packet_dir(source_packet_dir.parent)
+    artifacts: dict[str, ArtifactRecord] = {}
+    base_artifacts: dict[str, ArtifactRecord] = {}
+
+    with connect(config.db_path) as connection:
+        if get_run(connection, run_id) is None:
+            return _rival_import_refusal(
+                packet_dir=source_packet_dir,
+                rival_file=rival_path,
+                message=f"Pilot rival import refused; run is not registered: {run_id}",
+            )
+        set_active_phase(connection, run_id, PHASE16_FIRST_REAL_CANDIDATE_SET_ACTIVE_PHASE)
+        for artifact_type, artifact_id_value in base_artifact_ids.items():
+            artifact = get_artifact(connection, str(artifact_id_value))
+            if artifact is not None:
+                base_artifacts[artifact_type] = artifact
+
+        missing_registered = [
+            artifact_type for artifact_type in required_base_types if artifact_type not in base_artifacts
+        ]
+        if missing_registered:
+            return _rival_import_refusal(
+                packet_dir=source_packet_dir,
+                rival_file=rival_path,
+                message=(
+                    "Pilot rival import refused; base artifacts are not registered: "
+                    f"{', '.join(missing_registered)}"
+                ),
+            )
+        try:
+            base_payloads = _read_base_pilot_payloads(source_packet_dir, base_artifacts)
+        except (KeyError, TypeError, FileNotFoundError, json.JSONDecodeError) as error:
+            return _rival_import_refusal(
+                packet_dir=source_packet_dir,
+                rival_file=rival_path,
+                message=f"Pilot rival import refused; invalid base artifact payloads: {error}",
+            )
+        payloads = dict(base_payloads)
+
+        writer = PacketWriter(
+            connection=connection,
+            run_id=run_id,
+            packet_dir=derived_packet_dir,
+            lineage_id=PILOT_ARTIFACT_SET_LINEAGE_ID,
+            created_by="pilot_import_rival_tool",
+            fixture_only=False,
+            model_call_id=None,
+        )
+
+        payloads[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE] = _build_rival_import_payload(
+            config=config,
+            rival_file=rival_path,
+            rival_text=rival_text,
+        )
+        artifacts[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE] = writer.write_artifact(
+            PILOT_RIVAL_IMPORT_ARTIFACT_TYPE,
+            payloads[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE],
+            parent_ids=[
+                base_artifacts["pilot_source_manifest"].id,
+                base_artifacts["pilot_strongest_rival_slot"].id,
+            ],
+        )
+
+        payloads["pilot_strongest_rival_slot"] = _build_imported_strongest_rival_slot_payload(
+            rival_artifact_id=artifacts[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE].id,
+            source_slot_artifact_id=base_artifacts["pilot_strongest_rival_slot"].id,
+        )
+        artifacts["pilot_strongest_rival_slot"] = writer.write_artifact(
+            "pilot_strongest_rival_slot",
+            payloads["pilot_strongest_rival_slot"],
+            parent_ids=[
+                base_artifacts["pilot_strongest_rival_slot"].id,
+                artifacts[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE].id,
+            ],
+        )
+
+        combined_artifacts = dict(base_artifacts)
+        combined_artifacts.update(artifacts)
+        payloads["pilot_neutral_label_map_private"] = _build_label_map_payload(
+            artifacts=combined_artifacts,
+            payloads=payloads,
+        )
+        artifacts["pilot_neutral_label_map_private"] = writer.write_artifact(
+            "pilot_neutral_label_map_private",
+            payloads["pilot_neutral_label_map_private"],
+            parent_ids=[
+                base_artifacts["pilot_abi_candidate_ref"].id,
+                base_artifacts["pilot_direct_prompt_baseline"].id,
+                base_artifacts["pilot_raw_model_baseline"].id,
+                artifacts[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE].id,
+                artifacts["pilot_strongest_rival_slot"].id,
+            ],
+        )
+
+        payloads["pilot_blinded_reader_bundle"] = _build_blinded_bundle_payload(
+            payloads=payloads,
+        )
+        artifacts["pilot_blinded_reader_bundle"] = writer.write_artifact(
+            "pilot_blinded_reader_bundle",
+            payloads["pilot_blinded_reader_bundle"],
+            parent_ids=[artifacts["pilot_neutral_label_map_private"].id],
+        )
+
+        combined_artifacts.update(artifacts)
+        payloads["pilot_artifact_set_manifest"] = _build_artifact_set_manifest_payload(
+            artifacts=combined_artifacts,
+            payloads=payloads,
+            source_files=list(base_payloads["pilot_source_manifest"].get("source_files", [])),
+        )
+        artifacts["pilot_artifact_set_manifest"] = writer.write_artifact(
+            "pilot_artifact_set_manifest",
+            payloads["pilot_artifact_set_manifest"],
+            parent_ids=[
+                base_artifacts["pilot_source_manifest"].id,
+                artifacts["pilot_blinded_reader_bundle"].id,
+                artifacts[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE].id,
+            ],
+        )
+
+        payloads["pilot_readiness_report"] = _build_readiness_report_payload(
+            client_name=str(packet_payload.get("client", "imported")),
+            fixture_only=False,
+            payloads=payloads,
+        )
+        artifacts["pilot_readiness_report"] = writer.write_artifact(
+            "pilot_readiness_report",
+            payloads["pilot_readiness_report"],
+            parent_ids=[
+                artifacts["pilot_artifact_set_manifest"].id,
+                artifacts["pilot_strongest_rival_slot"].id,
+            ],
+        )
+
+        combined_artifacts.update(artifacts)
+        payloads["pilot_packet"] = _build_rival_import_packet_summary_payload(
+            run_id=run_id,
+            packet_dir=derived_packet_dir,
+            source_packet_dir=source_packet_dir,
+            source_packet_payload=packet_payload,
+            artifacts=combined_artifacts,
+            payloads=payloads,
+        )
+        artifacts["pilot_packet"] = writer.write_artifact(
+            "pilot_packet",
+            payloads["pilot_packet"],
+            parent_ids=[
+                base_artifacts["pilot_source_manifest"].id,
+                base_artifacts["pilot_generation_plan"].id,
+                base_artifacts["pilot_abi_candidate_ref"].id,
+                base_artifacts["pilot_direct_prompt_baseline"].id,
+                base_artifacts["pilot_raw_model_baseline"].id,
+                artifacts[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE].id,
+                artifacts["pilot_strongest_rival_slot"].id,
+                artifacts["pilot_neutral_label_map_private"].id,
+                artifacts["pilot_blinded_reader_bundle"].id,
+                artifacts["pilot_artifact_set_manifest"].id,
+                artifacts["pilot_readiness_report"].id,
+            ],
+        )
+
+    combined_artifacts = dict(base_artifacts)
+    combined_artifacts.update(artifacts)
+    return PilotRivalImportResult(
+        exit_code=0,
+        payload=_rival_import_summary_payload(
+            run_id=run_id,
+            source_packet_dir=source_packet_dir,
+            derived_packet_dir=derived_packet_dir,
+            rival_file=rival_path,
+            artifacts=combined_artifacts,
+            new_artifacts=artifacts,
+            payloads=payloads,
+            accepted=True,
+            message=None,
+        ),
     )
 
 
@@ -698,11 +950,74 @@ def _build_strongest_rival_slot_payload() -> dict[str, object]:
     }
 
 
+def _build_rival_import_payload(
+    *,
+    config: AbiConfig,
+    rival_file: Path,
+    rival_text: str,
+) -> dict[str, object]:
+    return {
+        "worker": "pilot_strongest_rival_import_v1",
+        "source_class": "strongest_rival",
+        "rival_file": _relative_display(rival_file, config.root),
+        "rival_file_sha256": sha256_file(rival_file),
+        "text": rival_text,
+        "non_final": True,
+        "candidate_only": False,
+        "comparison_only": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "finalization_eligible": False,
+        "human_validated": False,
+        "human_validation_claim": False,
+        "phase_shift_claim": False,
+        "no_phase_shift_claim": True,
+        "strongest_rival_comparison_passed": False,
+        "final_gate_satisfied": False,
+    }
+
+
+def _build_imported_strongest_rival_slot_payload(
+    *,
+    rival_artifact_id: str,
+    source_slot_artifact_id: str,
+) -> dict[str, object]:
+    return {
+        "worker": "pilot_strongest_rival_slot_v1",
+        "slot_status": "imported",
+        "placeholder_only": False,
+        "imported_rival_artifact_id": rival_artifact_id,
+        "source_slot_artifact_id": source_slot_artifact_id,
+        "selection_required": False,
+        "strongest_rival_gate_satisfied": False,
+        "strongest_rival_comparison_passed": False,
+        "final_gate_satisfied": False,
+        "operator_note": (
+            "A strongest-rival text has been imported for blinded pilot comparison, "
+            "but no strongest-rival comparison gate has been evaluated or passed."
+        ),
+    }
+
+
 def _build_label_map_payload(
     *,
     artifacts: dict[str, ArtifactRecord],
     payloads: dict[str, dict[str, object]],
 ) -> dict[str, object]:
+    rival_import = artifacts.get(PILOT_RIVAL_IMPORT_ARTIFACT_TYPE)
+    text_d = (
+        {
+            "source_class": "strongest_rival",
+            "artifact_id": rival_import.id,
+            "included_for_readers": True,
+        }
+        if rival_import is not None
+        else {
+            "source_class": "strongest_rival_slot",
+            "artifact_id": artifacts["pilot_strongest_rival_slot"].id,
+            "included_for_readers": False,
+        }
+    )
     return {
         "worker": "pilot_neutral_label_map_private_v1",
         "private": True,
@@ -721,11 +1036,7 @@ def _build_label_map_payload(
                 "source_class": "raw_model_baseline",
                 "artifact_id": artifacts["pilot_raw_model_baseline"].id,
             },
-            "Text D": {
-                "source_class": "strongest_rival_slot",
-                "artifact_id": artifacts["pilot_strongest_rival_slot"].id,
-                "included_for_readers": False,
-            },
+            "Text D": text_d,
         },
         "blindness_rule": "Reader bundle must expose labels and text only, not source class.",
     }
@@ -735,12 +1046,16 @@ def _build_blinded_bundle_payload(
     *,
     payloads: dict[str, dict[str, object]],
 ) -> dict[str, object]:
+    reader_items = [
+        _reader_item("Text A", str(payloads["pilot_abi_candidate_ref"]["text"])),
+        _reader_item("Text B", str(payloads["pilot_direct_prompt_baseline"]["text"])),
+        _reader_item("Text C", str(payloads["pilot_raw_model_baseline"]["text"])),
+    ]
+    rival_import = payloads.get(PILOT_RIVAL_IMPORT_ARTIFACT_TYPE)
+    if rival_import is not None:
+        reader_items.append(_reader_item("Text D", str(rival_import["text"])))
     return {
-        "reader_items": [
-            _reader_item("Text A", str(payloads["pilot_abi_candidate_ref"]["text"])),
-            _reader_item("Text B", str(payloads["pilot_direct_prompt_baseline"]["text"])),
-            _reader_item("Text C", str(payloads["pilot_raw_model_baseline"]["text"])),
-        ],
+        "reader_items": reader_items,
     }
 
 
@@ -750,14 +1065,22 @@ def _build_artifact_set_manifest_payload(
     payloads: dict[str, dict[str, object]],
     source_files: list[dict[str, object]],
 ) -> dict[str, object]:
+    neutral_labels = ["Text A", "Text B", "Text C"]
+    if PILOT_RIVAL_IMPORT_ARTIFACT_TYPE in artifacts:
+        neutral_labels.append("Text D")
     return {
         "worker": "pilot_artifact_set_manifest_v1",
-        "artifact_types": list(PILOT_ARTIFACT_SET_ARTIFACT_TYPES),
+        "artifact_types": list(artifacts),
         "artifact_ids": {artifact_type: artifact.id for artifact_type, artifact in artifacts.items()},
         "source_count": len(source_files),
-        "neutral_labels": ["Text A", "Text B", "Text C"],
+        "neutral_labels": neutral_labels,
         "private_label_map_artifact_id": artifacts["pilot_neutral_label_map_private"].id,
         "blinded_reader_bundle_artifact_id": artifacts["pilot_blinded_reader_bundle"].id,
+        "strongest_rival_import_artifact_id": artifacts.get(
+            PILOT_RIVAL_IMPORT_ARTIFACT_TYPE
+        ).id
+        if PILOT_RIVAL_IMPORT_ARTIFACT_TYPE in artifacts
+        else None,
         "candidate_flags": _candidate_flags(payloads["pilot_abi_candidate_ref"]),
         "baselines_fixture_or_fake": {
             "direct_prompt": payloads["pilot_direct_prompt_baseline"]["fixture_or_fake"],
@@ -791,7 +1114,10 @@ def _build_readiness_report_payload(
     protocol_blockers = []
     if fixture_only:
         protocol_blockers.append("fake-mode baselines are fixture/fake engineering artifacts")
-    protocol_blockers.append("strongest rival is not yet selected or imported")
+    if strongest.get("slot_status") == "imported":
+        protocol_blockers.append("strongest rival imported; comparison gate not passed")
+    else:
+        protocol_blockers.append("strongest rival is not yet selected or imported")
 
     return {
         "worker": "pilot_readiness_report_v1",
@@ -866,6 +1192,54 @@ def _build_packet_summary_payload(
     }
 
 
+def _build_rival_import_packet_summary_payload(
+    *,
+    run_id: str,
+    packet_dir: Path,
+    source_packet_dir: Path,
+    source_packet_payload: dict[str, object],
+    artifacts: dict[str, ArtifactRecord],
+    payloads: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    candidate = payloads["pilot_abi_candidate_ref"]
+    return {
+        "worker": "pilot_rival_import_packet_summary_v1",
+        "run_id": run_id,
+        "packet_id": packet_dir.name,
+        "source_packet_id": source_packet_dir.name,
+        "source_packet_dir": str(source_packet_dir),
+        "client": source_packet_payload.get("client"),
+        "model": source_packet_payload.get("model"),
+        "model_calls_used": source_packet_payload.get("model_calls_used", 0),
+        "model_call_ids": list(source_packet_payload.get("model_call_ids", [])),
+        "artifact_types": list(artifacts),
+        "artifact_ids": {
+            artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
+        },
+        "source_manifest_artifact_id": artifacts["pilot_source_manifest"].id,
+        "abi_candidate_artifact_id": artifacts["pilot_abi_candidate_ref"].id,
+        "direct_prompt_baseline_artifact_id": artifacts["pilot_direct_prompt_baseline"].id,
+        "raw_model_baseline_artifact_id": artifacts["pilot_raw_model_baseline"].id,
+        "strongest_rival_import_artifact_id": artifacts[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE].id,
+        "strongest_rival_slot_artifact_id": artifacts["pilot_strongest_rival_slot"].id,
+        "neutral_label_map_private_artifact_id": artifacts[
+            "pilot_neutral_label_map_private"
+        ].id,
+        "blinded_reader_bundle_artifact_id": artifacts["pilot_blinded_reader_bundle"].id,
+        "pilot_readiness_report_artifact_id": artifacts["pilot_readiness_report"].id,
+        "candidate_flags": _candidate_flags(candidate),
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "human_data_collected": False,
+        "final_gates_marked_passed": [],
+        "strongest_rival_gate_satisfied": False,
+        "strongest_rival_comparison_passed": False,
+    }
+
+
 def _summary_payload(
     *,
     client_name: str,
@@ -923,6 +1297,89 @@ def _summary_payload(
     }
 
 
+def _rival_import_summary_payload(
+    *,
+    run_id: str,
+    source_packet_dir: Path,
+    derived_packet_dir: Path,
+    rival_file: Path,
+    artifacts: dict[str, ArtifactRecord],
+    new_artifacts: dict[str, ArtifactRecord],
+    payloads: dict[str, dict[str, object]],
+    accepted: bool,
+    message: str | None,
+) -> dict[str, object]:
+    return {
+        "accepted": accepted,
+        "refused": False,
+        "run_id": run_id,
+        "source_packet_dir": str(source_packet_dir),
+        "packet_id": derived_packet_dir.name,
+        "packet_dir": str(derived_packet_dir),
+        "rival_file": str(rival_file),
+        "artifact_ids": {
+            artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
+        },
+        "artifact_paths": {
+            artifact_type: artifact.path for artifact_type, artifact in artifacts.items()
+        },
+        "new_artifact_ids": {
+            artifact_type: artifact.id for artifact_type, artifact in new_artifacts.items()
+        },
+        "new_artifact_paths": {
+            artifact_type: artifact.path for artifact_type, artifact in new_artifacts.items()
+        },
+        "counts": {
+            "new_artifacts": len(new_artifacts),
+            "reader_items": len(payloads["pilot_blinded_reader_bundle"]["reader_items"]),
+        },
+        "strongest_rival_slot": payloads["pilot_strongest_rival_slot"],
+        "final_gates_marked_passed": [],
+        "strongest_rival_comparison_passed": False,
+        "message": message,
+    }
+
+
+def _rival_import_refusal(
+    *,
+    packet_dir: Path,
+    rival_file: Path,
+    message: str,
+) -> PilotRivalImportResult:
+    return PilotRivalImportResult(
+        exit_code=1,
+        payload={
+            "accepted": False,
+            "refused": True,
+            "packet_dir": str(packet_dir),
+            "rival_file": str(rival_file),
+            "artifact_ids": {},
+            "new_artifact_ids": {},
+            "message": message,
+        },
+    )
+
+
+def _read_base_pilot_payloads(
+    packet_dir: Path,
+    base_artifacts: dict[str, ArtifactRecord],
+) -> dict[str, dict[str, object]]:
+    artifact_types = (
+        "pilot_source_manifest",
+        "pilot_generation_plan",
+        "pilot_abi_candidate_ref",
+        "pilot_direct_prompt_baseline",
+        "pilot_raw_model_baseline",
+        "pilot_strongest_rival_slot",
+    )
+    payloads = {}
+    for artifact_type in artifact_types:
+        artifact = base_artifacts.get(artifact_type)
+        path = Path(artifact.path) if artifact is not None else packet_dir / f"{artifact_type}.json"
+        payloads[artifact_type] = read_json_file(path)["payload"]
+    return payloads
+
+
 def _failure_result(
     *,
     client_name: str,
@@ -954,6 +1411,13 @@ def _failure_result(
         ),
         model_results=tuple(model_results),
     )
+
+
+def _resolve_path(config: AbiConfig, path: Path | str) -> Path:
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = config.root / resolved
+    return resolved.resolve()
 
 
 def _refusal(
