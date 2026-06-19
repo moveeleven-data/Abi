@@ -923,12 +923,16 @@ def _prompt_for_revision_worker(
             **_target_contract_from_handle(handle_payload),
         }
         prompt["selected_target_contract"] = selected_target
+        prompt["allowed_patch_targets"] = selected_target["allowed_patch_targets"]
     if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
         prompt["candidate_reviser_target_contract"] = (
             "Return patch operations only, not a full revised artifact. Each patch must "
-            "target selected_target_contract.allowed_span_refs unless it explicitly marks "
-            "requires_target_expansion with a target_expansion_reason. The controller, "
-            "not the model, applies accepted patches and assembles revised_candidate_text."
+            "choose patch_target_id exactly from allowed_patch_targets. Do not invent "
+            "patch_target_id values. Do not use target_region_description as patch_target_id. "
+            "Do not target prose descriptions. Patch content must apply inside the chosen "
+            "target text_window unless it explicitly marks requires_target_expansion with "
+            "a target_expansion_reason. The controller, not the model, applies accepted "
+            "patches and assembles revised_candidate_text."
         )
     if worker.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
         prompt["revision_diff_integrity_contract"] = (
@@ -1077,17 +1081,17 @@ def _build_controller_revision_from_patches(
     patch_ids = []
     expansion_required = bool(patch_proposal["target_region_expanded"])
     expansion_reasons = []
-    allowed_span_refs = [str(ref) for ref in handle["allowed_span_refs"]]
+    allowed_targets = _allowed_patch_targets_by_id(handle)
     selected_target_region = str(handle["span_ref"]["region"])
 
     for patch in patch_proposal["patches"]:
-        _validate_patch_target(
+        target = _resolve_patch_target(
             patch=patch,
-            allowed_span_refs=allowed_span_refs,
+            allowed_targets=allowed_targets,
             target_region_label=str(handle["target_region_label"]),
             proposal_expands_target=bool(patch_proposal["target_region_expanded"]),
         )
-        revised = _apply_patch_operation(revised, patch)
+        revised = _apply_patch_operation(revised, patch, target)
         patch_ids.append(str(patch["patch_id"]))
         if bool(patch["requires_target_expansion"]):
             expansion_required = True
@@ -1202,21 +1206,53 @@ def _build_controller_revision_from_patches(
 def _validate_patch_target(
     *,
     patch: dict[str, Any],
-    allowed_span_refs: list[str],
+    allowed_targets: dict[str, dict[str, Any]],
     target_region_label: str,
     proposal_expands_target: bool,
 ) -> None:
+    _resolve_patch_target(
+        patch=patch,
+        allowed_targets=allowed_targets,
+        target_region_label=target_region_label,
+        proposal_expands_target=proposal_expands_target,
+    )
+
+
+def _resolve_patch_target(
+    *,
+    patch: dict[str, Any],
+    allowed_targets: dict[str, dict[str, Any]],
+    target_region_label: str,
+    proposal_expands_target: bool,
+) -> dict[str, Any]:
     patch_id = str(patch["patch_id"])
+    patch_target_id = str(patch["patch_target_id"])
+    target = allowed_targets.get(patch_target_id)
+    if target is None:
+        known_descriptions = {
+            str(target["target_region_description"]): target_id
+            for target_id, target in allowed_targets.items()
+        }
+        if patch_target_id in known_descriptions:
+            raise RevisionIntegrityError(
+                f"patch {patch_id} uses target_region_description as patch_target_id; "
+                f"use canonical id {known_descriptions[patch_target_id]!r}"
+            )
+        allowed_ids = ", ".join(sorted(allowed_targets))
+        raise RevisionIntegrityError(
+            f"patch {patch_id} uses unknown patch_target_id {patch_target_id!r}; "
+            f"allowed_patch_targets are: {allowed_ids}"
+        )
     target_span_ref = patch["target_span_ref"]
     patch_region = str(target_span_ref["region"])
-    region_allowed = any(
-        _region_matches_target(patch_region, allowed)
-        or _region_matches_target(allowed, patch_region)
-        for allowed in allowed_span_refs
-    )
+    allowed_span_ref = str(target["allowed_span_ref"])
+    region_allowed = _region_matches_target(
+        patch_region,
+        allowed_span_ref,
+    ) or _region_matches_target(allowed_span_ref, patch_region)
     label_allowed = str(patch["target_region_label"]) == target_region_label
     if region_allowed and label_allowed and not bool(patch["requires_target_expansion"]):
-        return
+        return target
     expansion_reported = (
         proposal_expands_target
         and bool(patch["requires_target_expansion"])
@@ -1227,26 +1263,55 @@ def _validate_patch_target(
             f"patch {patch_id} targets disallowed span {patch_region!r} "
             f"without explicit target expansion"
         )
+    return target
 
 
-def _apply_patch_operation(text: str, patch: dict[str, Any]) -> str:
+def _apply_patch_operation(text: str, patch: dict[str, Any], target: dict[str, Any]) -> str:
     operation = str(patch["operation"])
     original_excerpt = str(patch["original_excerpt"])
     replacement_text = str(patch["replacement_text"])
     inserted_text = str(patch["inserted_text"])
     patch_id = str(patch["patch_id"])
+    target_window = str(target["text_window"])
+    if original_excerpt not in target_window:
+        raise RevisionIntegrityError(
+            f"patch {patch_id} original_excerpt does not appear inside patch target "
+            f"{target['patch_target_id']!r}"
+        )
+    if target_window not in text:
+        raise RevisionIntegrityError(
+            f"patch target {target['patch_target_id']!r} text_window does not appear in "
+            "candidate text"
+        )
     if original_excerpt not in text:
         raise RevisionIntegrityError(
             f"patch {patch_id} original_excerpt does not appear in candidate text"
         )
+    target_start = text.index(target_window)
+    target_end = target_start + len(target_window)
+    before_target = text[:target_start]
+    target_text = text[target_start:target_end]
+    after_target = text[target_end:]
     if operation in {"replace", "compress"}:
-        return text.replace(original_excerpt, replacement_text, 1)
+        changed_target = target_text.replace(original_excerpt, replacement_text, 1)
+        return before_target + changed_target + after_target
     if operation == "delete":
-        return text.replace(original_excerpt, "", 1)
+        changed_target = target_text.replace(original_excerpt, "", 1)
+        return before_target + changed_target + after_target
     if operation == "insert_after":
-        return text.replace(original_excerpt, f"{original_excerpt} {inserted_text}", 1)
+        changed_target = target_text.replace(
+            original_excerpt,
+            f"{original_excerpt} {inserted_text}",
+            1,
+        )
+        return before_target + changed_target + after_target
     if operation == "insert_before":
-        return text.replace(original_excerpt, f"{inserted_text} {original_excerpt}", 1)
+        changed_target = target_text.replace(
+            original_excerpt,
+            f"{inserted_text} {original_excerpt}",
+            1,
+        )
+        return before_target + changed_target + after_target
     raise RevisionIntegrityError(f"patch {patch_id} has unsupported operation {operation!r}")
 
 
@@ -1556,8 +1621,10 @@ def _reported_changed_spans_for_texts(
     return spans
 
 
-def _target_region_contract(region: str) -> dict[str, object]:
+def _target_region_contract(region: str, *, candidate_text: str = "") -> dict[str, object]:
     label = "_".join(_words(region)[:8]) or "target_region"
+    patch_target_id = _patch_target_id_for_region(region)
+    text_window = _target_text_window(candidate_text, region)
     return {
         "target_region_label": f"target_region:{label}",
         "target_region_description": (
@@ -1565,6 +1632,17 @@ def _target_region_contract(region: str) -> dict[str, object]:
             "require explicit target expansion."
         ),
         "allowed_span_refs": [region],
+        "allowed_patch_targets": [
+            {
+                "patch_target_id": patch_target_id,
+                "target_region_label": f"target_region:{label}",
+                "target_region_description": region,
+                "allowed_span_ref": region,
+                "text_window": text_window,
+                "paragraph_index": _target_paragraph_index(region),
+                "protected_outside_spans": [f"all candidate spans outside {region}"],
+            }
+        ],
         "protected_outside_spans": [f"all candidate spans outside {region}"],
     }
 
@@ -1572,6 +1650,9 @@ def _target_region_contract(region: str) -> dict[str, object]:
 def _target_contract_from_handle(handle: dict[str, Any]) -> dict[str, object]:
     region = str(handle["span_ref"]["region"])
     fallback = _target_region_contract(region)
+    allowed_patch_targets = list(
+        handle.get("allowed_patch_targets", fallback["allowed_patch_targets"])
+    )
     return {
         "target_region_label": str(
             handle.get("target_region_label", fallback["target_region_label"])
@@ -1583,9 +1664,55 @@ def _target_contract_from_handle(handle: dict[str, Any]) -> dict[str, object]:
             )
         ),
         "allowed_span_refs": list(handle.get("allowed_span_refs", fallback["allowed_span_refs"])),
+        "allowed_patch_targets": allowed_patch_targets,
         "protected_outside_spans": list(
             handle.get("protected_outside_spans", fallback["protected_outside_spans"])
         ),
+    }
+
+
+def _patch_target_id_for_region(region: str) -> str:
+    lowered = region.lower()
+    if "first two" in lowered and ("pivot" in lowered or "image-to-interpretation" in lowered):
+        return "target_opening_first_pivots"
+    words = _words(region)
+    compact = "_".join(words[:8])
+    return f"target_{compact or 'region'}"
+
+
+def _target_text_window(candidate_text: str, region: str) -> str:
+    if not candidate_text.strip():
+        return region
+    lowered = region.lower()
+    paragraphs = [part.strip() for part in candidate_text.split("\n\n") if part.strip()]
+    if "ending" in lowered and paragraphs:
+        return paragraphs[-1]
+    if "middle" in lowered and len(paragraphs) > 2:
+        return paragraphs[len(paragraphs) // 2]
+    if "whole" in lowered or "artifact" in lowered:
+        return candidate_text.strip()
+    sentences = _sentences(candidate_text)
+    if "first two" in lowered and len(sentences) >= 2:
+        return " ".join(sentences[:2])
+    if sentences:
+        return sentences[0]
+    return candidate_text.strip()
+
+
+def _target_paragraph_index(region: str) -> int:
+    lowered = region.lower()
+    if "ending" in lowered:
+        return -1
+    if "middle" in lowered:
+        return 1
+    return 0
+
+
+def _allowed_patch_targets_by_id(handle: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(target["patch_target_id"]): target
+        for target in handle.get("allowed_patch_targets", [])
+        if isinstance(target, dict)
     }
 
 
@@ -1656,6 +1783,8 @@ def _region_matches_target(change_region: str, selected_target_region: str) -> b
     if "whole" in target or "artifact" in target:
         return True
     if "opening-to" in target or "bridge" in target:
+        return "opening" in change or "middle" in change
+    if "first two" in target and ("pivot" in target or "image-to-interpretation" in target):
         return "opening" in change or "middle" in change
     for marker in ("opening", "middle", "ending"):
         if marker in target and marker in change:
@@ -1737,7 +1866,10 @@ def _fake_model_causal_handle_payload(
     plan_item = _plan_item_for_failure(plan, str(selected_failure["selected_failure_type"]))
     candidate = prompt["candidate"]
     quoted = _first_sentence(str(candidate["text"]))
-    target_contract = _target_region_contract(str(plan_item["target_region"]))
+    target_contract = _target_region_contract(
+        str(plan_item["target_region"]),
+        candidate_text=str(candidate["text"]),
+    )
     return {
         "bounded_target": True,
         "target_count": 1,
@@ -1784,6 +1916,7 @@ def _fake_model_revised_candidate_payload(
     handle = prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
     first_sentence = _first_sentence(original)
     inserted_text = _revision_insertion_text()
+    patch_target = _first_allowed_patch_target(handle)
     return {
         "proposal_id": f"revision_patch_{sha256_text(first_sentence + inserted_text)[:12]}",
         "source_candidate_artifact_id": str(candidate["artifact_id"]),
@@ -1792,6 +1925,7 @@ def _fake_model_revised_candidate_payload(
         "patches": [
             {
                 "patch_id": "patch_01",
+                "patch_target_id": str(patch_target["patch_target_id"]),
                 "target_span_ref": dict(handle["span_ref"]),
                 "target_region_label": str(handle["target_region_label"]),
                 "operation": "insert_after",
@@ -2016,6 +2150,16 @@ def _prior_revised_candidate_payload(
     return prior_payloads["revised_candidate_text"]
 
 
+def _first_allowed_patch_target(handle: dict[str, Any]) -> dict[str, Any]:
+    targets = list(handle.get("allowed_patch_targets", []))
+    if not targets:
+        raise ModelClientError("causal handle exposes no allowed_patch_targets")
+    first = targets[0]
+    if not isinstance(first, dict):
+        raise ModelClientError("causal handle allowed_patch_targets must contain objects")
+    return first
+
+
 def _fake_model_local_law_payload(
     prior_payloads: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -2223,7 +2367,10 @@ def _build_causal_handle_selection(
     candidate = subject.candidate_text
     quoted = _first_sentence(candidate.text)
     handle = str(plan_item["causal_handle"])
-    target_contract = _target_region_contract(str(plan_item["target_region"]))
+    target_contract = _target_region_contract(
+        str(plan_item["target_region"]),
+        candidate_text=candidate.text,
+    )
     return {
         "worker": "causal_handle_selector_v1_fake",
         "bounded_target": True,
@@ -2271,6 +2418,7 @@ def _build_revision_patch_proposal(
     original = subject.candidate_text.text
     first_sentence = _first_sentence(original)
     inserted_text = _revision_insertion_text()
+    patch_target = _first_allowed_patch_target(handle_selection)
     return {
         "worker": "revision_patch_proposal_v1_fake",
         "proposal_id": f"revision_patch_{sha256_text(first_sentence + inserted_text)[:12]}",
@@ -2280,6 +2428,7 @@ def _build_revision_patch_proposal(
         "patches": [
             {
                 "patch_id": "patch_01",
+                "patch_target_id": str(patch_target["patch_target_id"]),
                 "target_span_ref": dict(handle_selection["span_ref"]),
                 "target_region_label": handle_selection["target_region_label"],
                 "operation": "insert_after",

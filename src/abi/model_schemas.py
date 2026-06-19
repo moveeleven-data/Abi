@@ -1465,6 +1465,29 @@ def _revision_changed_span_schema() -> dict[str, Any]:
     )
 
 
+def _revision_patch_target_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "patch_target_id": {"type": "string"},
+            "target_region_label": {"type": "string"},
+            "target_region_description": {"type": "string"},
+            "allowed_span_ref": {"type": "string"},
+            "text_window": {"type": "string"},
+            "paragraph_index": {"type": "integer"},
+            "protected_outside_spans": _string_array_schema(),
+        },
+        [
+            "patch_target_id",
+            "target_region_label",
+            "target_region_description",
+            "allowed_span_ref",
+            "text_window",
+            "paragraph_index",
+            "protected_outside_spans",
+        ],
+    )
+
+
 AUTONOMOUS_REVISION_PATCH_OPERATIONS = (
     "replace",
     "insert_after",
@@ -1485,6 +1508,7 @@ def _revision_patch_schema() -> dict[str, Any]:
     return _object_schema(
         {
             "patch_id": {"type": "string"},
+            "patch_target_id": {"type": "string"},
             "target_span_ref": _revision_span_ref_schema(),
             "target_region_label": {"type": "string"},
             "operation": _revision_patch_operation_schema(),
@@ -1502,6 +1526,7 @@ def _revision_patch_schema() -> dict[str, Any]:
         },
         [
             "patch_id",
+            "patch_target_id",
             "target_span_ref",
             "target_region_label",
             "operation",
@@ -1668,6 +1693,10 @@ def autonomous_revision_causal_handle_json_schema() -> dict[str, Any]:
             "target_region_label": {"type": "string"},
             "target_region_description": {"type": "string"},
             "allowed_span_refs": _string_array_schema(),
+            "allowed_patch_targets": {
+                "type": "array",
+                "items": _revision_patch_target_schema(),
+            },
             "protected_outside_spans": _string_array_schema(),
             "quoted_text": {"type": "string"},
             "causal_handle": {"type": "string"},
@@ -1692,6 +1721,7 @@ def autonomous_revision_causal_handle_json_schema() -> dict[str, Any]:
             "target_region_label",
             "target_region_description",
             "allowed_span_refs",
+            "allowed_patch_targets",
             "protected_outside_spans",
             "quoted_text",
             "causal_handle",
@@ -1772,6 +1802,10 @@ def autonomous_revision_diff_report_json_schema() -> dict[str, Any]:
             "target_region_label": {"type": "string"},
             "target_region_description": {"type": "string"},
             "allowed_span_refs": _string_array_schema(),
+            "allowed_patch_targets": {
+                "type": "array",
+                "items": _revision_patch_target_schema(),
+            },
             "protected_outside_spans": _string_array_schema(),
             "causal_handle": {"type": "string"},
             "original_excerpt": {"type": "string"},
@@ -1794,6 +1828,7 @@ def autonomous_revision_diff_report_json_schema() -> dict[str, Any]:
             "target_region_label",
             "target_region_description",
             "allowed_span_refs",
+            "allowed_patch_targets",
             "protected_outside_spans",
             "causal_handle",
             "original_excerpt",
@@ -2923,9 +2958,16 @@ def _validate_autonomous_revision_causal_handle(payload: dict[str, Any]) -> dict
     for key in ("target_region_label", "target_region_description"):
         _require_type(payload, key, str)
     _require_string_list(payload, "allowed_span_refs")
+    _require_object_list(payload, "allowed_patch_targets")
+    allowed_patch_targets = [
+        _validate_revision_patch_target(target, f"allowed_patch_targets[{index}]")
+        for index, target in enumerate(payload["allowed_patch_targets"])
+    ]
     _require_string_list(payload, "protected_outside_spans")
     if not payload["allowed_span_refs"]:
         raise ModelValidationError("allowed_span_refs must not be empty")
+    if not allowed_patch_targets:
+        raise ModelValidationError("allowed_patch_targets must not be empty")
     for key in (
         "quoted_text",
         "causal_handle",
@@ -2951,6 +2993,7 @@ def _validate_autonomous_revision_causal_handle(payload: dict[str, Any]) -> dict
         "target_region_label": payload["target_region_label"],
         "target_region_description": payload["target_region_description"],
         "allowed_span_refs": payload["allowed_span_refs"],
+        "allowed_patch_targets": allowed_patch_targets,
         "protected_outside_spans": payload["protected_outside_spans"],
         "quoted_text": payload["quoted_text"],
         "causal_handle": payload["causal_handle"],
@@ -3046,9 +3089,16 @@ def _validate_autonomous_revision_diff_report(payload: dict[str, Any]) -> dict[s
     ):
         _require_type(payload, key, str)
     _require_string_list(payload, "allowed_span_refs")
+    _require_object_list(payload, "allowed_patch_targets")
+    allowed_patch_targets = [
+        _validate_revision_patch_target(target, f"allowed_patch_targets[{index}]")
+        for index, target in enumerate(payload["allowed_patch_targets"])
+    ]
     _require_string_list(payload, "protected_outside_spans")
     if not payload["allowed_span_refs"]:
         raise ModelValidationError("allowed_span_refs must not be empty")
+    if not allowed_patch_targets:
+        raise ModelValidationError("allowed_patch_targets must not be empty")
     _require_object_list(payload, "changed_spans")
     changed_spans = [
         _validate_changed_span(span, f"changed_spans[{index}]")
@@ -3081,6 +3131,7 @@ def _validate_autonomous_revision_diff_report(payload: dict[str, Any]) -> dict[s
         "target_region_label": payload["target_region_label"],
         "target_region_description": payload["target_region_description"],
         "allowed_span_refs": payload["allowed_span_refs"],
+        "allowed_patch_targets": allowed_patch_targets,
         "protected_outside_spans": payload["protected_outside_spans"],
         "causal_handle": payload["causal_handle"],
         "original_excerpt": payload["original_excerpt"],
@@ -3285,12 +3336,50 @@ def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, obj
     return validated
 
 
+def _validate_revision_patch_target(payload: dict[str, Any], label: str) -> dict[str, object]:
+    validated = _validate_object(
+        payload,
+        label,
+        (
+            "patch_target_id",
+            "target_region_label",
+            "target_region_description",
+            "allowed_span_ref",
+            "text_window",
+        ),
+    )
+    _validate_patch_target_id(payload["patch_target_id"], f"{label}.patch_target_id")
+    _require_integer(payload, "paragraph_index", field_prefix=f"{label}.")
+    _require_string_list(payload, "protected_outside_spans", field_prefix=f"{label}.")
+    if not str(payload["text_window"]).strip():
+        raise ModelValidationError(f"{label}.text_window must not be empty")
+    if str(payload["patch_target_id"]).strip() == str(
+        payload["target_region_description"]
+    ).strip():
+        raise ModelValidationError(
+            f"{label}.patch_target_id must be canonical, not target_region_description"
+        )
+    validated["paragraph_index"] = int(payload["paragraph_index"])
+    validated["protected_outside_spans"] = payload["protected_outside_spans"]
+    return validated
+
+
+def _validate_patch_target_id(value: object, label: str) -> None:
+    if not isinstance(value, str):
+        raise ModelValidationError(f"{label} must be a string")
+    if not value.startswith("target_") or any(character.isspace() for character in value):
+        raise ModelValidationError(
+            f"{label} must be a canonical patch target id such as target_opening_first_pivots"
+        )
+
+
 def _validate_revision_patch(payload: dict[str, Any], label: str) -> dict[str, object]:
     validated = _validate_object(
         payload,
         label,
         (
             "patch_id",
+            "patch_target_id",
             "target_region_label",
             "operation",
             "original_excerpt",
@@ -3302,6 +3391,7 @@ def _validate_revision_patch(payload: dict[str, Any], label: str) -> dict[str, o
             "uncertainty",
         ),
     )
+    _validate_patch_target_id(payload["patch_target_id"], f"{label}.patch_target_id")
     _require_type(payload, "target_span_ref", dict, field_prefix=f"{label}.")
     validated["target_span_ref"] = _validate_revision_span_ref(
         payload["target_span_ref"],
