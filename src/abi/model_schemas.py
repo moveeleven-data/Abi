@@ -1442,6 +1442,8 @@ def _revision_changed_span_schema() -> dict[str, Any]:
     return _object_schema(
         {
             "changed_span_id": {"type": "string"},
+            "patch_span_id": {"type": "string"},
+            "source_patch_span_ids": _string_array_schema(),
             "before": {"type": "string"},
             "after": {"type": "string"},
             "region": {"type": "string"},
@@ -1453,6 +1455,8 @@ def _revision_changed_span_schema() -> dict[str, Any]:
         },
         [
             "changed_span_id",
+            "patch_span_id",
+            "source_patch_span_ids",
             "before",
             "after",
             "region",
@@ -1508,17 +1512,17 @@ def _revision_patch_schema() -> dict[str, Any]:
     return _object_schema(
         {
             "patch_id": {"type": "string"},
+            "patch_span_id": {"type": "string"},
             "patch_target_id": {"type": "string"},
-            "target_span_ref": _revision_span_ref_schema(),
-            "target_region_label": {"type": "string"},
             "operation": _revision_patch_operation_schema(),
-            "original_excerpt": {"type": "string"},
             "replacement_text": {"type": "string"},
             "inserted_text": {"type": "string"},
             "failure_addressed": {"type": "string"},
             "causal_handle_id": {"type": "string"},
-            "protected_effects": _string_array_schema(),
+            "protected_effects_preserved": _string_array_schema(),
             "forbidden_changes_respected": _string_array_schema(),
+            "rationale": {"type": "string"},
+            "expected_reader_state_change": {"type": "string"},
             "requires_target_expansion": {"type": "boolean"},
             "target_expansion_reason": {"type": "string"},
             "confidence": {"type": "number"},
@@ -1526,17 +1530,17 @@ def _revision_patch_schema() -> dict[str, Any]:
         },
         [
             "patch_id",
+            "patch_span_id",
             "patch_target_id",
-            "target_span_ref",
-            "target_region_label",
             "operation",
-            "original_excerpt",
             "replacement_text",
             "inserted_text",
             "failure_addressed",
             "causal_handle_id",
-            "protected_effects",
+            "protected_effects_preserved",
             "forbidden_changes_respected",
+            "rationale",
+            "expected_reader_state_change",
             "requires_target_expansion",
             "target_expansion_reason",
             "confidence",
@@ -3302,6 +3306,7 @@ def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, obj
         label,
         (
             "changed_span_id",
+            "patch_span_id",
             "before",
             "after",
             "region",
@@ -3312,6 +3317,9 @@ def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, obj
     _require_type(payload, "inside_target", bool, field_prefix=f"{label}.")
     _require_type(payload, "within_selected_target", bool, field_prefix=f"{label}.")
     _require_type(payload, "requires_target_expansion", bool, field_prefix=f"{label}.")
+    _require_string_list(payload, "source_patch_span_ids", field_prefix=f"{label}.")
+    if not payload["source_patch_span_ids"]:
+        raise ModelValidationError(f"{label}.source_patch_span_ids must not be empty")
     if payload["inside_target"] != payload["within_selected_target"]:
         raise ModelValidationError(
             f"{label}.inside_target and {label}.within_selected_target must agree"
@@ -3327,6 +3335,7 @@ def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, obj
     validated["inside_target"] = payload["inside_target"]
     validated["within_selected_target"] = payload["within_selected_target"]
     validated["requires_target_expansion"] = payload["requires_target_expansion"]
+    validated["source_patch_span_ids"] = payload["source_patch_span_ids"]
     return validated
 
 
@@ -3367,63 +3376,63 @@ def _validate_patch_target_id(value: object, label: str) -> None:
         )
 
 
+def _validate_patch_span_id(value: object, label: str) -> None:
+    if not isinstance(value, str):
+        raise ModelValidationError(f"{label} must be a string")
+    if not value.startswith("span_") or any(character.isspace() for character in value):
+        raise ModelValidationError(
+            f"{label} must be a canonical patch span id such as "
+            "span_target_opening_first_pivots_p02_s01"
+        )
+
+
 def _validate_revision_patch(payload: dict[str, Any], label: str) -> dict[str, object]:
     validated = _validate_object(
         payload,
         label,
         (
             "patch_id",
+            "patch_span_id",
             "patch_target_id",
-            "target_region_label",
             "operation",
-            "original_excerpt",
             "replacement_text",
             "inserted_text",
             "failure_addressed",
             "causal_handle_id",
+            "rationale",
+            "expected_reader_state_change",
             "target_expansion_reason",
             "uncertainty",
         ),
     )
+    _validate_patch_span_id(payload["patch_span_id"], f"{label}.patch_span_id")
     _validate_patch_target_id(payload["patch_target_id"], f"{label}.patch_target_id")
-    _require_type(payload, "target_span_ref", dict, field_prefix=f"{label}.")
-    validated["target_span_ref"] = _validate_revision_span_ref(
-        payload["target_span_ref"],
-        f"{label}.target_span_ref",
-    )
     if payload["operation"] not in AUTONOMOUS_REVISION_PATCH_OPERATIONS:
         raise ModelValidationError(
             f"{label}.operation must be one of {list(AUTONOMOUS_REVISION_PATCH_OPERATIONS)}"
         )
-    _require_string_list(payload, "protected_effects", field_prefix=f"{label}.")
+    _require_string_list(payload, "protected_effects_preserved", field_prefix=f"{label}.")
     _require_string_list(payload, "forbidden_changes_respected", field_prefix=f"{label}.")
     _require_type(payload, "requires_target_expansion", bool, field_prefix=f"{label}.")
     _require_number(payload, "confidence", field_prefix=f"{label}.")
     operation = str(payload["operation"])
-    original_excerpt = str(payload["original_excerpt"]).strip()
     replacement_text = str(payload["replacement_text"]).strip()
     inserted_text = str(payload["inserted_text"]).strip()
-    if operation in {"replace", "compress"} and (
-        not original_excerpt or not replacement_text
-    ):
+    if operation in {"replace", "compress"} and not replacement_text:
         raise ModelValidationError(
-            f"{label}.original_excerpt and replacement_text are required for {operation}"
+            f"{label}.replacement_text is required for {operation}"
         )
-    if operation in {"insert_after", "insert_before"} and (
-        not original_excerpt or not inserted_text
-    ):
+    if operation in {"insert_after", "insert_before"} and not inserted_text:
         raise ModelValidationError(
-            f"{label}.original_excerpt and inserted_text are required for {operation}"
+            f"{label}.inserted_text is required for {operation}"
         )
-    if operation == "delete" and not original_excerpt:
-        raise ModelValidationError(f"{label}.original_excerpt is required for delete")
     if payload["requires_target_expansion"] and not payload[
         "target_expansion_reason"
     ].strip():
         raise ModelValidationError(
             f"{label}.target_expansion_reason is required when target expansion is required"
         )
-    validated["protected_effects"] = payload["protected_effects"]
+    validated["protected_effects_preserved"] = payload["protected_effects_preserved"]
     validated["forbidden_changes_respected"] = payload["forbidden_changes_respected"]
     validated["requires_target_expansion"] = payload["requires_target_expansion"]
     validated["confidence"] = payload["confidence"]

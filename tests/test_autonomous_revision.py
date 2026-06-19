@@ -258,15 +258,9 @@ class TargetRegionViolationClient(FakeAutonomousRevisionModelClient):
             return dump_json(payload)
         if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
             prompt = json.loads(request.input_text)
-            opening_target = next(
-                target
-                for target in prompt["allowed_patch_targets"]
-                if target["patch_target_id"] == "target_opening_sentence"
-            )
             patch = payload["patches"][0]
-            patch["patch_target_id"] = opening_target["patch_target_id"]
-            patch["target_span_ref"]["region"] = opening_target["allowed_span_ref"]
-            patch["target_region_label"] = opening_target["target_region_label"]
+            patch["patch_target_id"] = "target_opening_sentence"
+            patch["patch_span_id"] = prompt["patchable_spans"][0]["patch_span_id"]
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
         return raw_output
@@ -357,8 +351,7 @@ class DisallowedPatchTargetClient(FakeAutonomousRevisionModelClient):
         payload = json.loads(raw_output)
         if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
             patch = payload["patches"][0]
-            patch["target_span_ref"]["region"] = "ending paragraph only"
-            patch["target_region_label"] = "target_region:ending_paragraph_only"
+            patch["patch_target_id"] = "target_ending_return_closure"
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
         return raw_output
@@ -393,7 +386,52 @@ class OriginalExcerptOutsideTargetClient(FakeAutonomousRevisionModelClient):
         raw_output = super().generate(request)
         payload = json.loads(raw_output)
         if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
-            payload["patches"][0]["original_excerpt"] = "not present inside the target window"
+            payload["patches"][0]["original_excerpt"] = (
+                "not present inside the target window and not authoritative"
+            )
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class InventedPatchSpanClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+            payload["patches"][0]["patch_span_id"] = "span_target_invented_p99_s99"
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class DescriptionPatchSpanClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+            span = json.loads(request.input_text)["patchable_spans"][0]
+            payload["patches"][0]["patch_span_id"] = span["exact_text"]
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class ReplacementPatchSpanClient(FakeAutonomousRevisionModelClient):
+    replacement_text = (
+        "The table is still there in the morning, but the room has not yet told the "
+        "reader what that means."
+    )
+
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+            patch = payload["patches"][0]
+            patch["operation"] = "replace"
+            patch["replacement_text"] = self.replacement_text
+            patch["inserted_text"] = ""
+            patch["rationale"] = "Replace only the selected controller span."
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
         return raw_output
@@ -767,8 +805,10 @@ def test_autonomous_revision_model_schemas_are_strict_objects():
     patch_item = patch_schema["properties"]["patches"]["items"]
     assert patch_item["type"] == "object"
     assert patch_item["additionalProperties"] is False
+    assert "patch_span_id" in patch_item["required"]
     assert "patch_target_id" in patch_item["required"]
-    assert "target_span_ref" in patch_item["required"]
+    assert "original_excerpt" not in patch_item["properties"]
+    assert "target_span_ref" not in patch_item["properties"]
     handle_schema = json_schema_for_worker_schema(AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA)
     assert "selected_patch_target_id" in handle_schema["required"]
     assert "allowed_patch_targets" not in handle_schema["properties"]
@@ -942,9 +982,25 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
         "selected_target_contract"
     ]["allowed_patch_targets"]
     assert reviser_prompt["allowed_patch_targets"][0]["patch_target_id"].startswith("target_")
+    assert reviser_prompt["selected_patch_target_id"] == reviser_prompt[
+        "allowed_patch_targets"
+    ][0]["patch_target_id"]
+    assert reviser_prompt["patchable_spans"]
+    assert all(
+        span["patch_span_id"].startswith("span_")
+        and span["patch_target_id"] == reviser_prompt["selected_patch_target_id"]
+        and span["exact_text"]
+        for span in reviser_prompt["patchable_spans"]
+    )
     assert "candidate_reviser_target_contract" in reviser_prompt
     assert "Return patch operations only" in reviser_prompt["candidate_reviser_target_contract"]
     assert "choose patch_target_id exactly" in reviser_prompt[
+        "candidate_reviser_target_contract"
+    ]
+    assert "choose patch_span_id exactly" in reviser_prompt[
+        "candidate_reviser_target_contract"
+    ]
+    assert "Do not provide authoritative original_excerpt" in reviser_prompt[
         "candidate_reviser_target_contract"
     ]
     assert not any(
@@ -1017,6 +1073,8 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
         target["patch_target_id"] for target in handle["allowed_patch_targets"]
     }
     assert handle["allowed_patch_targets"][0]["patch_target_id"].startswith("target_")
+    assert handle["patchable_spans"]
+    assert handle["patchable_spans_source"] == "controller_owned"
     assert handle["protected_outside_spans"]
 
     patch_proposal = read_payload(result.payload["artifact_paths"]["revision_patch_proposal"])
@@ -1025,12 +1083,19 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert patch_proposal["patches"][0]["patch_target_id"] == handle[
         "allowed_patch_targets"
     ][0]["patch_target_id"]
+    assert patch_proposal["patches"][0]["patch_span_id"] == handle["patchable_spans"][0][
+        "patch_span_id"
+    ]
+    assert "original_excerpt" not in patch_proposal["patches"][0]
     assert patch_proposal["bounded_patch_set"] is True
     assert patch_proposal["full_rewrite"] is False
 
     revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
     assert revised["assembled_by_controller"] is True
     assert revised["source_patch_ids"] == ["patch_01"]
+    assert revised["source_patch_span_ids"] == [
+        patch_proposal["patches"][0]["patch_span_id"]
+    ]
     assert revised["bounded_recomposition"] is True
     assert revised["full_rewrite"] is False
     assert revised["non_final"] is True
@@ -1040,6 +1105,9 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
     assert diff["assembled_by_controller"] is True
     assert diff["source_patch_ids"] == ["patch_01"]
+    assert diff["source_patch_span_ids"] == [
+        patch_proposal["patches"][0]["patch_span_id"]
+    ]
     assert diff["bounded_change"] is True
     assert diff["changed_spans"]
     assert diff["target_region_expanded"] is False
@@ -1047,6 +1115,8 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert diff["expansion_reason"] == ""
     assert diff["target_region_label"] == handle["target_region_label"]
     assert all("changed_span_id" in span for span in diff["changed_spans"])
+    assert all("patch_span_id" in span for span in diff["changed_spans"])
+    assert all("source_patch_span_ids" in span for span in diff["changed_spans"])
     assert all(
         span["inside_target"] == span["within_selected_target"]
         for span in diff["changed_spans"]
@@ -1272,7 +1342,7 @@ def test_stubbed_openai_disallowed_patch_target_fails_before_revision_artifacts(
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "model-call failure" in result.payload["message"]
-    assert "targets disallowed span" in result.payload["message"]
+    assert "belongs to target" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 3
     failed_call = result.payload["model_calls"][-1]
     assert failed_call["schema_name"] == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.name
@@ -1344,7 +1414,7 @@ def test_stubbed_openai_invented_patch_target_id_fails_validation(tmp_path):
     assert "ablation_variant_set" not in result.payload["artifact_ids"]
 
 
-def test_stubbed_openai_original_excerpt_must_be_inside_patch_target(tmp_path):
+def test_stubbed_openai_model_authored_original_excerpt_is_not_authoritative(tmp_path):
     config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
     clients: list[FakeAutonomousRevisionModelClient] = []
 
@@ -1358,14 +1428,105 @@ def test_stubbed_openai_original_excerpt_must_be_inside_patch_target(tmp_path):
         client_factory=custom_revision_factory(clients, OriginalExcerptOutsideTargetClient),
     )
 
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    patch_proposal = read_payload(result.payload["artifact_paths"]["revision_patch_proposal"])
+    handle = read_payload(result.payload["artifact_paths"]["causal_handle_selection"])
+    revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
+    diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
+    assert "original_excerpt" not in patch_proposal["patches"][0]
+    span_text = handle["patchable_spans"][0]["exact_text"]
+    assert f"{span_text} One ring of damp wood" in revised["text"]
+    assert revised["assembled_by_controller"] is True
+    assert diff["changed_spans"][0]["patch_span_id"] == patch_proposal["patches"][0][
+        "patch_span_id"
+    ]
+
+
+def test_stubbed_openai_invented_patch_span_id_fails_before_revision_artifacts(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, InventedPatchSpanClient),
+    )
+
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
-    assert "original_excerpt does not appear inside patch target" in result.payload["message"]
+    assert "unknown patch_span_id" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 3
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    for artifact_type in (
+        "revision_patch_proposal",
+        "revised_candidate_text",
+        "revision_diff_report",
+        "ablation_variant_set",
+        "ablation_reread_comparison",
+        "old_new_rival_comparison",
+        "local_law_case_note",
+        "autonomous_closed_loop_gate_report",
+        "autonomous_closed_loop_packet",
+    ):
+        assert artifact_type not in result.payload["artifact_ids"]
+
+
+def test_stubbed_openai_description_patch_span_id_fails_validation(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, DescriptionPatchSpanClient),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "patch_span_id must be a canonical patch span id" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 3
     assert "revision_patch_proposal" not in result.payload["artifact_ids"]
     assert "revised_candidate_text" not in result.payload["artifact_ids"]
-    assert "revision_diff_report" not in result.payload["artifact_ids"]
-    assert "ablation_variant_set" not in result.payload["artifact_ids"]
+
+
+def test_stubbed_openai_replacement_uses_controller_exact_span_text(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, ReplacementPatchSpanClient),
+    )
+
+    assert result.exit_code == 0
+    handle = read_payload(result.payload["artifact_paths"]["causal_handle_selection"])
+    patch_proposal = read_payload(result.payload["artifact_paths"]["revision_patch_proposal"])
+    revised = read_payload(result.payload["artifact_paths"]["revised_candidate_text"])
+    diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
+    selected_span = handle["patchable_spans"][0]
+    patch = patch_proposal["patches"][0]
+    assert patch["patch_span_id"] == selected_span["patch_span_id"]
+    assert selected_span["exact_text"] not in revised["text"]
+    assert ReplacementPatchSpanClient.replacement_text in revised["text"]
+    assert diff["changed_spans"][0]["patch_span_id"] == selected_span["patch_span_id"]
+    assert diff["source_patch_span_ids"] == [selected_span["patch_span_id"]]
 
 
 def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
@@ -1385,13 +1546,13 @@ def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "model-call failure" in result.payload["message"]
-    assert "targets disallowed span" in result.payload["message"]
+    assert "belongs to target" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 3
     failed_call = result.payload["model_calls"][-1]
     assert failed_call["schema_name"] == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.name
     assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
     assert failed_call["parsed_output_artifact_id"] is None
-    assert "without explicit target expansion" in result.payload["message"]
+    assert "belongs to target" in result.payload["message"]
     assert "revision_patch_proposal" not in result.payload["artifact_ids"]
     assert "revised_candidate_text" not in result.payload["artifact_ids"]
     assert "revision_diff_report" not in result.payload["artifact_ids"]
@@ -1429,7 +1590,7 @@ def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
     assert final_report.refused is True
 
 
-def test_stubbed_openai_explicit_target_expansion_passes(tmp_path):
+def test_stubbed_openai_explicit_target_expansion_request_fails_closed(tmp_path):
     config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
     clients: list[FakeAutonomousRevisionModelClient] = []
 
@@ -1443,22 +1604,13 @@ def test_stubbed_openai_explicit_target_expansion_passes(tmp_path):
         client_factory=custom_revision_factory(clients, ExplicitTargetExpansionClient),
     )
 
-    assert result.exit_code == 0
-    diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
-    gate_report = read_payload(result.payload["artifact_paths"]["autonomous_closed_loop_gate_report"])
-    assert diff["target_region_expanded"] is True
-    assert diff["expanded_target_region"] == "opening paragraph plus ending paragraph"
-    assert diff["expansion_reason"]
-    assert diff["target_expansion_justification"]
-    assert any(not span["inside_target"] for span in diff["changed_spans"])
-    assert all(
-        span["requires_target_expansion"]
-        for span in diff["changed_spans"]
-        if not span["inside_target"]
-    )
-    assert gate_report["integrity_report"]["target"]["target_region_expanded"] is True
-    assert gate_report["integrity_report"]["target"]["out_of_target_change_count"] >= 1
-    assert gate_report["eligible"] is False
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "requested target expansion" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 3
+    assert "revision_patch_proposal" not in result.payload["artifact_ids"]
+    assert "revised_candidate_text" not in result.payload["artifact_ids"]
+    assert "revision_diff_report" not in result.payload["artifact_ids"]
 
 
 def test_stubbed_openai_planned_only_ablation_is_not_executed_evidence(tmp_path):
