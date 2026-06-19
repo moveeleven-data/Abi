@@ -11,6 +11,7 @@ from abi.model_driver import ModelClientError, WorkerRequest
 from abi.model_schemas import (
     ABI_EAR_FIELD_MODEL_SCHEMA,
     ABI_EAR_GERM_ANALYSIS_SCHEMA,
+    AUTONOMOUS_REVISION_MODEL_SCHEMAS,
     LIVE_MODEL_WORKER_SCHEMAS,
     PILOT_ABI_CANDIDATE_SCHEMA,
     PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
@@ -95,6 +96,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_pilot_raw_model_baseline_prompt
     if schema in PILOT_MODEL_SCHEMAS:
         return _build_pilot_reader_artifact_prompt
+    if schema in AUTONOMOUS_REVISION_MODEL_SCHEMAS:
+        return _build_autonomous_revision_prompt
     return _build_live_packet_prompt
 
 
@@ -163,6 +166,19 @@ def _build_pilot_reader_artifact_prompt(input_text: str) -> str:
         "fields from source_contents. Do not describe the system, schema, internal "
         "status, gates, validation, non-finality, metadata, or JSON. Source material "
         "and constraints:\n"
+        f"{input_text}"
+    )
+
+
+def _build_autonomous_revision_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema for one autonomous closed-loop revision "
+        "worker. Use the reader-lab evidence and prior_outputs supplied in the prompt. "
+        "Keep the recomposition bounded to the selected causal handle; do not rewrite "
+        "the whole artifact. Preserve domestic object-world pressure, morning stillness, "
+        "incremental patterning, quiet philosophical pressure, and strongest-rival "
+        "pressure. Do not claim finality, validation, phase shift, human evidence, or "
+        "paper readiness. Prompt packet:\n"
         f"{input_text}"
     )
 

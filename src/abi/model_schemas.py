@@ -47,6 +47,20 @@ class WorkerRole(str, Enum):
     TARGETED_RECOMPOSITION_PLANNER = "targeted_recomposition_planner"
     COUNTERFACTUAL_ABLATION_PLANNER = "counterfactual_ablation_planner"
     AUTONOMOUS_CANDIDATE_GATE_REPORTER = "autonomous_candidate_gate_reporter"
+    AUTONOMOUS_REVISION_FAILURE_SELECTOR = "autonomous_revision_failure_selector"
+    AUTONOMOUS_REVISION_CAUSAL_HANDLE_SELECTOR = "autonomous_revision_causal_handle_selector"
+    AUTONOMOUS_REVISION_CANDIDATE_REVISER = "autonomous_revision_candidate_reviser"
+    AUTONOMOUS_REVISION_DIFF_REPORTER = "autonomous_revision_diff_reporter"
+    AUTONOMOUS_REVISION_ABLATION_VARIANT_BUILDER = (
+        "autonomous_revision_ablation_variant_builder"
+    )
+    AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARATOR = (
+        "autonomous_revision_ablation_reread_comparator"
+    )
+    AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARATOR = (
+        "autonomous_revision_old_new_rival_comparator"
+    )
+    AUTONOMOUS_REVISION_LOCAL_LAW_REPORTER = "autonomous_revision_local_law_reporter"
 
 
 @dataclass(frozen=True)
@@ -347,12 +361,72 @@ INTERNAL_READER_LAB_MODEL_SCHEMAS = (
     AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA,
 )
 
+AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionSelectedFailureOutput",
+    version="1",
+    artifact_type="selected_failure_diagnosis",
+)
+
+AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionCausalHandleSelectionOutput",
+    version="1",
+    artifact_type="causal_handle_selection",
+)
+
+AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionRevisedCandidateOutput",
+    version="1",
+    artifact_type="revised_candidate_text",
+)
+
+AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionDiffReportOutput",
+    version="1",
+    artifact_type="revision_diff_report",
+)
+
+AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionAblationVariantSetOutput",
+    version="1",
+    artifact_type="ablation_variant_set",
+)
+
+AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionAblationRereadComparisonOutput",
+    version="1",
+    artifact_type="ablation_reread_comparison",
+)
+
+AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionOldNewRivalComparisonOutput",
+    version="1",
+    artifact_type="old_new_rival_comparison",
+)
+
+AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA = WorkerSchema(
+    name="AutonomousRevisionLocalLawCaseNoteOutput",
+    version="1",
+    artifact_type="local_law_case_note",
+)
+
+AUTONOMOUS_REVISION_MODEL_SCHEMAS = (
+    AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA,
+    AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
+    AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
+    AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
+    AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
+    AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
+    AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
+    AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA,
+)
+
 LIVE_MODEL_WORKER_SCHEMAS = (
     LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
     + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
     + EVALUATION_MODEL_SCHEMAS
     + PILOT_MODEL_SCHEMAS
     + INTERNAL_READER_LAB_MODEL_SCHEMAS
+    + AUTONOMOUS_REVISION_MODEL_SCHEMAS
 )
 
 
@@ -1348,6 +1422,328 @@ def autonomous_candidate_gate_report_json_schema() -> dict[str, Any]:
     )
 
 
+def _revision_span_ref_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "source_label": {"type": "string"},
+            "source_class": {"type": "string"},
+            "artifact_id": {"type": "string"},
+            "region": {"type": "string"},
+            "selection_basis": {"type": "string"},
+        },
+        ["source_label", "source_class", "artifact_id", "region", "selection_basis"],
+    )
+
+
+def _revision_changed_span_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "before": {"type": "string"},
+            "after": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+        ["before", "after", "reason"],
+    )
+
+
+def _revision_variant_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "variant_id": {"type": "string"},
+            "operation": {"type": "string"},
+            "variant_probe": {"type": "string"},
+            "ablation_probe": {"type": "string"},
+            "text": {"type": "string"},
+            "expected_reader_state_change": {"type": "string"},
+            "uncertainty": {"type": "string"},
+        },
+        [
+            "variant_id",
+            "operation",
+            "variant_probe",
+            "ablation_probe",
+            "text",
+            "expected_reader_state_change",
+            "uncertainty",
+        ],
+    )
+
+
+def _revision_ablation_row_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "variant_id": {"type": "string"},
+            "operation": {"type": "string"},
+            "predicted_reread_pressure_delta": {"type": "string"},
+            "local_law_read": {"type": "string"},
+            "pass_fail_criterion": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "variant_id",
+            "operation",
+            "predicted_reread_pressure_delta",
+            "local_law_read",
+            "pass_fail_criterion",
+            "not_human_data",
+        ],
+    )
+
+
+def autonomous_revision_selected_failure_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "selection_rule": {"type": "string"},
+            "selected_failure_type": _internal_failure_type_schema(),
+            "selected_diagnosis": {"type": "string"},
+            "severity": {"type": "string"},
+            "reader_lab_evidence_artifacts": _string_array_schema(),
+            "source_failure_index": {"type": "integer"},
+            "references_live_reader_lab_evidence": {"type": "boolean"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "selection_rule",
+            "selected_failure_type",
+            "selected_diagnosis",
+            "severity",
+            "reader_lab_evidence_artifacts",
+            "source_failure_index",
+            "references_live_reader_lab_evidence",
+            "not_human_data",
+        ],
+    )
+
+
+def autonomous_revision_causal_handle_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "bounded_target": {"type": "boolean"},
+            "target_count": {"type": "integer"},
+            "does_not_rebuild_artifact": {"type": "boolean"},
+            "span_ref": _revision_span_ref_schema(),
+            "quoted_text": {"type": "string"},
+            "causal_handle": {"type": "string"},
+            "local_law_hypothesis": {"type": "string"},
+            "suspected_failure": {"type": "string"},
+            "why_it_might_be_junk": {"type": "string"},
+            "why_it_might_be_treasure": {"type": "string"},
+            "connotation_or_register_risk": {"type": "string"},
+            "variant_probe": {"type": "string"},
+            "ablation_probe": {"type": "string"},
+            "expected_reader_state_change": {"type": "string"},
+            "uncertainty": {"type": "string"},
+            "protected_effects": _string_array_schema(),
+            "forbidden_changes": _string_array_schema(),
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "bounded_target",
+            "target_count",
+            "does_not_rebuild_artifact",
+            "span_ref",
+            "quoted_text",
+            "causal_handle",
+            "local_law_hypothesis",
+            "suspected_failure",
+            "why_it_might_be_junk",
+            "why_it_might_be_treasure",
+            "connotation_or_register_risk",
+            "variant_probe",
+            "ablation_probe",
+            "expected_reader_state_change",
+            "uncertainty",
+            "protected_effects",
+            "forbidden_changes",
+            "not_human_data",
+        ],
+    )
+
+
+def autonomous_revision_revised_candidate_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "candidate_id": {"type": "string"},
+            "source_candidate_artifact_id": {"type": "string"},
+            "text": {"type": "string"},
+            "targeted_causal_handle": {"type": "string"},
+            "bounded_recomposition": {"type": "boolean"},
+            "full_rewrite": {"type": "boolean"},
+            "changed_region": {"type": "string"},
+            "preserved_protected_effects": _string_array_schema(),
+            "forbidden_changes_honored": _string_array_schema(),
+            "non_final": {"type": "boolean"},
+            "candidate_only": {"type": "boolean"},
+            "not_human_validated": {"type": "boolean"},
+            "human_validated": {"type": "boolean"},
+            "not_finalization_eligible": {"type": "boolean"},
+            "finalization_eligible": {"type": "boolean"},
+            "phase_shift_claim": {"type": "boolean"},
+            "no_phase_shift_claim": {"type": "boolean"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "candidate_id",
+            "source_candidate_artifact_id",
+            "text",
+            "targeted_causal_handle",
+            "bounded_recomposition",
+            "full_rewrite",
+            "changed_region",
+            "preserved_protected_effects",
+            "forbidden_changes_honored",
+            "non_final",
+            "candidate_only",
+            "not_human_validated",
+            "human_validated",
+            "not_finalization_eligible",
+            "finalization_eligible",
+            "phase_shift_claim",
+            "no_phase_shift_claim",
+            "not_human_data",
+        ],
+    )
+
+
+def autonomous_revision_diff_report_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "full_rewrite": {"type": "boolean"},
+            "bounded_change": {"type": "boolean"},
+            "operation_type": {"type": "string"},
+            "target_region": {"type": "string"},
+            "causal_handle": {"type": "string"},
+            "original_excerpt": {"type": "string"},
+            "revised_excerpt": {"type": "string"},
+            "changed_spans": {"type": "array", "items": _revision_changed_span_schema()},
+            "protected_effects_preserved": _string_array_schema(),
+            "forbidden_changes_honored": _string_array_schema(),
+            "explanation": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "full_rewrite",
+            "bounded_change",
+            "operation_type",
+            "target_region",
+            "causal_handle",
+            "original_excerpt",
+            "revised_excerpt",
+            "changed_spans",
+            "protected_effects_preserved",
+            "forbidden_changes_honored",
+            "explanation",
+            "not_human_data",
+        ],
+    )
+
+
+def autonomous_revision_ablation_variant_set_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "targeted_causal_handle": {"type": "string"},
+            "variants": {"type": "array", "items": _revision_variant_schema()},
+            "does_not_select_winner": {"type": "boolean"},
+            "not_human_data": {"type": "boolean"},
+        },
+        ["targeted_causal_handle", "variants", "does_not_select_winner", "not_human_data"],
+    )
+
+
+def autonomous_revision_ablation_reread_comparison_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "candidate_label": {"type": "string"},
+            "comparison_rows": {"type": "array", "items": _revision_ablation_row_schema()},
+            "summary": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        ["candidate_label", "comparison_rows", "summary", "not_human_data"],
+    )
+
+
+def autonomous_revision_old_new_rival_comparison_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "reread_transformation_improved": {"type": "boolean"},
+            "opening_transformation_improved": {"type": "boolean"},
+            "local_embodiment_improved": {"type": "boolean"},
+            "overexplanation_decreased": {"type": "boolean"},
+            "fake_depth_risk_decreased": {"type": "boolean"},
+            "revised_candidate_became_more_schematic": {"type": "boolean"},
+            "strongest_rival_present": {"type": "boolean"},
+            "rival_still_beats_candidate": {"type": "boolean"},
+            "another_revision_cycle_needed": {"type": "boolean"},
+            "comparison_basis": {"type": "string"},
+            "rival_pressure_preserved": {"type": "boolean"},
+            "old_new_summary": {"type": "string"},
+            "rival_pressure_summary": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "reread_transformation_improved",
+            "opening_transformation_improved",
+            "local_embodiment_improved",
+            "overexplanation_decreased",
+            "fake_depth_risk_decreased",
+            "revised_candidate_became_more_schematic",
+            "strongest_rival_present",
+            "rival_still_beats_candidate",
+            "another_revision_cycle_needed",
+            "comparison_basis",
+            "rival_pressure_preserved",
+            "old_new_summary",
+            "rival_pressure_summary",
+            "not_human_data",
+        ],
+    )
+
+
+def autonomous_revision_local_law_case_note_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "principle": {"type": "string"},
+            "span_ref": _revision_span_ref_schema(),
+            "quoted_text": {"type": "string"},
+            "local_law_hypothesis": {"type": "string"},
+            "suspected_failure": {"type": "string"},
+            "why_it_might_be_junk": {"type": "string"},
+            "why_it_might_be_treasure": {"type": "string"},
+            "connotation_or_register_risk": {"type": "string"},
+            "variant_probe": {"type": "string"},
+            "ablation_probe": {"type": "string"},
+            "expected_reader_state_change": {"type": "string"},
+            "uncertainty": {"type": "string"},
+            "preserve_irregularity_rule": {"type": "string"},
+            "comparison_result": _object_schema(
+                {
+                    "another_revision_cycle_needed": {"type": "boolean"},
+                    "rival_still_beats_candidate": {"type": "boolean"},
+                },
+                ["another_revision_cycle_needed", "rival_still_beats_candidate"],
+            ),
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "principle",
+            "span_ref",
+            "quoted_text",
+            "local_law_hypothesis",
+            "suspected_failure",
+            "why_it_might_be_junk",
+            "why_it_might_be_treasure",
+            "connotation_or_register_risk",
+            "variant_probe",
+            "ablation_probe",
+            "expected_reader_state_change",
+            "uncertainty",
+            "preserve_irregularity_rule",
+            "comparison_result",
+            "not_human_data",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -1417,6 +1813,22 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return counterfactual_ablation_plan_json_schema()
     if schema == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA:
         return autonomous_candidate_gate_report_json_schema()
+    if schema == AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA:
+        return autonomous_revision_selected_failure_json_schema()
+    if schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+        return autonomous_revision_causal_handle_json_schema()
+    if schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+        return autonomous_revision_revised_candidate_json_schema()
+    if schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
+        return autonomous_revision_diff_report_json_schema()
+    if schema == AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA:
+        return autonomous_revision_ablation_variant_set_json_schema()
+    if schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
+        return autonomous_revision_ablation_reread_comparison_json_schema()
+    if schema == AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA:
+        return autonomous_revision_old_new_rival_comparison_json_schema()
+    if schema == AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA:
+        return autonomous_revision_local_law_case_note_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -1496,6 +1908,22 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_counterfactual_ablation_plan(payload)
     if schema == AUTONOMOUS_CANDIDATE_GATE_REPORT_SCHEMA:
         return _validate_autonomous_candidate_gate_report(payload)
+    if schema == AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA:
+        return _validate_autonomous_revision_selected_failure(payload)
+    if schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+        return _validate_autonomous_revision_causal_handle(payload)
+    if schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+        return _validate_autonomous_revision_revised_candidate(payload)
+    if schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
+        return _validate_autonomous_revision_diff_report(payload)
+    if schema == AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA:
+        return _validate_autonomous_revision_ablation_variant_set(payload)
+    if schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
+        return _validate_autonomous_revision_ablation_reread_comparison(payload)
+    if schema == AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA:
+        return _validate_autonomous_revision_old_new_rival_comparison(payload)
+    if schema == AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA:
+        return _validate_autonomous_revision_local_law_case_note(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -2283,6 +2711,340 @@ def _validate_autonomous_candidate_gate_report(payload: dict[str, Any]) -> dict[
         "final_gates_marked_passed": [],
         "summary_verdict": payload["summary_verdict"],
     }
+
+
+def _validate_autonomous_revision_selected_failure(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("selection_rule", "selected_failure_type", "selected_diagnosis", "severity"):
+        _require_type(payload, key, str)
+    _require_string_list(payload, "reader_lab_evidence_artifacts")
+    _require_integer(payload, "source_failure_index")
+    _require_true(payload, "references_live_reader_lab_evidence")
+    _require_true(payload, "not_human_data")
+    selected_failure_type = normalize_internal_failure_type(payload["selected_failure_type"])
+    if not payload["reader_lab_evidence_artifacts"]:
+        raise ModelValidationError("reader_lab_evidence_artifacts must not be empty")
+    return {
+        "selection_rule": payload["selection_rule"],
+        "selected_failure_type": selected_failure_type,
+        "selected_diagnosis": payload["selected_diagnosis"],
+        "severity": payload["severity"],
+        "reader_lab_evidence_artifacts": payload["reader_lab_evidence_artifacts"],
+        "source_failure_index": int(payload["source_failure_index"]),
+        "references_live_reader_lab_evidence": True,
+        "not_human_data": True,
+    }
+
+
+def _validate_autonomous_revision_causal_handle(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_true(payload, "bounded_target")
+    _require_integer(payload, "target_count")
+    if int(payload["target_count"]) != 1:
+        raise ModelValidationError("target_count must be 1")
+    _require_true(payload, "does_not_rebuild_artifact")
+    _require_type(payload, "span_ref", dict)
+    span_ref = _validate_revision_span_ref(payload["span_ref"], "span_ref")
+    for key in (
+        "quoted_text",
+        "causal_handle",
+        "local_law_hypothesis",
+        "suspected_failure",
+        "why_it_might_be_junk",
+        "why_it_might_be_treasure",
+        "connotation_or_register_risk",
+        "variant_probe",
+        "ablation_probe",
+        "expected_reader_state_change",
+        "uncertainty",
+    ):
+        _require_type(payload, key, str)
+    _require_string_list(payload, "protected_effects")
+    _require_string_list(payload, "forbidden_changes")
+    _require_true(payload, "not_human_data")
+    return {
+        "bounded_target": True,
+        "target_count": 1,
+        "does_not_rebuild_artifact": True,
+        "span_ref": span_ref,
+        "quoted_text": payload["quoted_text"],
+        "causal_handle": payload["causal_handle"],
+        "local_law_hypothesis": payload["local_law_hypothesis"],
+        "suspected_failure": payload["suspected_failure"],
+        "why_it_might_be_junk": payload["why_it_might_be_junk"],
+        "why_it_might_be_treasure": payload["why_it_might_be_treasure"],
+        "connotation_or_register_risk": payload["connotation_or_register_risk"],
+        "variant_probe": payload["variant_probe"],
+        "ablation_probe": payload["ablation_probe"],
+        "expected_reader_state_change": payload["expected_reader_state_change"],
+        "uncertainty": payload["uncertainty"],
+        "protected_effects": payload["protected_effects"],
+        "forbidden_changes": payload["forbidden_changes"],
+        "not_human_data": True,
+    }
+
+
+def _validate_autonomous_revision_revised_candidate(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "candidate_id",
+        "source_candidate_artifact_id",
+        "text",
+        "targeted_causal_handle",
+        "changed_region",
+    ):
+        _require_type(payload, key, str)
+    for key in ("preserved_protected_effects", "forbidden_changes_honored"):
+        _require_string_list(payload, key)
+    _require_true(payload, "bounded_recomposition")
+    _require_false(payload, "full_rewrite")
+    _require_true(payload, "non_final")
+    _require_true(payload, "candidate_only")
+    _require_true(payload, "not_human_validated")
+    _require_false(payload, "human_validated")
+    _require_true(payload, "not_finalization_eligible")
+    _require_false(payload, "finalization_eligible")
+    _require_false(payload, "phase_shift_claim")
+    _require_true(payload, "no_phase_shift_claim")
+    _require_true(payload, "not_human_data")
+    if len(payload["text"].split()) < 20:
+        raise ModelValidationError("revised candidate text is too short for closed-loop revision")
+    return {
+        "candidate_id": payload["candidate_id"],
+        "source_candidate_artifact_id": payload["source_candidate_artifact_id"],
+        "text": payload["text"],
+        "targeted_causal_handle": payload["targeted_causal_handle"],
+        "bounded_recomposition": True,
+        "full_rewrite": False,
+        "changed_region": payload["changed_region"],
+        "preserved_protected_effects": payload["preserved_protected_effects"],
+        "forbidden_changes_honored": payload["forbidden_changes_honored"],
+        "non_final": True,
+        "candidate_only": True,
+        "not_human_validated": True,
+        "human_validated": False,
+        "not_finalization_eligible": True,
+        "finalization_eligible": False,
+        "phase_shift_claim": False,
+        "no_phase_shift_claim": True,
+        "not_human_data": True,
+    }
+
+
+def _validate_autonomous_revision_diff_report(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_false(payload, "full_rewrite")
+    _require_true(payload, "bounded_change")
+    for key in (
+        "operation_type",
+        "target_region",
+        "causal_handle",
+        "original_excerpt",
+        "revised_excerpt",
+        "explanation",
+    ):
+        _require_type(payload, key, str)
+    _require_object_list(payload, "changed_spans")
+    changed_spans = [
+        _validate_changed_span(span, f"changed_spans[{index}]")
+        for index, span in enumerate(payload["changed_spans"])
+    ]
+    if not changed_spans:
+        raise ModelValidationError("changed_spans must not be empty")
+    _require_string_list(payload, "protected_effects_preserved")
+    _require_string_list(payload, "forbidden_changes_honored")
+    _require_true(payload, "not_human_data")
+    return {
+        "full_rewrite": False,
+        "bounded_change": True,
+        "operation_type": payload["operation_type"],
+        "target_region": payload["target_region"],
+        "causal_handle": payload["causal_handle"],
+        "original_excerpt": payload["original_excerpt"],
+        "revised_excerpt": payload["revised_excerpt"],
+        "changed_spans": changed_spans,
+        "protected_effects_preserved": payload["protected_effects_preserved"],
+        "forbidden_changes_honored": payload["forbidden_changes_honored"],
+        "explanation": payload["explanation"],
+        "not_human_data": True,
+    }
+
+
+def _validate_autonomous_revision_ablation_variant_set(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    _require_type(payload, "targeted_causal_handle", str)
+    _require_object_list(payload, "variants")
+    variants = [
+        _validate_revision_variant(variant, f"variants[{index}]")
+        for index, variant in enumerate(payload["variants"])
+    ]
+    if not variants:
+        raise ModelValidationError("variants must not be empty")
+    _require_true(payload, "does_not_select_winner")
+    _require_true(payload, "not_human_data")
+    return {
+        "targeted_causal_handle": payload["targeted_causal_handle"],
+        "variants": variants,
+        "does_not_select_winner": True,
+        "not_human_data": True,
+    }
+
+
+def _validate_autonomous_revision_ablation_reread_comparison(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    _require_type(payload, "candidate_label", str)
+    _require_object_list(payload, "comparison_rows")
+    rows = [
+        _validate_ablation_row(row, f"comparison_rows[{index}]")
+        for index, row in enumerate(payload["comparison_rows"])
+    ]
+    if not rows:
+        raise ModelValidationError("comparison_rows must not be empty")
+    _require_type(payload, "summary", str)
+    _require_true(payload, "not_human_data")
+    return {
+        "candidate_label": payload["candidate_label"],
+        "comparison_rows": rows,
+        "summary": payload["summary"],
+        "not_human_data": True,
+    }
+
+
+def _validate_autonomous_revision_old_new_rival_comparison(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    for key in (
+        "reread_transformation_improved",
+        "opening_transformation_improved",
+        "local_embodiment_improved",
+        "overexplanation_decreased",
+        "fake_depth_risk_decreased",
+        "revised_candidate_became_more_schematic",
+        "strongest_rival_present",
+        "rival_still_beats_candidate",
+        "another_revision_cycle_needed",
+        "rival_pressure_preserved",
+    ):
+        _require_type(payload, key, bool)
+    for key in ("comparison_basis", "old_new_summary", "rival_pressure_summary"):
+        _require_type(payload, key, str)
+    _require_true(payload, "not_human_data")
+    return {
+        "reread_transformation_improved": payload["reread_transformation_improved"],
+        "opening_transformation_improved": payload["opening_transformation_improved"],
+        "local_embodiment_improved": payload["local_embodiment_improved"],
+        "overexplanation_decreased": payload["overexplanation_decreased"],
+        "fake_depth_risk_decreased": payload["fake_depth_risk_decreased"],
+        "revised_candidate_became_more_schematic": payload[
+            "revised_candidate_became_more_schematic"
+        ],
+        "strongest_rival_present": payload["strongest_rival_present"],
+        "rival_still_beats_candidate": payload["rival_still_beats_candidate"],
+        "another_revision_cycle_needed": payload["another_revision_cycle_needed"],
+        "comparison_basis": payload["comparison_basis"],
+        "rival_pressure_preserved": payload["rival_pressure_preserved"],
+        "old_new_summary": payload["old_new_summary"],
+        "rival_pressure_summary": payload["rival_pressure_summary"],
+        "not_human_data": True,
+    }
+
+
+def _validate_autonomous_revision_local_law_case_note(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "principle",
+        "quoted_text",
+        "local_law_hypothesis",
+        "suspected_failure",
+        "why_it_might_be_junk",
+        "why_it_might_be_treasure",
+        "connotation_or_register_risk",
+        "variant_probe",
+        "ablation_probe",
+        "expected_reader_state_change",
+        "uncertainty",
+        "preserve_irregularity_rule",
+    ):
+        _require_type(payload, key, str)
+    _require_type(payload, "span_ref", dict)
+    span_ref = _validate_revision_span_ref(payload["span_ref"], "span_ref")
+    _require_type(payload, "comparison_result", dict)
+    comparison_result = payload["comparison_result"]
+    _require_type(
+        comparison_result,
+        "another_revision_cycle_needed",
+        bool,
+        field_prefix="comparison_result.",
+    )
+    _require_type(
+        comparison_result,
+        "rival_still_beats_candidate",
+        bool,
+        field_prefix="comparison_result.",
+    )
+    _require_true(payload, "not_human_data")
+    return {
+        "principle": payload["principle"],
+        "span_ref": span_ref,
+        "quoted_text": payload["quoted_text"],
+        "local_law_hypothesis": payload["local_law_hypothesis"],
+        "suspected_failure": payload["suspected_failure"],
+        "why_it_might_be_junk": payload["why_it_might_be_junk"],
+        "why_it_might_be_treasure": payload["why_it_might_be_treasure"],
+        "connotation_or_register_risk": payload["connotation_or_register_risk"],
+        "variant_probe": payload["variant_probe"],
+        "ablation_probe": payload["ablation_probe"],
+        "expected_reader_state_change": payload["expected_reader_state_change"],
+        "uncertainty": payload["uncertainty"],
+        "preserve_irregularity_rule": payload["preserve_irregularity_rule"],
+        "comparison_result": {
+            "another_revision_cycle_needed": comparison_result["another_revision_cycle_needed"],
+            "rival_still_beats_candidate": comparison_result["rival_still_beats_candidate"],
+        },
+        "not_human_data": True,
+    }
+
+
+def _validate_revision_span_ref(payload: dict[str, Any], label: str) -> dict[str, str]:
+    return _validate_object(
+        payload,
+        label,
+        ("source_label", "source_class", "artifact_id", "region", "selection_basis"),
+    )
+
+
+def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, str]:
+    return _validate_object(payload, label, ("before", "after", "reason"))
+
+
+def _validate_revision_variant(payload: dict[str, Any], label: str) -> dict[str, str]:
+    return _validate_object(
+        payload,
+        label,
+        (
+            "variant_id",
+            "operation",
+            "variant_probe",
+            "ablation_probe",
+            "text",
+            "expected_reader_state_change",
+            "uncertainty",
+        ),
+    )
+
+
+def _validate_ablation_row(payload: dict[str, Any], label: str) -> dict[str, object]:
+    validated = _validate_object(
+        payload,
+        label,
+        (
+            "variant_id",
+            "operation",
+            "predicted_reread_pressure_delta",
+            "local_law_read",
+            "pass_fail_criterion",
+        ),
+    )
+    _require_true(payload, "not_human_data", field_prefix=f"{label}.")
+    validated["not_human_data"] = True
+    return validated
 
 
 def _schema_with_properties(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
