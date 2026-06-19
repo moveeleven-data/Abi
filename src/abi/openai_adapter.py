@@ -118,6 +118,8 @@ def _build_live_packet_prompt(germ_text: str) -> str:
 def _build_pilot_artifact_set_prompt(input_text: str) -> str:
     return (
         "Produce the requested pilot artifact-set component as strict structured JSON. "
+        "For baseline components, generate baseline content only; Abi assigns the "
+        "baseline role and no-validation/no-final-gate metadata deterministically. "
         "The output must remain non-final, must not claim human validation, must not "
         "claim phase shift, and must not satisfy final-artifact gates. Source manifest "
         "and task context:\n"

@@ -92,12 +92,8 @@ class StubOpenAIPilotClient:
             return json.dumps(
                 {
                     "baseline_id": "stub_direct_prompt_baseline",
-                    "baseline_type": "direct_prompt",
                     "text": "Stub OpenAI direct-prompt baseline text.",
-                    "fixture_or_fake": False,
-                    "not_real_validation": True,
                     "generation_rule": "stubbed OpenAI test client",
-                    "final_gate_satisfied": False,
                     "risks": ["stub output is not validation"],
                 },
                 sort_keys=True,
@@ -106,12 +102,7 @@ class StubOpenAIPilotClient:
             return json.dumps(
                 {
                     "baseline_id": "stub_raw_model_baseline",
-                    "baseline_type": "raw_model",
                     "text": "Stub OpenAI raw-model baseline text.",
-                    "fixture_or_fake": False,
-                    "not_real_validation": True,
-                    "raw_model_baseline_gate_satisfied": False,
-                    "model_calls_used": 1,
                     "risks": ["stub output is not validation"],
                 },
                 sort_keys=True,
@@ -339,12 +330,22 @@ def test_stubbed_openai_pilot_creates_model_records_and_model_artifacts(
         assert envelope["model_call_id"] is not None
 
     candidate = read_payload(result.payload["artifact_paths"]["pilot_abi_candidate_ref"])
+    direct = read_payload(result.payload["artifact_paths"]["pilot_direct_prompt_baseline"])
+    raw = read_payload(result.payload["artifact_paths"]["pilot_raw_model_baseline"])
     assert candidate["non_final"] is True
     assert candidate["candidate_only"] is True
     assert candidate["not_human_validated"] is True
     assert candidate["not_finalization_eligible"] is True
     assert candidate["finalization_eligible"] is False
     assert candidate["phase_shift_claim"] is False
+    assert direct["baseline_type"] == "direct_prompt"
+    assert direct["fixture_or_fake"] is False
+    assert direct["not_real_validation"] is True
+    assert direct["final_gate_satisfied"] is False
+    assert raw["baseline_type"] == "raw_model"
+    assert raw["fixture_or_fake"] is False
+    assert raw["not_real_validation"] is True
+    assert raw["raw_model_baseline_gate_satisfied"] is False
 
     strongest = read_payload(result.payload["artifact_paths"]["pilot_strongest_rival_slot"])
     assert strongest["strongest_rival_gate_satisfied"] is False

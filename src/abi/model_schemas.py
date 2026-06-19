@@ -778,22 +778,14 @@ def pilot_direct_prompt_baseline_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
             "baseline_id": {"type": "string"},
-            "baseline_type": {"type": "string"},
             "text": {"type": "string"},
-            "fixture_or_fake": {"type": "boolean"},
-            "not_real_validation": {"type": "boolean"},
             "generation_rule": {"type": "string"},
-            "final_gate_satisfied": {"type": "boolean"},
             "risks": _string_array_schema(),
         },
         [
             "baseline_id",
-            "baseline_type",
             "text",
-            "fixture_or_fake",
-            "not_real_validation",
             "generation_rule",
-            "final_gate_satisfied",
             "risks",
         ],
     )
@@ -803,22 +795,12 @@ def pilot_raw_model_baseline_json_schema() -> dict[str, Any]:
     return _schema_with_properties(
         {
             "baseline_id": {"type": "string"},
-            "baseline_type": {"type": "string"},
             "text": {"type": "string"},
-            "fixture_or_fake": {"type": "boolean"},
-            "not_real_validation": {"type": "boolean"},
-            "raw_model_baseline_gate_satisfied": {"type": "boolean"},
-            "model_calls_used": {"type": "integer"},
             "risks": _string_array_schema(),
         },
         [
             "baseline_id",
-            "baseline_type",
             "text",
-            "fixture_or_fake",
-            "not_real_validation",
-            "raw_model_baseline_gate_satisfied",
-            "model_calls_used",
             "risks",
         ],
     )
@@ -1437,54 +1419,33 @@ def _validate_pilot_abi_candidate(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_pilot_direct_prompt_baseline(payload: dict[str, Any]) -> dict[str, Any]:
-    for key in ("baseline_id", "baseline_type", "text", "generation_rule"):
+    for key in ("baseline_id", "text", "generation_rule"):
         _require_type(payload, key, str)
-    for key in ("fixture_or_fake", "not_real_validation", "final_gate_satisfied"):
-        _require_type(payload, key, bool)
     _require_string_list(payload, "risks")
-    if payload["baseline_type"] != "direct_prompt":
-        raise ModelValidationError("pilot direct baseline must have baseline_type direct_prompt")
-    if not payload["not_real_validation"]:
-        raise ModelValidationError("pilot direct baseline must remain not_real_validation")
-    if payload["final_gate_satisfied"]:
-        raise ModelValidationError("pilot direct baseline must not satisfy a final gate")
     return {
         "baseline_id": payload["baseline_id"],
-        "baseline_type": payload["baseline_type"],
+        "baseline_type": "direct_prompt",
         "text": payload["text"],
-        "fixture_or_fake": payload["fixture_or_fake"],
-        "not_real_validation": payload["not_real_validation"],
+        "fixture_or_fake": False,
+        "not_real_validation": True,
         "generation_rule": payload["generation_rule"],
-        "final_gate_satisfied": payload["final_gate_satisfied"],
+        "final_gate_satisfied": False,
         "risks": payload["risks"],
     }
 
 
 def _validate_pilot_raw_model_baseline(payload: dict[str, Any]) -> dict[str, Any]:
-    for key in ("baseline_id", "baseline_type", "text"):
+    for key in ("baseline_id", "text"):
         _require_type(payload, key, str)
-    for key in (
-        "fixture_or_fake",
-        "not_real_validation",
-        "raw_model_baseline_gate_satisfied",
-    ):
-        _require_type(payload, key, bool)
-    _require_integer(payload, "model_calls_used")
     _require_string_list(payload, "risks")
-    if payload["baseline_type"] != "raw_model":
-        raise ModelValidationError("pilot raw baseline must have baseline_type raw_model")
-    if not payload["not_real_validation"]:
-        raise ModelValidationError("pilot raw baseline must remain not_real_validation")
-    if payload["raw_model_baseline_gate_satisfied"]:
-        raise ModelValidationError("pilot raw baseline must not satisfy the raw-model gate")
     return {
         "baseline_id": payload["baseline_id"],
-        "baseline_type": payload["baseline_type"],
+        "baseline_type": "raw_model",
         "text": payload["text"],
-        "fixture_or_fake": payload["fixture_or_fake"],
-        "not_real_validation": payload["not_real_validation"],
-        "raw_model_baseline_gate_satisfied": payload["raw_model_baseline_gate_satisfied"],
-        "model_calls_used": int(payload["model_calls_used"]),
+        "fixture_or_fake": False,
+        "not_real_validation": True,
+        "raw_model_baseline_gate_satisfied": False,
+        "model_calls_used": 1,
         "risks": payload["risks"],
     }
 
