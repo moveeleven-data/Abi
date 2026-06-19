@@ -1,6 +1,6 @@
 # Fresh Clone Verification
 
-Last checked: 2026-06-18
+Last realigned: 2026-06-19
 
 ## Setup
 
@@ -28,22 +28,22 @@ git ls-files
 .\.venv\Scripts\abi.exe artifact list
 .\.venv\Scripts\abi.exe run list
 .\.venv\Scripts\abi.exe run latest
-.\.venv\Scripts\abi.exe final-artifact packet --client fake
-.\.venv\Scripts\abi.exe finalization status --profile final_artifact
-.\.venv\Scripts\abi.exe finalize --profile final_artifact
+.\.venv\Scripts\abi.exe gate list
+.\.venv\Scripts\abi.exe finalization status --profile autonomous_creative_candidate
+.\.venv\Scripts\abi.exe finalize --profile autonomous_creative_candidate
 ```
 
-`finalize --profile final_artifact` should fail closed. That failure is expected and is part of the verification.
+`finalize --profile autonomous_creative_candidate` should fail closed until the internal autonomous gates exist and pass. That refusal is expected.
 
 ## Optional Guarded Checks
 
 Do not run a real OpenAI call unless the operator explicitly intends to. OpenAI paths require both `--allow-live-model` and `OPENAI_API_KEY`.
 
-Examples:
+Examples that should refuse without opt-in:
 
 ```powershell
 .\.venv\Scripts\abi.exe ear live-demo --client openai
-.\.venv\Scripts\abi.exe final-artifact packet --client openai
+.\.venv\Scripts\abi.exe reread live-demo --client openai
+.\.venv\Scripts\abi.exe production live-demo --client openai
+.\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source
 ```
-
-Without `--allow-live-model`, these should refuse before any live call.

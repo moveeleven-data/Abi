@@ -60,6 +60,7 @@ class GatePolicyEvaluation:
 GATE_PROFILE_INFRASTRUCTURE = "infrastructure"
 GATE_PROFILE_CANDIDATE_RELEASE = "candidate_release"
 GATE_PROFILE_FINAL_ARTIFACT = "final_artifact"
+GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE = "autonomous_creative_candidate"
 
 CANDIDATE_RELEASE_REQUIRED_GATES = (
     "source_to_artifact_production_run_v1",
@@ -79,6 +80,22 @@ FINAL_ARTIFACT_REQUIRED_GATES = (
     "final_operator_approval",
 )
 
+AUTONOMOUS_CREATIVE_CANDIDATE_REQUIRED_GATES = (
+    "autonomous_candidate_packet_exists",
+    "internal_stream_reader_trace_exists",
+    "internal_reread_trace_exists",
+    "forensic_grounding_report_exists",
+    "hostile_reader_report_exists",
+    "failure_diagnosis_exists",
+    "targeted_recomposition_plan_exists",
+    "counterfactual_ablation_plan_or_result_exists",
+    "rival_preservation_present",
+    "internal_rival_comparison_exists",
+    "no_fixture_only_core_evidence",
+    "no_unresolved_internal_blockers",
+    "internal_operator_approval",
+)
+
 GATE_PROFILES: dict[str, GatePolicy] = {
     GATE_PROFILE_INFRASTRUCTURE: GatePolicy(
         name=GATE_PROFILE_INFRASTRUCTURE,
@@ -91,6 +108,10 @@ GATE_PROFILES: dict[str, GatePolicy] = {
     GATE_PROFILE_FINAL_ARTIFACT: GatePolicy(
         name=GATE_PROFILE_FINAL_ARTIFACT,
         required_gates=FINAL_ARTIFACT_REQUIRED_GATES,
+    ),
+    GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE: GatePolicy(
+        name=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        required_gates=AUTONOMOUS_CREATIVE_CANDIDATE_REQUIRED_GATES,
     ),
 }
 
@@ -125,53 +146,118 @@ GATE_CATALOG: tuple[GateCatalogEntry, ...] = (
     ),
     GateCatalogEntry(
         name="final_artifact_packet_exists",
-        purpose="A final artifact packet is registered for the run.",
+        purpose="Legacy external-validation gate: a final artifact packet is registered for the run.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="final_artifact_not_fixture",
-        purpose="The final artifact packet is not fixture-only evidence.",
+        purpose="Legacy external-validation gate: the final artifact packet is not fixture-only evidence.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="final_artifact_not_marked_non_final",
-        purpose="The final artifact is not marked candidate-only or non-final.",
+        purpose="Legacy external-validation gate: the final artifact is not marked candidate-only or non-final.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="real_human_validation_passed",
-        purpose="Real human validation passed without relying on fixture traces.",
+        purpose="Legacy external-validation gate: real human validation passed without relying on fixture traces.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="strongest_rival_comparison_passed",
-        purpose="The final artifact passed strongest-rival comparison.",
+        purpose="Legacy external-validation gate: the final artifact passed strongest-rival comparison.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="raw_model_baseline_comparison_passed",
-        purpose="The final artifact passed raw-model baseline comparison.",
+        purpose="Legacy external-validation gate: the final artifact passed raw-model baseline comparison.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="hostile_final_audit_passed",
-        purpose="A hostile final audit found no blocking defects.",
+        purpose="Legacy external-validation gate: a hostile final audit found no blocking defects.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="no_fixture_only_evidence_used_as_final_claim",
-        purpose="No fixture-only evidence is used as a final validation claim.",
+        purpose="Legacy external-validation gate: no fixture-only evidence is used as a final validation claim.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="no_unresolved_blocking_defects",
-        purpose="No unresolved blocking defects remain for finalization.",
+        purpose="Legacy external-validation gate: no unresolved blocking defects remain for finalization.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
     ),
     GateCatalogEntry(
         name="final_operator_approval",
-        purpose="The final operator explicitly approved release.",
+        purpose="Legacy external-validation gate: the final operator explicitly approved release.",
         required_profiles=(GATE_PROFILE_FINAL_ARTIFACT,),
+    ),
+    GateCatalogEntry(
+        name="autonomous_candidate_packet_exists",
+        purpose="An autonomous candidate packet exists for internal creative finalization.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="internal_stream_reader_trace_exists",
+        purpose="Internal stream-reader state trace exists for the candidate.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="internal_reread_trace_exists",
+        purpose="Internal reread trace exists for the candidate.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="forensic_grounding_report_exists",
+        purpose="Forensic grounding report exists for source-to-artifact accountability.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="hostile_reader_report_exists",
+        purpose="Hostile internal reader report exists and records objections.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="failure_diagnosis_exists",
+        purpose="Internal failure diagnosis exists for the candidate.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="targeted_recomposition_plan_exists",
+        purpose="Targeted recomposition plan exists for diagnosed failures.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="counterfactual_ablation_plan_or_result_exists",
+        purpose="Counterfactual ablation plan or result exists for core effects.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="rival_preservation_present",
+        purpose="A strongest-rival artifact or preservation record is present.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="internal_rival_comparison_exists",
+        purpose="Internal rival comparison exists without relying on external human readers.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="no_fixture_only_core_evidence",
+        purpose="Core autonomous finalization does not rely on fixture-only evidence.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="no_unresolved_internal_blockers",
+        purpose="No unresolved internal blockers remain for the autonomous candidate.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
+    ),
+    GateCatalogEntry(
+        name="internal_operator_approval",
+        purpose="Operator approves internal autonomous candidate finalization.",
+        required_profiles=(GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,),
     ),
 )
 

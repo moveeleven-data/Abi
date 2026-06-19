@@ -6,7 +6,10 @@ from abi.cli import main
 from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
 from abi.controller.gates import list_gates
-from abi.controller.policy import FINAL_ARTIFACT_REQUIRED_GATES, GATE_PROFILE_FINAL_ARTIFACT
+from abi.controller.policy import (
+    AUTONOMOUS_CREATIVE_CANDIDATE_REQUIRED_GATES,
+    GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+)
 from abi.controller.state import get_latest_run
 from abi.db import connect
 from abi.hashing import sha256_file
@@ -232,13 +235,16 @@ def test_fake_pilot_artifact_set_creates_source_frozen_packet(tmp_path, monkeypa
         final_report = check_finalization(
             connection,
             run_id=result.payload["run_id"],
-            profile=GATE_PROFILE_FINAL_ARTIFACT,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
 
     assert latest_run.active_phase == "phase16_first_real_candidate_set"
-    assert not ({gate.gate_name for gate in gates} & set(FINAL_ARTIFACT_REQUIRED_GATES))
+    assert not (
+        {gate.gate_name for gate in gates}
+        & set(AUTONOMOUS_CREATIVE_CANDIDATE_REQUIRED_GATES)
+    )
     assert final_report.refused is True
-    assert "real_human_validation_passed" in final_report.missing_gates
+    assert "autonomous_candidate_packet_exists" in final_report.missing_gates
 
     pilot_artifacts = {
         artifact.type: artifact
@@ -338,7 +344,7 @@ def test_stubbed_openai_pilot_creates_model_records_and_model_artifacts(
         final_report = check_finalization(
             connection,
             run_id=result.payload["run_id"],
-            profile=GATE_PROFILE_FINAL_ARTIFACT,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
 
     assert len(calls) == 3
@@ -396,7 +402,7 @@ def test_stubbed_openai_pilot_creates_model_records_and_model_artifacts(
     strongest = read_payload(result.payload["artifact_paths"]["pilot_strongest_rival_slot"])
     assert strongest["strongest_rival_gate_satisfied"] is False
     assert final_report.refused is True
-    assert "strongest_rival_comparison_passed" in final_report.missing_gates
+    assert "internal_rival_comparison_exists" in final_report.missing_gates
 
 
 def test_stubbed_openai_pilot_fails_closed_on_scaffold_leakage(tmp_path, monkeypatch):
@@ -562,76 +568,20 @@ def test_pilot_import_rival_rebuilds_reader_bundle_without_mutating_source_packe
         "pilot_abi_candidate_ref"
     ]
 
-    kit_dir = tmp_path / "inputs" / "private" / "pilot_001" / "reader_kit"
-    export_exit = main(
-        [
-            "--root",
-            str(tmp_path),
-            "pilot",
-            "export-reader-kit",
-            "--packet-dir",
-            payload["packet_dir"],
-            "--out-dir",
-            str(kit_dir),
-            "--reader-count",
-            "6",
-        ]
-    )
-    export_payload = json.loads(capsys.readouterr().out)
-
-    assert export_exit == 0
-    assert export_payload["accepted"] is True
-    assert export_payload["out_dir"] == str(kit_dir.resolve())
-    assert len(export_payload["reader_bundle_files"]) == 6
-    assert export_payload["order_is_counterbalanced"] is True
-    response_template = Path(export_payload["response_form_template"])
-    assert response_template.exists()
-    assert "First Read" in response_template.read_text(encoding="utf-8")
-    forbidden_reader_terms = (
-        "source_class",
-        "abi_candidate",
-        "direct_prompt_baseline",
-        "raw_model_baseline",
-        "strongest_rival",
-    )
-    for reader_file in export_payload["reader_bundle_files"]:
-        text = Path(reader_file).read_text(encoding="utf-8")
-        assert "Text A" in text or "Text B" in text or "Text C" in text or "Text D" in text
-        lowered = text.lower()
-        for forbidden in forbidden_reader_terms:
-            assert forbidden not in lowered
-
-    schedule = json.loads(Path(export_payload["order_schedule_private"]).read_text(encoding="utf-8"))
-    assert schedule["private"] is True
-    assert schedule["not_for_reader_distribution"] is True
-    source_classes = {
-        item["source_class"]
-        for reader in schedule["readers"]
-        for item in reader["presentation_order"]
-    }
-    assert source_classes == {
-        "abi_candidate",
-        "direct_prompt_baseline",
-        "raw_model_baseline",
-        "strongest_rival",
-    }
-    orders = [
-        tuple(item["label"] for item in reader["presentation_order"])
-        for reader in schedule["readers"]
-    ]
-    assert len(set(orders)) > 1
-
     with connect(config.db_path) as connection:
         gates = list_gates(connection, payload["run_id"])
         final_report = check_finalization(
             connection,
             run_id=payload["run_id"],
-            profile=GATE_PROFILE_FINAL_ARTIFACT,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
 
-    assert not ({gate.gate_name for gate in gates} & set(FINAL_ARTIFACT_REQUIRED_GATES))
+    assert not (
+        {gate.gate_name for gate in gates}
+        & set(AUTONOMOUS_CREATIVE_CANDIDATE_REQUIRED_GATES)
+    )
     assert final_report.refused is True
-    assert "strongest_rival_comparison_passed" in final_report.missing_gates
+    assert "internal_rival_comparison_exists" in final_report.missing_gates
 
 
 def test_pilot_cli_fake_and_openai_guard(tmp_path, capsys, monkeypatch):

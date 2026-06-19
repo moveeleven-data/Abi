@@ -23,17 +23,6 @@ from abi.live_model import LIVE_WORKERS, run_live_abi_ear_worker
 from abi.model_calls import get_model_call, list_model_calls, model_call_to_dict
 from abi.model_driver import run_model_driver_demo
 from abi.modules.abi_ear import run_abi_ear_demo
-from abi.modules.evaluation import (
-    EVALUATION_CLIENTS,
-    EVALUATION_MAX_MODEL_CALLS_DEFAULT,
-    run_evaluation_demo,
-)
-from abi.modules.final_artifact import (
-    FINAL_ARTIFACT_CLIENTS,
-    FINAL_ARTIFACT_MAX_MODEL_CALLS_DEFAULT,
-    run_final_artifact_packet,
-)
-from abi.modules.human_calibration import run_human_calibration_demo
 from abi.modules.live_abi_ear import (
     LIVE_ABI_EAR_CLIENTS,
     LIVE_ABI_EAR_MAX_MODEL_CALLS_DEFAULT,
@@ -53,7 +42,6 @@ from abi.modules.production_run import (
 from abi.modules.pilot_artifact_set import (
     PILOT_ARTIFACT_SET_CLIENTS,
     PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT,
-    export_pilot_reader_kit,
     import_pilot_rival,
     run_pilot_artifact_set,
 )
@@ -180,67 +168,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=PRODUCTION_RUN_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed across upstream live packets.",
     )
-    evaluation_parser = subparsers.add_parser(
-        "evaluation",
-        help="Run evaluation and baseline comparison commands",
-    )
-    evaluation_subparsers = evaluation_parser.add_subparsers(
-        dest="evaluation_command",
-        required=True,
-    )
-    evaluation_demo_parser = evaluation_subparsers.add_parser(
-        "demo",
-        help="Run the guarded evaluation and baseline comparison scaffold",
-    )
-    evaluation_demo_parser.add_argument(
-        "--client",
-        choices=EVALUATION_CLIENTS,
-        required=True,
-        help="Evaluation model client path to use.",
-    )
-    evaluation_demo_parser.add_argument(
-        "--allow-live-model",
-        action="store_true",
-        help="Explicitly allow the OpenAI path to make live model calls.",
-    )
-    evaluation_demo_parser.add_argument(
-        "--max-model-calls",
-        type=int,
-        default=EVALUATION_MAX_MODEL_CALLS_DEFAULT,
-        help="Maximum model-shaped calls allowed for evaluation workers.",
-    )
-    final_artifact_parser = subparsers.add_parser(
-        "final-artifact",
-        help="Build final-artifact candidate and paper packet scaffolds",
-    )
-    final_artifact_subparsers = final_artifact_parser.add_subparsers(
-        dest="final_artifact_command",
-        required=True,
-    )
-    final_artifact_packet_parser = final_artifact_subparsers.add_parser(
-        "packet",
-        help="Run the guarded final-artifact candidate packet scaffold",
-    )
-    final_artifact_packet_parser.add_argument(
-        "--client",
-        choices=FINAL_ARTIFACT_CLIENTS,
-        required=True,
-        help="Final-artifact packet client path to use.",
-    )
-    final_artifact_packet_parser.add_argument(
-        "--allow-live-model",
-        action="store_true",
-        help="Explicitly allow the OpenAI path to make live model calls.",
-    )
-    final_artifact_packet_parser.add_argument(
-        "--max-model-calls",
-        type=int,
-        default=FINAL_ARTIFACT_MAX_MODEL_CALLS_DEFAULT,
-        help="Maximum model-shaped calls allowed for final-artifact workers.",
-    )
     pilot_parser = subparsers.add_parser(
         "pilot",
-        help="Prepare pilot validation artifact sets",
+        help="Prepare candidate/baseline/rival artifact sets",
     )
     pilot_subparsers = pilot_parser.add_subparsers(
         dest="pilot_command",
@@ -289,37 +219,6 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Private strongest-rival text file to import as Text D.",
     )
-    pilot_export_reader_kit_parser = pilot_subparsers.add_parser(
-        "export-reader-kit",
-        help="Export private counterbalanced reader bundles from a pilot packet.",
-    )
-    pilot_export_reader_kit_parser.add_argument(
-        "--packet-dir",
-        type=Path,
-        required=True,
-        help="Derived pilot packet directory containing a blinded reader bundle.",
-    )
-    pilot_export_reader_kit_parser.add_argument(
-        "--out-dir",
-        type=Path,
-        required=True,
-        help="Private output directory under inputs/private/.",
-    )
-    pilot_export_reader_kit_parser.add_argument(
-        "--reader-count",
-        type=int,
-        required=True,
-        help="Number of counterbalanced reader bundles to write.",
-    )
-    calibration_parser = subparsers.add_parser(
-        "calibration",
-        help="Run deterministic human calibration commands",
-    )
-    calibration_subparsers = calibration_parser.add_subparsers(
-        dest="calibration_command",
-        required=True,
-    )
-    calibration_subparsers.add_parser("demo", help="Run the deterministic calibration scaffold")
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -428,20 +327,6 @@ def main(argv: list[str] | None = None) -> int:
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
         )
-    if args.command == "evaluation" and args.evaluation_command == "demo":
-        return _cmd_evaluation_demo(
-            config,
-            client_name=args.client,
-            allow_live_model=args.allow_live_model,
-            max_model_calls=args.max_model_calls,
-        )
-    if args.command == "final-artifact" and args.final_artifact_command == "packet":
-        return _cmd_final_artifact_packet(
-            config,
-            client_name=args.client,
-            allow_live_model=args.allow_live_model,
-            max_model_calls=args.max_model_calls,
-        )
     if args.command == "pilot" and args.pilot_command == "artifact-set":
         return _cmd_pilot_artifact_set(
             config,
@@ -456,15 +341,6 @@ def main(argv: list[str] | None = None) -> int:
             packet_dir=args.packet_dir,
             rival_file=args.rival_file,
         )
-    if args.command == "pilot" and args.pilot_command == "export-reader-kit":
-        return _cmd_pilot_export_reader_kit(
-            config,
-            packet_dir=args.packet_dir,
-            out_dir=args.out_dir,
-            reader_count=args.reader_count,
-        )
-    if args.command == "calibration" and args.calibration_command == "demo":
-        return _cmd_calibration_demo(config)
     if args.command == "controller" and args.controller_command == "status":
         return _cmd_controller_status(config)
     if args.command == "controller" and args.controller_command == "blockers":
@@ -651,40 +527,6 @@ def _cmd_production_live_demo(
     return result.exit_code
 
 
-def _cmd_evaluation_demo(
-    config: AbiConfig,
-    *,
-    client_name: str,
-    allow_live_model: bool,
-    max_model_calls: int,
-) -> int:
-    result = run_evaluation_demo(
-        config,
-        client_name=client_name,
-        allow_live_model=allow_live_model,
-        max_model_calls=max_model_calls,
-    )
-    print(json.dumps(result.payload, indent=2, sort_keys=True))
-    return result.exit_code
-
-
-def _cmd_final_artifact_packet(
-    config: AbiConfig,
-    *,
-    client_name: str,
-    allow_live_model: bool,
-    max_model_calls: int,
-) -> int:
-    result = run_final_artifact_packet(
-        config,
-        client_name=client_name,
-        allow_live_model=allow_live_model,
-        max_model_calls=max_model_calls,
-    )
-    print(json.dumps(result.payload, indent=2, sort_keys=True))
-    return result.exit_code
-
-
 def _cmd_pilot_artifact_set(
     config: AbiConfig,
     *,
@@ -717,29 +559,6 @@ def _cmd_pilot_import_rival(
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
-
-
-def _cmd_pilot_export_reader_kit(
-    config: AbiConfig,
-    *,
-    packet_dir: Path,
-    out_dir: Path,
-    reader_count: int,
-) -> int:
-    result = export_pilot_reader_kit(
-        config,
-        packet_dir=packet_dir,
-        out_dir=out_dir,
-        reader_count=reader_count,
-    )
-    print(json.dumps(result.payload, indent=2, sort_keys=True))
-    return result.exit_code
-
-
-def _cmd_calibration_demo(config: AbiConfig) -> int:
-    result = run_human_calibration_demo(config)
-    print(json.dumps(result.to_cli_summary(), indent=2, sort_keys=True))
-    return 0
 
 
 def _cmd_controller_status(config: AbiConfig) -> int:

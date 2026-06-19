@@ -1,23 +1,24 @@
 # Fixture Evidence Safety Report
 
-Last checked: 2026-06-18
+Last realigned: 2026-06-19
 
-## Fixture Boundary
+Fixture and fake-client outputs are engineering artifacts. They can exercise artifact registration, model-call recording, packet assembly, and fail-closed controller behavior. They do not satisfy autonomous creative-candidate gates by themselves.
 
-The repository contains deterministic fixtures for production harness inputs, human calibration, evaluation baselines, and fake-client packet paths. These fixtures are engineering test data. They are not real validation, not real reader study results, and not evidence of phase-shift-level writing.
+## Active Rule
 
-## Safety Properties
+The `autonomous_creative_candidate` profile requires `no_fixture_only_core_evidence`. Do not mark that gate passed unless the corresponding internal artifacts are non-fixture and operator-reviewed.
 
-- Human-trace fixture imports are marked `fixture_only` and `not_real_validation`.
-- Calibration outputs are marked as fixture data.
-- Fake-client production, evaluation, and final-artifact packet paths mark candidate outputs as fixture/fake or non-final where appropriate.
-- Candidate artifacts remain `non_final: true`, `not_human_validated: true`, and `not_finalization_eligible: true`.
-- Final-artifact readiness reports treat fixture-only evidence as a blocker.
+## Legacy Rule
 
-## Finalization Impact
+The legacy `final_artifact` profile still rejects fixture evidence. That profile is retained for external validation policy only and is not the active development path.
 
-Fixture evidence cannot satisfy the `final_artifact` profile. The required gate `no_fixture_only_evidence_used_as_final_claim` remains unsatisfied in demo state, and the readiness checker reports fixture-only blockers.
+## Private Source Safety
 
-## Audit Conclusion
+Runtime and private material must remain in ignored locations:
 
-The fixture boundary is visible in payloads, packet summaries, and profile readiness checks. The current repository does not accept fixture evidence as real validation.
+- `runs/`
+- `outputs/`
+- `db/*.sqlite`
+- `inputs/private/`
+
+Tracked docs must not copy private source contents.

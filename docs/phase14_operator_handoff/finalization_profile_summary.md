@@ -1,23 +1,45 @@
 # Finalization Profile Summary
 
-Last checked: 2026-06-18
+Last realigned: 2026-06-19
 
 ## Profiles
 
-| Profile | Required Gates | Purpose |
-| --- | --- | --- |
-| `infrastructure` | `infrastructure_initialized`, `artifact_registry_ready`, `required_phase0_tests_passed` | Phase 0 infrastructure readiness. |
-| `candidate_release` | `source_to_artifact_production_run_v1`, `evaluation_baselines_v1` | Candidate scaffold readiness for controlled release review. |
-| `final_artifact` | `final_artifact_packet_exists`, `final_artifact_not_fixture`, `final_artifact_not_marked_non_final`, `real_human_validation_passed`, `strongest_rival_comparison_passed`, `raw_model_baseline_comparison_passed`, `hostile_final_audit_passed`, `no_fixture_only_evidence_used_as_final_claim`, `no_unresolved_blocking_defects`, `final_operator_approval` | True final artifact release readiness. |
+| Profile | Purpose |
+| --- | --- |
+| `infrastructure` | Phase 0 infrastructure readiness. |
+| `candidate_release` | Historical candidate scaffold readiness. |
+| `autonomous_creative_candidate` | Active internal autonomous creative-candidate readiness. |
+| `final_artifact` | Legacy external/public validation policy; retained but not active. |
 
-## Current Behavior
+## Active Profile
 
-`abi finalization status --profile final_artifact` reports the current run as ineligible. The blocker report includes missing gates and content blockers for fixture-only evidence and non-final candidate artifacts.
+`autonomous_creative_candidate` requires internal autonomous gates only. It does not require human validation, human traces, paper evidence, public validation, or paper approval.
 
-`abi finalize --profile final_artifact` refuses finalization. This is correct behavior.
+Run:
 
-Existing `abi finalize` remains fail-closed under its default policy. No worker path can finalize the project.
+```powershell
+.\.venv\Scripts\abi.exe finalization status --profile autonomous_creative_candidate
+.\.venv\Scripts\abi.exe finalize --profile autonomous_creative_candidate
+```
+
+The profile should refuse until all internal gates are passed.
+
+## Required Autonomous Gates
+
+- `autonomous_candidate_packet_exists`
+- `internal_stream_reader_trace_exists`
+- `internal_reread_trace_exists`
+- `forensic_grounding_report_exists`
+- `hostile_reader_report_exists`
+- `failure_diagnosis_exists`
+- `targeted_recomposition_plan_exists`
+- `counterfactual_ablation_plan_or_result_exists`
+- `rival_preservation_present`
+- `internal_rival_comparison_exists`
+- `no_fixture_only_core_evidence`
+- `no_unresolved_internal_blockers`
+- `internal_operator_approval`
 
 ## Operator Rule
 
-Do not manually mark final-artifact gates passed unless the corresponding external evidence exists and has been reviewed. Controlled unit tests may construct eligible profiles, but demo, fixture, and fake-client state must remain ineligible.
+Do not manually mark autonomous gates passed unless the corresponding internal artifacts or operator approvals exist. Controlled unit tests may construct eligible profiles, but demo, fixture, and fake-client state must remain ineligible.

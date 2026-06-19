@@ -1,26 +1,29 @@
 # Next Validation Roadmap
 
-Last checked: 2026-06-18
+Last realigned: 2026-06-19
 
-Phase 15 should not begin by writing a white paper or claiming success. It should convert the current scaffold into evidence.
+This file name is historical. The active next step is not human validation or paper evidence. The active next step is Autonomous Internal Reader Lab v1.
 
-## Recommended Phase 15 Work
+## Recommended Next Work
 
-1. Define a real human-validation protocol with recruitment criteria, consent, blindness, task wording, exclusion criteria, and analysis plan.
-2. Define strongest-rival and raw-model baseline protocols that can be independently reproduced.
-3. Create a hostile final audit checklist with named blocking defects and operator sign-off.
-4. Separate fixture-only, fake-client, guarded-live, and real-validation evidence in reports and gate inputs.
-5. Run a small pilot only after protocols and failure criteria are fixed.
-6. Preserve fail-closed finalization until evidence satisfies the `final_artifact` profile.
+1. Build internal stream-reader state workers.
+2. Build internal reread trace workers.
+3. Produce failure diagnosis artifacts.
+4. Produce targeted recomposition plans.
+5. Produce counterfactual ablation plans or results.
+6. Preserve strongest-rival artifacts.
+7. Add internal rival comparison.
+8. Add hostile internal reader reports.
+9. Keep `autonomous_creative_candidate` fail-closed until internal gates are satisfied.
 
-## Claims Still Forbidden
+## Do Not Treat As Next Work
 
-- Abi produces phase-shift-level writing.
-- Abi has passed real human validation.
-- Abi beats strong baselines.
-- Abi is paper-ready.
-- Abi has a final artifact.
+- human-reader dry runs
+- browser ChatGPT sessions as readers
+- external people as core Abi evaluators
+- public-validation claims
+- paper-readiness claims
 
-## Exit Criteria For Future Finalization
+## Claims Not Made
 
-Future finalization should require a real final artifact packet, non-fixture evidence, real human validation, strongest-rival comparison, raw-model baseline comparison, hostile final audit, no unresolved blocking defects, and explicit final operator approval.
+Abi has not completed the autonomous internal loop, has not beaten a strongest rival, and makes no final or phase-shift claim.

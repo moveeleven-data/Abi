@@ -33,6 +33,12 @@ def test_readme_documents_abi_ear_demo_command():
 
 
 def test_source_uses_no_model_or_api_client_imports():
+    cli_source = Path("src/abi/cli.py").read_text(encoding="utf-8")
+    assert "abi.modules.human_calibration" not in cli_source
+    assert "abi.modules.evaluation" not in cli_source
+    assert "abi.modules.final_artifact" not in cli_source
+    assert "export-reader-kit" not in cli_source
+
     forbidden_import_roots = {"openai", "requests", "httpx", "urllib", "socket"}
     forbidden_source_markers = {
         "api_key",

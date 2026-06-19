@@ -1,5 +1,17 @@
 # Context Index
 
+## Current core realignment
+
+For current operator direction after the core realignment, read:
+
+1. README.md
+2. docs/INDEX.md
+3. context/24_CORE_REALIGNMENT_REMOVE_HUMAN_PAPER_VALIDATION.md
+
+The active path is Abi as an autonomous creative engine. Human-reader dry runs, paper-grade validation, public validation, and reader-kit export workflows are not current runtime instructions.
+
+Earlier phase specs remain frozen historical context. Use them only when an active task explicitly names the phase or file.
+
 For Phase 0, read:
 
 1. AGENTS.md

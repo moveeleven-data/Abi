@@ -10,6 +10,7 @@ from typing import Any
 from abi.artifacts import ArtifactRecord, list_artifacts
 from abi.controller.gates import list_gates
 from abi.controller.policy import (
+    GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
     GATE_PROFILE_CANDIDATE_RELEASE,
     GATE_PROFILE_FINAL_ARTIFACT,
     evaluate_gate_policy,
@@ -302,10 +303,14 @@ def _build_blockers(
 def _recommended_next_action(profile: str, eligible: bool) -> str:
     if eligible and profile == GATE_PROFILE_FINAL_ARTIFACT:
         return "finalize"
+    if eligible and profile == GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE:
+        return "autonomous creative candidate profile is internally eligible"
     if eligible and profile == GATE_PROFILE_CANDIDATE_RELEASE:
         return "candidate release profile is ready; do not treat it as final artifact readiness"
     if eligible:
         return "profile gates are satisfied; this is diagnostic readiness only"
+    if profile == GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE:
+        return "build Autonomous Internal Reader Lab v1 outputs and resolve internal blockers"
     if profile == GATE_PROFILE_FINAL_ARTIFACT:
         return "resolve final artifact gates, replace fixture evidence, and obtain final approval"
     if profile == GATE_PROFILE_CANDIDATE_RELEASE:

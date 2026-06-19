@@ -1,16 +1,16 @@
 # Project Abi
 
-Abi v0.1 is a Self-Isomorphic Causal Reread Compiler scaffold. The repository is currently an evidence-ready research harness, not a proven writing system and not a final artifact.
+Abi v0.1 is an autonomous creative-engine scaffold. The active path is internal: source material moves through Abi Ear, Minimal Reread, candidate/baseline/rival set construction, internal reader-state workers, failure diagnosis, targeted recomposition, counterfactual ablation, rival preservation, and fail-closed autonomous finalization.
 
-The runtime centers on a fail-closed controller, immutable JSON artifacts, SQLite-backed state, guarded model-call surfaces, and finalization gates. Demos and fake-client paths are for engineering verification unless a future protocol explicitly collects real evidence.
+Abi is not a public-validation harness right now. Human readers, browser ChatGPT reader sessions, paper-grade validation, and external study tooling are outside the core engine path.
 
 ## Project Status
 
-- Current implemented surface: infrastructure through the first pilot artifact-set scaffold.
-- Current validation status: no real human validation has run.
-- Current finalization status: `final_artifact` remains ineligible and must refuse.
-- Current artifact status: candidates remain non-final, not human-validated, not finalization-eligible, and no-phase-shift-claim.
-- Current OpenAI status: guarded paths exist, but no live call runs unless explicitly opted in.
+- Current implemented surface: deterministic infrastructure, artifact/run registries, guarded model-call records, Abi Ear, Minimal Reread, production/candidate scaffolds, pilot candidate/baseline/rival artifact sets, and strongest-rival import.
+- Active finalization profile: `autonomous_creative_candidate`.
+- Current finalization status: fail-closed until internal autonomous gates are explicitly satisfied.
+- Legacy external profile: `final_artifact` remains present as historical/external validation policy, but it is not the active development path.
+- Current OpenAI status: guarded paths exist; no live call runs unless explicitly opted in.
 
 ## Quickstart
 
@@ -26,16 +26,16 @@ Run the basic checks:
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\abi.exe status
-.\.venv\Scripts\abi.exe finalization status --profile final_artifact
+.\.venv\Scripts\abi.exe finalization status --profile autonomous_creative_candidate
 ```
 
 Expected finalization behavior:
 
 ```powershell
-.\.venv\Scripts\abi.exe finalize --profile final_artifact
+.\.venv\Scripts\abi.exe finalize --profile autonomous_creative_candidate
 ```
 
-That command should refuse until real final-artifact evidence exists.
+That command should refuse until the internal autonomous gates are present and passing.
 
 ## Current Capabilities
 
@@ -45,19 +45,22 @@ Deterministic local demos:
 .\.venv\Scripts\abi.exe ear demo
 .\.venv\Scripts\abi.exe reread demo
 .\.venv\Scripts\abi.exe harness demo
-.\.venv\Scripts\abi.exe calibration demo
 ```
 
-Fake-client and scaffold packets:
+Fake-client and candidate packet paths:
 
 ```powershell
 .\.venv\Scripts\abi.exe model-driver demo
 .\.venv\Scripts\abi.exe ear live-demo --client fake
 .\.venv\Scripts\abi.exe reread live-demo --client fake
 .\.venv\Scripts\abi.exe production live-demo --client fake
-.\.venv\Scripts\abi.exe evaluation demo --client fake
-.\.venv\Scripts\abi.exe final-artifact packet --client fake
 .\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
+```
+
+Strongest-rival preservation:
+
+```powershell
+.\.venv\Scripts\abi.exe pilot import-rival --packet-dir <packet_dir> --rival-file <rival_file>
 ```
 
 Inspection commands:
@@ -80,7 +83,7 @@ Controller and gate inspection:
 .\.venv\Scripts\abi.exe controller demo
 .\.venv\Scripts\abi.exe gate list
 .\.venv\Scripts\abi.exe finalization status
-.\.venv\Scripts\abi.exe finalization status --profile final_artifact
+.\.venv\Scripts\abi.exe finalization status --profile autonomous_creative_candidate
 ```
 
 ## Current Non-Claims
@@ -88,13 +91,13 @@ Controller and gate inspection:
 Do not claim from this repo state that:
 
 - Abi produces phase-shift-level writing.
-- Abi has passed real human validation.
-- Abi has beaten strong baselines.
-- Abi has passed hostile final audit.
-- Abi is paper-ready.
-- Any generated candidate is a final artifact.
+- Abi has completed an autonomous internal reader lab.
+- Abi has beaten a strongest rival.
+- Abi has passed hostile internal audit.
+- Any generated candidate is final.
+- External human or public validation is part of the active runtime.
 
-Fixture and fake-client outputs are engineering artifacts. They cannot satisfy final-artifact gates.
+Fixture and fake-client outputs are engineering artifacts. They do not satisfy autonomous finalization gates by themselves.
 
 ## Guarded OpenAI Usage
 
@@ -108,8 +111,6 @@ Examples that refuse without opt-in:
 .\.venv\Scripts\abi.exe ear live-demo --client openai
 .\.venv\Scripts\abi.exe reread live-demo --client openai
 .\.venv\Scripts\abi.exe production live-demo --client openai
-.\.venv\Scripts\abi.exe evaluation demo --client openai
-.\.venv\Scripts\abi.exe final-artifact packet --client openai
 .\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source
 ```
 
@@ -121,12 +122,10 @@ Opt-in examples:
 .\.venv\Scripts\abi.exe ear live-demo --client openai --allow-live-model --max-model-calls 8
 .\.venv\Scripts\abi.exe reread live-demo --client openai --allow-live-model --max-model-calls 12
 .\.venv\Scripts\abi.exe production live-demo --client openai --allow-live-model --max-model-calls 24
-.\.venv\Scripts\abi.exe evaluation demo --client openai --allow-live-model --max-model-calls 12
-.\.venv\Scripts\abi.exe final-artifact packet --client openai --allow-live-model --max-model-calls 8
 .\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source --allow-live-model --max-model-calls 36
 ```
 
-Install optional live dependencies only for an intentional manual live smoke test:
+Do not run live OpenAI commands casually. Install optional live dependencies only for an intentional manual live smoke test:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[live]"
@@ -142,26 +141,32 @@ Use ignored local paths for private source files:
 inputs/private/
 ```
 
-The pilot artifact-set command hashes source files and records filenames. It must not copy private source content into tracked docs.
+The pilot artifact-set command hashes source files and records filenames. Private source contents may be sent to OpenAI only during explicit `--allow-live-model` runs and must stay out of tracked docs.
 
 ## Validation Roadmap
 
-The next real work is evidence, not new claims:
+The next development milestone is **Autonomous Internal Reader Lab v1**.
 
-1. Freeze source material and artifact-set rules.
-2. Select or import a real strongest rival under protocol rules.
-3. Generate or import non-fixture baselines with stored prompts, budgets, and model-call records.
-4. Run a small human-reader pilot only after task wording, exclusion rules, blindness rules, and scoring are locked.
-5. Run hostile audit before any final-artifact gate is considered.
-6. Keep `final_artifact` finalization fail-closed until all required evidence is reviewed.
+The next branch should build internal reader-state workers and internal comparison machinery, not a human-reader dry run. Do not use browser ChatGPT sessions as ad hoc readers. Do not use external humans as core Abi evaluators.
+
+Near-term work should focus on:
+
+1. Internal stream-reader traces for candidate text.
+2. Internal reread traces with failure diagnosis.
+3. Targeted recomposition plans.
+4. Counterfactual ablation plans or results.
+5. Rival preservation and internal rival comparison.
+6. Hostile internal reader reports.
+7. Fail-closed `autonomous_creative_candidate` readiness.
 
 ## Where To Find Docs
 
 - [Docs index](docs/INDEX.md)
+- [Core realignment context](context/24_CORE_REALIGNMENT_REMOVE_HUMAN_PAPER_VALIDATION.md)
+- [Architecture freeze](context/00_ARCHITECTURE_FREEZE.md)
+- [Gate policy v2 spec](context/19_FINALIZATION_GATE_POLICY_V2_SPEC.md)
 - [Phase 14 operator handoff](docs/phase14_operator_handoff/operator_handoff.md)
-- [Phase 15 validation protocol](docs/phase15_real_validation_protocol/validation_protocol.md)
 - [Known blockers](docs/phase14_operator_handoff/known_blockers.md)
-- [Fresh clone verification](docs/phase14_operator_handoff/fresh_clone_verification.md)
 - [Frozen context specs](context/README.md)
 
 Setup context scripts live under:

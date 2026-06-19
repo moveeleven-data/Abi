@@ -1,44 +1,32 @@
-# Phase 14 Audit Report
+# Audit Report
 
-Last checked: 2026-06-18
+Last realigned: 2026-06-19
 
 ## Scope
 
-Phase 14 is a documentation and verification phase only. It audits the repository as built through Phase 13 and does not add new capabilities, generation behavior, model workers, architecture changes, final gates, or live OpenAI calls.
+This report is retained from the Phase 14 handoff set and updated for the core autonomous realignment. The active repo path is now Abi as an autonomous creative engine, not a human-study, public-validation, or paper-evidence workflow.
 
-Abi is currently a deterministic, fail-closed research scaffold with guarded model-call surfaces and fixture/fake evaluation paths. It is not yet proven to produce phase-shift-level writing, has not passed real human validation, has not beaten strong baselines, has not completed a hostile final audit, and is not paper-ready.
+## Current Finding
 
-## Verification Snapshot
+The codebase still provides deterministic infrastructure, immutable artifact registration, SQLite-backed runs, guarded model-call records, Abi Ear, Minimal Reread, production/candidate packet scaffolds, pilot artifact-set generation, strongest-rival import, and fail-closed finalization.
 
-| Check | Result |
-| --- | --- |
-| `git status` | Clean before Phase 14 docs were added. |
-| `git log --oneline --decorate -60` | Phase implementation tags for Phase 0 through Phase 13 appear on the expected implementation commits. |
-| `git tag --list` | All completion tags through `phase-13-final-artifact-paper-packet-complete` are present. |
-| `git ls-files` | Runtime output directories are represented only by intentional placeholders: `db/.gitkeep`, `outputs/.gitkeep`, and `runs/.gitkeep`. No `.venv`, cache, SQLite database, or generated packet files are tracked. |
-| `.\.venv\Scripts\python.exe -m ruff check .` | Passed. |
-| `.\.venv\Scripts\python.exe -m pytest` | Passed, 126 tests. |
-| `.\.venv\Scripts\abi.exe status` | Reports one active run and the latest phase as a final-artifact packet scaffold state. |
-| `.\.venv\Scripts\abi.exe artifact list` | Lists registered artifacts from the active local run. |
-| `.\.venv\Scripts\abi.exe run list` and `run latest` | Report the single active run. |
-| `.\.venv\Scripts\abi.exe final-artifact packet --client fake` | Succeeds and creates a non-final, fixture/fake packet under ignored `runs/`. |
-| `.\.venv\Scripts\abi.exe finalization status --profile final_artifact` | Correctly reports ineligible. |
-| `.\.venv\Scripts\abi.exe finalize --profile final_artifact` | Correctly refuses finalization. |
+The active finalization profile is `autonomous_creative_candidate`. It currently refuses because internal gates are missing. That refusal is correct.
 
-## Repository Findings
+## Retired Active Surfaces
 
-The README command surface matches the implemented CLI for deterministic demos, fake-client packet paths, run/artifact inspection, model-call inspection, gate listing, and profile-aware finalization. Guarded OpenAI commands are documented as requiring explicit opt-in and an API key; they were not executed as live calls during this audit.
+The following commands are no longer active:
 
-`AGENTS.md` remains compatible with the current architecture: the controller owns finalization, the database is durable state, artifacts are registered with hashes and parent IDs, and workers do not finalize. Later guarded live-model adapter code exists only because later frozen phases explicitly added it; it does not weaken the finalization contract.
+- `abi calibration demo`
+- `abi evaluation demo`
+- `abi final-artifact packet`
+- `abi pilot export-reader-kit`
 
-The context documents are phase-scoped. Earlier docs prohibit capabilities that were out of scope for that earlier phase, while later docs explicitly add guarded fake/live scaffolds. No obvious contradiction was found in the current Phase 14 contract.
+Legacy external validation concepts remain historical context only. The `final_artifact` profile is retained as a fail-closed external policy and is not the active development path.
 
-No tracked `SKILL.md` file was found.
+## Claims Not Made
 
-## Finalization Findings
+Abi has not completed Autonomous Internal Reader Lab v1, has not beaten a strongest rival, has not passed hostile internal audit, and makes no final or phase-shift claim.
 
-The `final_artifact` profile remains fail-closed. Current demo and fixture state cannot satisfy final-artifact readiness because the run has no true final artifact, candidate artifacts are marked non-final and not finalization-eligible, evaluation evidence is fixture-only, and the required real validation, strongest-rival comparison, raw-model baseline comparison, hostile final audit, and final operator approval gates are missing.
+## Next Work
 
-## Audit Conclusion
-
-Abi is ready for operator handoff as an audited scaffold. It is not ready for publication, final release, or claims about reader phase shift. Phase 15 should focus on real validation design and evidence quality before any final-artifact or paper-readiness claim is made.
+The next single branch/task should implement Autonomous Internal Reader Lab v1: internal stream-reader traces, internal reread traces, failure diagnosis, targeted recomposition, counterfactual ablation, hostile internal reader reports, and internal rival comparison.
