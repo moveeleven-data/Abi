@@ -253,16 +253,20 @@ class TargetRegionViolationClient(FakeAutonomousRevisionModelClient):
         raw_output = super().generate(request)
         payload = json.loads(raw_output)
         if request.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
-            payload["span_ref"]["region"] = "ending paragraph only"
-            payload["target_region_label"] = "target_region:ending_paragraph_only"
-            payload["target_region_description"] = (
-                "Selected bounded revision target; material edits outside this region "
-                "require explicit target expansion."
+            payload["selected_patch_target_id"] = "target_ending_return_closure"
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        if request.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+            prompt = json.loads(request.input_text)
+            opening_target = next(
+                target
+                for target in prompt["allowed_patch_targets"]
+                if target["patch_target_id"] == "target_opening_sentence"
             )
-            payload["allowed_span_refs"] = ["ending paragraph only"]
-            payload["protected_outside_spans"] = [
-                "all candidate spans outside ending paragraph only"
-            ]
+            patch = payload["patches"][0]
+            patch["patch_target_id"] = opening_target["patch_target_id"]
+            patch["target_span_ref"]["region"] = opening_target["allowed_span_ref"]
+            patch["target_region_label"] = opening_target["target_region_label"]
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
         return raw_output
@@ -277,6 +281,7 @@ class BroadCanonicalTargetClient(FakeAutonomousRevisionModelClient):
                 "Opening paragraph through the first two image-to-interpretation pivots "
                 "(table, ring, dust, spoon, record)."
             )
+            payload["selected_patch_target_id"] = "target_opening_first_pivots"
             payload["span_ref"]["region"] = region
             payload["target_region_label"] = "target_region:opening_first_pivots"
             payload["target_region_description"] = region
@@ -293,6 +298,54 @@ class BroadCanonicalTargetClient(FakeAutonomousRevisionModelClient):
                 }
             ]
             payload["protected_outside_spans"] = [f"all candidate spans outside {region}"]
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class ModelAuthoredPatchTargetInventoryClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+            prompt = json.loads(request.input_text)
+            payload["selected_patch_target_id"] = prompt["allowed_patch_targets"][0][
+                "patch_target_id"
+            ]
+            payload["allowed_patch_targets"] = [
+                {
+                    "patch_target_id": "target_model_authored_not_authoritative",
+                    "target_region_label": "target_region:model_authored",
+                    "target_region_description": "model-authored target must be ignored",
+                    "allowed_span_ref": "model-authored target must be ignored",
+                    "text_window": "model-authored target must be ignored",
+                    "paragraph_index": 99,
+                    "protected_outside_spans": ["model-authored inventory is ignored"],
+                }
+            ]
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class DescriptionSelectedPatchTargetClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+            target = json.loads(request.input_text)["allowed_patch_targets"][0]
+            payload["selected_patch_target_id"] = target["target_region_description"]
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class InventedSelectedPatchTargetClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+            payload["selected_patch_target_id"] = "target_invented_elsewhere"
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
         return raw_output
@@ -357,8 +410,6 @@ class ExplicitTargetExpansionClient(TargetRegionViolationClient):
                 "The selected ending pressure depends on the opening object record."
             )
             patch = payload["patches"][0]
-            patch["target_span_ref"]["region"] = "opening paragraph"
-            patch["target_region_label"] = "target_region:opening_paragraph"
             patch["requires_target_expansion"] = True
             patch["target_expansion_reason"] = (
                 "Opening change is required to make the selected ending pressure legible."
@@ -719,11 +770,8 @@ def test_autonomous_revision_model_schemas_are_strict_objects():
     assert "patch_target_id" in patch_item["required"]
     assert "target_span_ref" in patch_item["required"]
     handle_schema = json_schema_for_worker_schema(AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA)
-    assert "allowed_patch_targets" in handle_schema["required"]
-    target_item = handle_schema["properties"]["allowed_patch_targets"]["items"]
-    assert target_item["type"] == "object"
-    assert target_item["additionalProperties"] is False
-    assert "patch_target_id" in target_item["required"]
+    assert "selected_patch_target_id" in handle_schema["required"]
+    assert "allowed_patch_targets" not in handle_schema["properties"]
 
     variants_schema = json_schema_for_worker_schema(
         AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA
@@ -865,6 +913,23 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert len(client.requests) == 7
     assert "reader_lab_payloads" in client.requests[0].input_text
     assert "source_texts" in client.requests[0].input_text
+    causal_request = next(
+        request
+        for request in client.requests
+        if request.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA
+    )
+    causal_prompt = json.loads(causal_request.input_text)
+    assert "controller_owned_patch_target_inventory" in causal_prompt
+    assert causal_prompt["allowed_patch_targets"] == causal_prompt[
+        "controller_owned_patch_target_inventory"
+    ]["allowed_patch_targets"]
+    assert all(
+        target["patch_target_id"].startswith("target_")
+        for target in causal_prompt["allowed_patch_targets"]
+    )
+    assert "Select exactly one selected_patch_target_id" in causal_prompt[
+        "causal_handle_target_contract"
+    ]
     reviser_request = next(
         request
         for request in client.requests
@@ -947,6 +1012,10 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert handle["target_region_label"]
     assert handle["allowed_span_refs"]
     assert handle["allowed_patch_targets"]
+    assert handle["allowed_patch_targets_source"] == "controller_owned"
+    assert handle["selected_patch_target_id"] in {
+        target["patch_target_id"] for target in handle["allowed_patch_targets"]
+    }
     assert handle["allowed_patch_targets"][0]["patch_target_id"].startswith("target_")
     assert handle["protected_outside_spans"]
 
@@ -1109,6 +1178,81 @@ def test_stubbed_openai_broad_target_uses_canonical_patch_target_id(tmp_path):
     assert patch_proposal["patches"][0]["patch_target_id"] == "target_opening_first_pivots"
     assert diff["allowed_patch_targets"][0]["patch_target_id"] == "target_opening_first_pivots"
     assert diff["target_region_expanded"] is False
+
+
+def test_stubbed_openai_model_authored_patch_target_inventory_is_ignored(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, ModelAuthoredPatchTargetInventoryClient),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    handle = read_payload(result.payload["artifact_paths"]["causal_handle_selection"])
+    target_ids = {target["patch_target_id"] for target in handle["allowed_patch_targets"]}
+    assert handle["allowed_patch_targets_source"] == "controller_owned"
+    assert "target_model_authored_not_authoritative" not in target_ids
+    assert handle["selected_patch_target_id"] in target_ids
+
+
+def test_stubbed_openai_description_selected_patch_target_id_fails_early(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, DescriptionSelectedPatchTargetClient),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "selected_patch_target_id must be a canonical patch target id" in result.payload[
+        "message"
+    ]
+    assert result.payload["counts"]["model_calls"] == 2
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "causal_handle_selection" not in result.payload["artifact_ids"]
+    assert "revision_patch_proposal" not in result.payload["artifact_ids"]
+    assert "revised_candidate_text" not in result.payload["artifact_ids"]
+
+
+def test_stubbed_openai_invented_selected_patch_target_id_fails_early(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, InventedSelectedPatchTargetClient),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "selected unknown patch_target_id" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 2
+    assert "causal_handle_selection" not in result.payload["artifact_ids"]
+    assert "revision_patch_proposal" not in result.payload["artifact_ids"]
+    assert "ablation_variant_set" not in result.payload["artifact_ids"]
 
 
 def test_stubbed_openai_disallowed_patch_target_fails_before_revision_artifacts(tmp_path):

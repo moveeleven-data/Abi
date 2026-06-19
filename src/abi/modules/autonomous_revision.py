@@ -909,6 +909,20 @@ def _prompt_for_revision_worker(
         ],
         "not_human_data": True,
     }
+    if worker.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+        selected_failure = payloads[AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA.artifact_type]
+        target_contract = _controller_target_contract_for_selected_failure(
+            subject,
+            selected_failure,
+        )
+        prompt["controller_owned_patch_target_inventory"] = target_contract
+        prompt["allowed_patch_targets"] = target_contract["allowed_patch_targets"]
+        prompt["causal_handle_target_contract"] = (
+            "Select exactly one selected_patch_target_id from allowed_patch_targets. "
+            "Do not define allowed_patch_targets, do not invent patch target IDs, and "
+            "do not use target_region_description as an identifier. The controller owns "
+            "the target inventory and will reject any selected_patch_target_id outside it."
+        )
     handle_payload = payloads.get(AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type)
     if isinstance(handle_payload, dict) and worker.schema in (
         AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
@@ -979,6 +993,22 @@ def _validator_for_revision_worker(
     worker: AutonomousRevisionWorkerSpec,
     payloads: dict[str, dict[str, Any]],
 ):
+    if worker.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+
+        def _validate_causal_handle(parsed_payload: dict[str, object]) -> None:
+            try:
+                _attach_controller_target_contract(
+                    subject=subject,
+                    handle=parsed_payload,
+                    selected_failure=payloads[
+                        AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA.artifact_type
+                    ],
+                )
+            except RevisionIntegrityError as error:
+                raise ModelValidationError(str(error)) from error
+
+        return _validate_causal_handle
+
     if worker.schema == AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
         handle = payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
 
@@ -1067,6 +1097,101 @@ def _validate_revision_integrity(
         "ablation": ablation_report,
         "old_new_rival_provenance": provenance_report,
     }
+
+
+def _controller_target_contract_for_selected_failure(
+    subject: RevisionSubject,
+    selected_failure: dict[str, Any],
+) -> dict[str, object]:
+    plan_item = _plan_item_for_failure(
+        subject.lab_payloads["targeted_recomposition_plan"],
+        str(selected_failure["selected_failure_type"]),
+    )
+    primary_region = str(plan_item["target_region"])
+    contract = _target_region_contract(
+        primary_region,
+        candidate_text=subject.candidate_text.text,
+    )
+    contract["allowed_patch_targets"] = _controller_patch_target_inventory(
+        subject,
+        primary_region,
+    )
+    contract["allowed_span_refs"] = [
+        str(target["allowed_span_ref"])
+        for target in contract["allowed_patch_targets"]
+        if isinstance(target, dict)
+    ]
+    contract["protected_outside_spans"] = [
+        f"all candidate spans outside {primary_region}",
+    ]
+    return contract
+
+
+def _attach_controller_target_contract(
+    *,
+    subject: RevisionSubject,
+    handle: dict[str, object],
+    selected_failure: dict[str, Any],
+) -> None:
+    target_contract = _controller_target_contract_for_selected_failure(
+        subject,
+        selected_failure,
+    )
+    allowed_targets = {
+        str(target["patch_target_id"]): target
+        for target in target_contract["allowed_patch_targets"]
+        if isinstance(target, dict)
+    }
+    selected_target_id = str(handle["selected_patch_target_id"])
+    selected_target = allowed_targets.get(selected_target_id)
+    if selected_target is None:
+        known_descriptions = {
+            str(target["target_region_description"]): target_id
+            for target_id, target in allowed_targets.items()
+        }
+        if selected_target_id in known_descriptions:
+            raise RevisionIntegrityError(
+                "causal_handle_selector used target_region_description as "
+                "selected_patch_target_id; use canonical id "
+                f"{known_descriptions[selected_target_id]!r}"
+            )
+        allowed_ids = ", ".join(sorted(allowed_targets))
+        raise RevisionIntegrityError(
+            "causal_handle_selector selected unknown patch_target_id "
+            f"{selected_target_id!r}; allowed_patch_targets are: {allowed_ids}"
+        )
+
+    span_ref = handle.get("span_ref")
+    selection_basis = (
+        str(span_ref.get("selection_basis"))
+        if isinstance(span_ref, dict) and span_ref.get("selection_basis")
+        else "controller-owned target inventory selected by model id"
+    )
+    handle["span_ref"] = {
+        "source_label": subject.candidate_text.label,
+        "source_class": subject.candidate_text.source_class,
+        "artifact_id": subject.candidate_text.artifact_id,
+        "region": selected_target["allowed_span_ref"],
+        "selection_basis": selection_basis,
+    }
+    handle["target_region_label"] = selected_target["target_region_label"]
+    handle["target_region_description"] = selected_target["target_region_description"]
+    all_targets = [
+        target
+        for target in target_contract["allowed_patch_targets"]
+        if isinstance(target, dict)
+    ]
+    handle["allowed_span_refs"] = [selected_target["allowed_span_ref"]]
+    handle["allowed_patch_targets"] = [
+        selected_target,
+        *[
+            target
+            for target in all_targets
+            if str(target["patch_target_id"]) != selected_target_id
+        ],
+    ]
+    handle["protected_outside_spans"] = list(selected_target["protected_outside_spans"])
+    handle["allowed_patch_targets_source"] = "controller_owned"
 
 
 def _build_controller_revision_from_patches(
@@ -1623,8 +1748,7 @@ def _reported_changed_spans_for_texts(
 
 def _target_region_contract(region: str, *, candidate_text: str = "") -> dict[str, object]:
     label = "_".join(_words(region)[:8]) or "target_region"
-    patch_target_id = _patch_target_id_for_region(region)
-    text_window = _target_text_window(candidate_text, region)
+    target = _patch_target_for_region(region, candidate_text)
     return {
         "target_region_label": f"target_region:{label}",
         "target_region_description": (
@@ -1632,19 +1756,42 @@ def _target_region_contract(region: str, *, candidate_text: str = "") -> dict[st
             "require explicit target expansion."
         ),
         "allowed_span_refs": [region],
-        "allowed_patch_targets": [
-            {
-                "patch_target_id": patch_target_id,
-                "target_region_label": f"target_region:{label}",
-                "target_region_description": region,
-                "allowed_span_ref": region,
-                "text_window": text_window,
-                "paragraph_index": _target_paragraph_index(region),
-                "protected_outside_spans": [f"all candidate spans outside {region}"],
-            }
-        ],
+        "allowed_patch_targets": [target],
         "protected_outside_spans": [f"all candidate spans outside {region}"],
     }
+
+
+def _patch_target_for_region(region: str, candidate_text: str) -> dict[str, object]:
+    label = "_".join(_words(region)[:8]) or "target_region"
+    return {
+        "patch_target_id": _patch_target_id_for_region(region),
+        "target_region_label": f"target_region:{label}",
+        "target_region_description": region,
+        "allowed_span_ref": region,
+        "text_window": _target_text_window(candidate_text, region),
+        "paragraph_index": _target_paragraph_index(region),
+        "protected_outside_spans": [f"all candidate spans outside {region}"],
+    }
+
+
+def _controller_patch_target_inventory(
+    subject: RevisionSubject,
+    primary_region: str,
+) -> list[dict[str, object]]:
+    candidate_text = subject.candidate_text.text
+    regions = [
+        primary_region,
+        "opening sentence",
+        "opening paragraph through the first two image-to-interpretation pivots",
+        "middle conceptual ladder",
+        "ending return closure",
+        "final image",
+    ]
+    targets: dict[str, dict[str, object]] = {}
+    for region in regions:
+        target = _patch_target_for_region(region, candidate_text)
+        targets.setdefault(str(target["patch_target_id"]), target)
+    return list(targets.values())
 
 
 def _target_contract_from_handle(handle: dict[str, Any]) -> dict[str, object]:
@@ -1866,22 +2013,30 @@ def _fake_model_causal_handle_payload(
     plan_item = _plan_item_for_failure(plan, str(selected_failure["selected_failure_type"]))
     candidate = prompt["candidate"]
     quoted = _first_sentence(str(candidate["text"]))
-    target_contract = _target_region_contract(
-        str(plan_item["target_region"]),
-        candidate_text=str(candidate["text"]),
+    target_contract = dict(
+        prompt.get("controller_owned_patch_target_inventory")
+        or _target_region_contract(
+            str(plan_item["target_region"]),
+            candidate_text=str(candidate["text"]),
+        )
     )
+    patch_target = _first_allowed_patch_target(target_contract)
     return {
         "bounded_target": True,
         "target_count": 1,
         "does_not_rebuild_artifact": True,
+        "selected_patch_target_id": str(patch_target["patch_target_id"]),
         "span_ref": {
             "source_label": str(candidate["label"]),
             "source_class": str(candidate["source_class"]),
             "artifact_id": str(candidate["artifact_id"]),
-            "region": str(plan_item["target_region"]),
+            "region": str(patch_target["allowed_span_ref"]),
             "selection_basis": "smallest handle connected to live reader-lab evidence",
         },
-        **target_contract,
+        "target_region_label": str(patch_target["target_region_label"]),
+        "target_region_description": str(patch_target["target_region_description"]),
+        "allowed_span_refs": list(target_contract["allowed_span_refs"]),
+        "protected_outside_spans": list(target_contract["protected_outside_spans"]),
         "quoted_text": quoted,
         "causal_handle": str(plan_item["causal_handle"]),
         "local_law_hypothesis": (
@@ -1913,10 +2068,26 @@ def _fake_model_revised_candidate_payload(
 ) -> dict[str, Any]:
     candidate = prompt["candidate"]
     original = str(candidate["text"])
-    handle = prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
+    handle = dict(prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type])
+    selected_target_contract = prompt.get("selected_target_contract")
+    if isinstance(selected_target_contract, dict):
+        handle.update(
+            {
+                "span_ref": selected_target_contract["span_ref"],
+                "target_region_label": selected_target_contract["target_region_label"],
+                "target_region_description": selected_target_contract[
+                    "target_region_description"
+                ],
+                "allowed_span_refs": selected_target_contract["allowed_span_refs"],
+                "allowed_patch_targets": selected_target_contract["allowed_patch_targets"],
+                "protected_outside_spans": selected_target_contract[
+                    "protected_outside_spans"
+                ],
+            }
+        )
     first_sentence = _first_sentence(original)
     inserted_text = _revision_insertion_text()
-    patch_target = _first_allowed_patch_target(handle)
+    patch_target = _selected_allowed_patch_target(handle)
     return {
         "proposal_id": f"revision_patch_{sha256_text(first_sentence + inserted_text)[:12]}",
         "source_candidate_artifact_id": str(candidate["artifact_id"]),
@@ -2160,6 +2331,15 @@ def _first_allowed_patch_target(handle: dict[str, Any]) -> dict[str, Any]:
     return first
 
 
+def _selected_allowed_patch_target(handle: dict[str, Any]) -> dict[str, Any]:
+    targets = _allowed_patch_targets_by_id(handle)
+    selected_target_id = str(handle.get("selected_patch_target_id", ""))
+    target = targets.get(selected_target_id)
+    if target is None:
+        return _first_allowed_patch_target(handle)
+    return target
+
+
 def _fake_model_local_law_payload(
     prior_payloads: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -2367,22 +2547,25 @@ def _build_causal_handle_selection(
     candidate = subject.candidate_text
     quoted = _first_sentence(candidate.text)
     handle = str(plan_item["causal_handle"])
-    target_contract = _target_region_contract(
-        str(plan_item["target_region"]),
-        candidate_text=candidate.text,
+    target_contract = _controller_target_contract_for_selected_failure(
+        subject,
+        selected_failure,
     )
+    patch_target = _first_allowed_patch_target(target_contract)
     return {
         "worker": "causal_handle_selector_v1_fake",
         "bounded_target": True,
         "target_count": 1,
+        "selected_patch_target_id": str(patch_target["patch_target_id"]),
         "span_ref": {
             "source_label": candidate.label,
             "source_class": candidate.source_class,
             "artifact_id": candidate.artifact_id,
-            "region": plan_item["target_region"],
+            "region": patch_target["allowed_span_ref"],
             "selection_basis": "smallest local handle connected to selected failure",
         },
         **target_contract,
+        "allowed_patch_targets_source": "controller_owned",
         "quoted_text": quoted,
         "causal_handle": handle,
         "local_law_hypothesis": (
@@ -2418,7 +2601,7 @@ def _build_revision_patch_proposal(
     original = subject.candidate_text.text
     first_sentence = _first_sentence(original)
     inserted_text = _revision_insertion_text()
-    patch_target = _first_allowed_patch_target(handle_selection)
+    patch_target = _selected_allowed_patch_target(handle_selection)
     return {
         "worker": "revision_patch_proposal_v1_fake",
         "proposal_id": f"revision_patch_{sha256_text(first_sentence + inserted_text)[:12]}",

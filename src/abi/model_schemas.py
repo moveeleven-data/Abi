@@ -1689,14 +1689,11 @@ def autonomous_revision_causal_handle_json_schema() -> dict[str, Any]:
             "bounded_target": {"type": "boolean"},
             "target_count": {"type": "integer"},
             "does_not_rebuild_artifact": {"type": "boolean"},
+            "selected_patch_target_id": {"type": "string"},
             "span_ref": _revision_span_ref_schema(),
             "target_region_label": {"type": "string"},
             "target_region_description": {"type": "string"},
             "allowed_span_refs": _string_array_schema(),
-            "allowed_patch_targets": {
-                "type": "array",
-                "items": _revision_patch_target_schema(),
-            },
             "protected_outside_spans": _string_array_schema(),
             "quoted_text": {"type": "string"},
             "causal_handle": {"type": "string"},
@@ -1717,11 +1714,11 @@ def autonomous_revision_causal_handle_json_schema() -> dict[str, Any]:
             "bounded_target",
             "target_count",
             "does_not_rebuild_artifact",
+            "selected_patch_target_id",
             "span_ref",
             "target_region_label",
             "target_region_description",
             "allowed_span_refs",
-            "allowed_patch_targets",
             "protected_outside_spans",
             "quoted_text",
             "causal_handle",
@@ -2953,21 +2950,18 @@ def _validate_autonomous_revision_causal_handle(payload: dict[str, Any]) -> dict
     if int(payload["target_count"]) != 1:
         raise ModelValidationError("target_count must be 1")
     _require_true(payload, "does_not_rebuild_artifact")
+    _validate_patch_target_id(
+        payload.get("selected_patch_target_id"),
+        "selected_patch_target_id",
+    )
     _require_type(payload, "span_ref", dict)
     span_ref = _validate_revision_span_ref(payload["span_ref"], "span_ref")
     for key in ("target_region_label", "target_region_description"):
         _require_type(payload, key, str)
     _require_string_list(payload, "allowed_span_refs")
-    _require_object_list(payload, "allowed_patch_targets")
-    allowed_patch_targets = [
-        _validate_revision_patch_target(target, f"allowed_patch_targets[{index}]")
-        for index, target in enumerate(payload["allowed_patch_targets"])
-    ]
     _require_string_list(payload, "protected_outside_spans")
     if not payload["allowed_span_refs"]:
         raise ModelValidationError("allowed_span_refs must not be empty")
-    if not allowed_patch_targets:
-        raise ModelValidationError("allowed_patch_targets must not be empty")
     for key in (
         "quoted_text",
         "causal_handle",
@@ -2989,11 +2983,11 @@ def _validate_autonomous_revision_causal_handle(payload: dict[str, Any]) -> dict
         "bounded_target": True,
         "target_count": 1,
         "does_not_rebuild_artifact": True,
+        "selected_patch_target_id": payload["selected_patch_target_id"],
         "span_ref": span_ref,
         "target_region_label": payload["target_region_label"],
         "target_region_description": payload["target_region_description"],
         "allowed_span_refs": payload["allowed_span_refs"],
-        "allowed_patch_targets": allowed_patch_targets,
         "protected_outside_spans": payload["protected_outside_spans"],
         "quoted_text": payload["quoted_text"],
         "causal_handle": payload["causal_handle"],
