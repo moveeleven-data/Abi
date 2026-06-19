@@ -24,8 +24,8 @@ from abi.hashing import sha256_text
 from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
 from abi.model_driver import ModelClient, ModelClientError, ModelDriver, ModelDriverResult
 from abi.model_driver import WorkerRequest
+from abi.model_calls import link_model_call_parsed_artifact
 from abi.model_schemas import (
-    AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS,
     AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
     AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
@@ -486,9 +486,17 @@ def _write_fake_revision_packet(
         ],
     )
 
+    payloads["ablation_comparison_work_order"] = _build_ablation_comparison_work_order(
+        work_order=payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE],
+        work_order_artifact_id=artifacts[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE].id,
+        ablation_variant_set=payloads["ablation_variant_set"],
+        ablation_variant_set_artifact_id=artifacts["ablation_variant_set"].id,
+        fixture_only=True,
+    )
     payloads["ablation_reread_comparison"] = _build_ablation_comparison(
-        subject,
-        payloads["ablation_variant_set"],
+        subject=subject,
+        ablation_variant_set=payloads["ablation_variant_set"],
+        row_work_order=payloads["ablation_comparison_work_order"],
     )
     artifacts["ablation_reread_comparison"] = writer.write_artifact(
         "ablation_reread_comparison",
@@ -665,6 +673,25 @@ def _run_live_autonomous_revision(
                 message="Autonomous revision stopped by max-model-calls budget.",
             )
 
+        module_validated_artifact = (
+            worker.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA
+        )
+        if module_validated_artifact:
+            payloads["ablation_comparison_work_order"] = (
+                _build_ablation_comparison_work_order(
+                    work_order=payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE],
+                    work_order_artifact_id=artifacts[
+                        AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE
+                    ].id,
+                    ablation_variant_set=payloads[
+                        AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type
+                    ],
+                    ablation_variant_set_artifact_id=artifacts[
+                        AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type
+                    ].id,
+                    fixture_only=fixture_only,
+                )
+            )
         parent_ids = _parent_ids_for_revision_worker(subject, artifacts, worker)
         result = driver.run(
             WorkerRequest(
@@ -679,6 +706,7 @@ def _run_live_autonomous_revision(
                 parent_ids=parent_ids,
                 fixture_only=fixture_only,
                 output_dir=str(output_dir),
+                register_parsed_artifact=not module_validated_artifact,
                 parsed_payload_validator=_validator_for_revision_worker(
                     subject,
                     worker,
@@ -687,7 +715,11 @@ def _run_live_autonomous_revision(
             )
         )
         model_results.append(result)
-        if not result.accepted or result.parsed_payload is None or result.parsed_artifact is None:
+        if (
+            not result.accepted
+            or result.parsed_payload is None
+            or (not module_validated_artifact and result.parsed_artifact is None)
+        ):
             details = (
                 f": {result.model_call.error_message}"
                 if result.model_call.error_message
@@ -703,6 +735,55 @@ def _run_live_autonomous_revision(
                 model_results=model_results,
                 message="Autonomous revision stopped by model-call failure" + details,
             )
+        if module_validated_artifact:
+            try:
+                payloads[worker.artifact_type] = _merge_ablation_comparison_interpretation(
+                    subject=subject,
+                    work_order=payloads["ablation_comparison_work_order"],
+                    model_payload=result.parsed_payload,
+                    fixture_only=fixture_only,
+                    model_call_id=result.model_call.id,
+                )
+            except RevisionIntegrityError as error:
+                return _live_failure_result(
+                    client_name=client_name,
+                    model=model,
+                    subject=subject,
+                    packet_dir=output_dir,
+                    artifacts=artifacts,
+                    payloads=payloads,
+                    model_results=model_results,
+                    message=(
+                        "Autonomous revision stopped by ablation row merge failure: "
+                        f"{error}"
+                    ),
+                )
+            with connect(config.db_path) as connection:
+                writer = PacketWriter(
+                    connection=connection,
+                    run_id=subject.run_id,
+                    packet_dir=output_dir,
+                    lineage_id=AUTONOMOUS_REVISION_LINEAGE_ID,
+                    created_by="autonomous_closed_loop_revision_v1_controller",
+                    fixture_only=fixture_only,
+                    model_call_id=result.model_call.id,
+                )
+                artifacts[worker.artifact_type] = writer.write_artifact(
+                    worker.artifact_type,
+                    payloads[worker.artifact_type],
+                    parent_ids=parent_ids,
+                )
+                linked_call = link_model_call_parsed_artifact(
+                    connection,
+                    model_call_id=result.model_call.id,
+                    parsed_output_artifact_id=artifacts[worker.artifact_type].id,
+                )
+            model_results[-1] = ModelDriverResult(
+                model_call=linked_call,
+                parsed_payload=payloads[worker.artifact_type],
+                parsed_artifact=artifacts[worker.artifact_type],
+            )
+            continue
         artifacts[worker.artifact_type] = result.parsed_artifact
         payloads[worker.artifact_type] = result.parsed_payload
         if worker.schema == AUTONOMOUS_REVISION_SELECTED_FAILURE_SCHEMA:
@@ -1093,21 +1174,31 @@ def _prompt_for_revision_worker(
             )
     if worker.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
         variant_set = payloads.get(AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type)
-        executed_variant_ids = _executed_ablation_variant_ids(variant_set or {})
-        prompt["allowed_executed_ablation_variant_ids"] = executed_variant_ids
-        if isinstance(work_order_payload, dict):
-            prompt["allowed_ablation_probe_ids"] = work_order_payload[
-                "allowed_ablation_probe_ids"
-            ]
+        row_work_order = payloads.get("ablation_comparison_work_order")
+        if not isinstance(row_work_order, dict):
+            row_work_order = _build_ablation_comparison_work_order(
+                work_order=work_order_payload if isinstance(work_order_payload, dict) else {},
+                work_order_artifact_id=(
+                    str(work_order_payload.get("work_order_artifact_id"))
+                    if isinstance(work_order_payload, dict)
+                    else None
+                ),
+                ablation_variant_set=variant_set or {},
+                ablation_variant_set_artifact_id=None,
+                fixture_only=True,
+            )
+        prompt["ablation_comparison_work_order"] = row_work_order
+        prompt["allowed_ablation_row_ids"] = [
+            str(row["row_id"]) for row in row_work_order["row_skeletons"]
+        ]
         prompt["ablation_comparison_contract"] = (
-            "Each executed comparison row must use executed_variant_id exactly from "
-            "allowed_executed_ablation_variant_ids. If discussing a non-executed "
-            "operation or probe, set planned_only true, set executed_variant_id null, "
-            "and provide planned_probe_id. Do not invent executed IDs and do not use "
-            "short labels like v4 or A4 unless that exact ID appears in the allowed list."
-        )
-        prompt["allowed_ablation_evidence_basis"] = list(
-            AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS
+            "Return exactly one interpretation row per "
+            "ablation_comparison_work_order.row_skeletons entry. Use only row_id plus "
+            "comparison_summary, predicted_or_observed_effect, "
+            "reader_state_effect_estimate, rationale, risk_notes, uncertainty, and "
+            "not_human_data. Do not author planned_only, executed_variant_id, "
+            "planned_probe_id, evidence_basis, operation, or evidence counts; the "
+            "controller owns and will merge those fields from the skeleton."
         )
     if worker.schema == AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA:
         prompt["allowed_provenance_source_tokens"] = (
@@ -1203,12 +1294,17 @@ def _validator_for_revision_worker(
         return _validate_diff
 
     if worker.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
-        variant_set = payloads[AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type]
-        work_order = payloads[AUTONOMOUS_REVISION_WORK_ORDER_ARTIFACT_TYPE]
+        row_work_order = payloads["ablation_comparison_work_order"]
 
         def _validate_ablation(parsed_payload: dict[str, object]) -> None:
             try:
-                _validate_ablation_alignment(variant_set, parsed_payload, work_order)
+                _merge_ablation_comparison_interpretation(
+                    subject=subject,
+                    work_order=row_work_order,
+                    model_payload=parsed_payload,
+                    fixture_only=False,
+                    model_call_id=None,
+                )
             except RevisionIntegrityError as error:
                 raise ModelValidationError(str(error)) from error
 
@@ -2193,7 +2289,14 @@ def _validate_ablation_alignment(
     actual_evaluation_rows = []
     predicted_rows = []
 
-    for row in comparison["comparison_rows"]:
+    row_skeletons = _comparison_row_skeletons(comparison)
+    if row_skeletons:
+        _validate_comparison_rows_match_skeletons(comparison["comparison_rows"], row_skeletons)
+        rows_for_counting = row_skeletons
+    else:
+        rows_for_counting = comparison["comparison_rows"]
+
+    for row in rows_for_counting:
         planned_only = bool(row["planned_only"])
         executed_variant_id = row.get("executed_variant_id")
         planned_probe_id = row.get("planned_probe_id")
@@ -2250,10 +2353,13 @@ def _validate_ablation_alignment(
         "variant_count": len(variants_by_id),
         "executed_variant_count": len(executed_variant_ids),
         "comparison_row_count": len(comparison["comparison_rows"]),
+        "actual_ablation_variant_count": len(executed_variant_ids),
+        "actual_comparison_row_count": len(executed_rows),
         "planned_only_row_count": len(planned_only_rows),
         "executed_row_count": len(executed_rows),
         "actual_evaluation_row_count": len(actual_evaluation_rows),
         "predicted_row_count": len(predicted_rows),
+        "executed_counterfactual_evidence_available": bool(executed_rows),
         "comparison_predicted_only": len(actual_evaluation_rows) == 0,
         "comparison_actually_evaluated": len(actual_evaluation_rows) > 0,
         "planned_only_rows": planned_only_rows,
@@ -2275,6 +2381,276 @@ def _validate_ablation_variant_ids_against_work_order(
         raise RevisionIntegrityError(
             "ablation_variant_set variant IDs are not in revision_work_order: "
             + ", ".join(sorted(invalid))
+        )
+
+
+def _build_ablation_comparison_work_order(
+    *,
+    work_order: dict[str, Any],
+    work_order_artifact_id: str | None,
+    ablation_variant_set: dict[str, Any],
+    ablation_variant_set_artifact_id: str | None,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    allowed_probe_ids = [str(item) for item in work_order.get("allowed_ablation_probe_ids", [])]
+    row_skeletons: list[dict[str, Any]] = []
+    executed_variant_ids: list[str] = []
+    planned_probe_ids: list[str] = []
+    for index, variant in enumerate(ablation_variant_set.get("variants", []), start=1):
+        if not isinstance(variant, dict):
+            continue
+        variant_id = str(variant["variant_id"])
+        operation = str(variant.get("operation", "unknown_ablation_operation"))
+        if bool(variant.get("executed")):
+            executed_variant_ids.append(variant_id)
+            row_skeletons.append(
+                _ablation_row_skeleton(
+                    index=index,
+                    planned_only=False,
+                    executed_variant_id=variant_id,
+                    planned_probe_id=None,
+                    operation=operation,
+                    evidence_basis="actual_ablation_variant",
+                )
+            )
+            continue
+        probe_id = (
+            allowed_probe_ids[index - 1]
+            if index - 1 < len(allowed_probe_ids)
+            else f"ablation_probe_{index:03d}"
+        )
+        planned_probe_ids.append(probe_id)
+        row_skeletons.append(
+            _ablation_row_skeleton(
+                index=index,
+                planned_only=True,
+                executed_variant_id=None,
+                planned_probe_id=probe_id,
+                operation=operation,
+                evidence_basis="planned_ablation_probe",
+            )
+        )
+
+    payload = {
+        "controller_owned": True,
+        "source_autonomous_revision_work_order_artifact_id": work_order_artifact_id,
+        "source_work_order_artifact_id": work_order_artifact_id,
+        "ablation_variant_set_artifact_id": ablation_variant_set_artifact_id,
+        "executed_variant_ids": executed_variant_ids,
+        "planned_probe_ids": planned_probe_ids,
+        "row_skeletons": row_skeletons,
+        "allowed_interpretation_fields": _ablation_interpretation_fields(),
+        "fixture_only": fixture_only,
+    }
+    _validate_ablation_comparison_work_order(payload, ablation_variant_set, work_order)
+    return payload
+
+
+def _ablation_row_skeleton(
+    *,
+    index: int,
+    planned_only: bool,
+    executed_variant_id: str | None,
+    planned_probe_id: str | None,
+    operation: str,
+    evidence_basis: str,
+) -> dict[str, Any]:
+    return {
+        "row_id": f"ablation_row_{index:03d}",
+        "planned_only": planned_only,
+        "executed_variant_id": executed_variant_id,
+        "planned_probe_id": planned_probe_id,
+        "operation": operation,
+        "evidence_basis": evidence_basis,
+        "allowed_interpretation_fields": _ablation_interpretation_fields(),
+    }
+
+
+def _ablation_interpretation_fields() -> list[str]:
+    return [
+        "row_id",
+        "comparison_summary",
+        "predicted_or_observed_effect",
+        "reader_state_effect_estimate",
+        "rationale",
+        "risk_notes",
+        "uncertainty",
+        "not_human_data",
+    ]
+
+
+def _validate_ablation_comparison_work_order(
+    row_work_order: dict[str, Any],
+    variant_set: dict[str, Any],
+    work_order: dict[str, Any],
+) -> None:
+    if row_work_order.get("controller_owned") is not True:
+        raise RevisionIntegrityError("ablation comparison work order must be controller-owned")
+    skeletons = row_work_order.get("row_skeletons")
+    if not isinstance(skeletons, list) or not skeletons:
+        raise RevisionIntegrityError("ablation comparison work order has no row_skeletons")
+    variant_ids = {
+        str(variant["variant_id"])
+        for variant in variant_set.get("variants", [])
+        if isinstance(variant, dict)
+    }
+    executed_variant_ids = {
+        str(variant["variant_id"])
+        for variant in variant_set.get("variants", [])
+        if isinstance(variant, dict) and bool(variant.get("executed"))
+    }
+    allowed_probe_ids = {str(item) for item in work_order.get("allowed_ablation_probe_ids", [])}
+    seen = set()
+    for skeleton in skeletons:
+        row_id = _canonical_control_id(
+            skeleton.get("row_id"),
+            "ablation_row_",
+            "ablation_comparison_work_order.row_skeletons[].row_id",
+        )
+        if row_id in seen:
+            raise RevisionIntegrityError(f"duplicate ablation row skeleton id: {row_id}")
+        seen.add(row_id)
+        planned_only = skeleton.get("planned_only")
+        if not isinstance(planned_only, bool):
+            raise RevisionIntegrityError(f"{row_id} planned_only must be boolean")
+        executed_variant_id = skeleton.get("executed_variant_id")
+        planned_probe_id = skeleton.get("planned_probe_id")
+        evidence_basis = skeleton.get("evidence_basis")
+        if planned_only:
+            if executed_variant_id is not None:
+                raise RevisionIntegrityError(
+                    f"{row_id} planned-only skeleton cannot have executed_variant_id"
+                )
+            if not planned_probe_id:
+                raise RevisionIntegrityError(
+                    f"{row_id} planned-only skeleton requires planned_probe_id"
+                )
+            if allowed_probe_ids and str(planned_probe_id) not in allowed_probe_ids:
+                raise RevisionIntegrityError(
+                    f"{row_id} planned_probe_id {planned_probe_id!r} is not allowed"
+                )
+            if evidence_basis != "planned_ablation_probe":
+                raise RevisionIntegrityError(
+                    f"{row_id} planned-only skeleton must use planned_ablation_probe"
+                )
+            continue
+        if not executed_variant_id:
+            raise RevisionIntegrityError(f"{row_id} executed skeleton requires variant id")
+        if str(executed_variant_id) not in variant_ids:
+            raise RevisionIntegrityError(
+                f"{row_id} executed_variant_id {executed_variant_id!r} is not in variant set"
+            )
+        if str(executed_variant_id) not in executed_variant_ids:
+            raise RevisionIntegrityError(
+                f"{row_id} executed_variant_id {executed_variant_id!r} was not executed"
+            )
+        if planned_probe_id is not None:
+            raise RevisionIntegrityError(
+                f"{row_id} executed skeleton cannot have planned_probe_id"
+            )
+        if evidence_basis != "actual_ablation_variant":
+            raise RevisionIntegrityError(
+                f"{row_id} executed skeleton must use actual_ablation_variant"
+            )
+
+
+def _merge_ablation_comparison_interpretation(
+    *,
+    subject: RevisionSubject,
+    work_order: dict[str, Any],
+    model_payload: dict[str, Any],
+    fixture_only: bool,
+    model_call_id: str | None,
+) -> dict[str, Any]:
+    skeletons = list(work_order["row_skeletons"])
+    skeletons_by_id = {str(row["row_id"]): row for row in skeletons}
+    rows = model_payload.get("comparison_rows")
+    if not isinstance(rows, list) or not rows:
+        raise RevisionIntegrityError("ablation comparison model output has no rows")
+    seen = set()
+    merged_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RevisionIntegrityError("ablation comparison row must be an object")
+        row_id = str(row.get("row_id", ""))
+        if row_id not in skeletons_by_id:
+            raise RevisionIntegrityError(f"invented ablation comparison row_id: {row_id!r}")
+        if row_id in seen:
+            raise RevisionIntegrityError(f"duplicate ablation comparison row_id: {row_id}")
+        seen.add(row_id)
+        skeleton = skeletons_by_id[row_id]
+        merged_rows.append(
+            {
+                "row_id": row_id,
+                "executed_variant_id": skeleton["executed_variant_id"],
+                "planned_probe_id": skeleton["planned_probe_id"],
+                "operation": skeleton["operation"],
+                "planned_only": skeleton["planned_only"],
+                "evidence_basis": skeleton["evidence_basis"],
+                "comparison_summary": str(row["comparison_summary"]),
+                "predicted_or_observed_effect": str(row["predicted_or_observed_effect"]),
+                "reader_state_effect_estimate": str(row["reader_state_effect_estimate"]),
+                "rationale": str(row["rationale"]),
+                "risk_notes": str(row["risk_notes"]),
+                "uncertainty": str(row["uncertainty"]),
+                "not_human_data": True,
+            }
+        )
+    missing = sorted(set(skeletons_by_id) - seen)
+    if missing:
+        raise RevisionIntegrityError(
+            "missing ablation comparison row_id values: " + ", ".join(missing)
+        )
+    return {
+        "worker": (
+            "ablation_reread_comparator_v1_fake"
+            if fixture_only
+            else "ablation_reread_comparator_v1_controller"
+        ),
+        "candidate_label": subject.candidate_text.label,
+        "controller_owned": True,
+        "ablation_comparison_work_order": work_order,
+        "source_autonomous_revision_work_order_artifact_id": work_order[
+            "source_autonomous_revision_work_order_artifact_id"
+        ],
+        "ablation_variant_set_artifact_id": work_order["ablation_variant_set_artifact_id"],
+        "executed_variant_ids": list(work_order["executed_variant_ids"]),
+        "planned_probe_ids": list(work_order["planned_probe_ids"]),
+        "comparison_rows": merged_rows,
+        "summary": str(model_payload["summary"]),
+        "not_human_data": True,
+        "fixture_only": fixture_only,
+        "model_call_id": model_call_id,
+    }
+
+
+def _comparison_row_skeletons(comparison: dict[str, Any]) -> list[dict[str, Any]]:
+    work_order = comparison.get("ablation_comparison_work_order")
+    if not isinstance(work_order, dict):
+        return []
+    skeletons = work_order.get("row_skeletons")
+    return list(skeletons) if isinstance(skeletons, list) else []
+
+
+def _validate_comparison_rows_match_skeletons(
+    comparison_rows: list[dict[str, Any]],
+    skeletons: list[dict[str, Any]],
+) -> None:
+    skeleton_ids = {str(row["row_id"]) for row in skeletons}
+    comparison_ids = [str(row["row_id"]) for row in comparison_rows]
+    if len(comparison_ids) != len(set(comparison_ids)):
+        raise RevisionIntegrityError("ablation_reread_comparison has duplicate row_id values")
+    missing = sorted(skeleton_ids - set(comparison_ids))
+    invented = sorted(set(comparison_ids) - skeleton_ids)
+    if missing or invented:
+        details = []
+        if missing:
+            details.append("missing rows: " + ", ".join(missing))
+        if invented:
+            details.append("invented rows: " + ", ".join(invented))
+        raise RevisionIntegrityError(
+            "ablation_reread_comparison rows do not match controller skeletons: "
+            + "; ".join(details)
         )
 
 
@@ -3089,25 +3465,38 @@ def _fake_model_ablation_comparison_payload(
     prompt: dict[str, Any],
     prior_payloads: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    variants = prior_payloads[AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type]
+    row_work_order = prompt["ablation_comparison_work_order"]
+    variant_set = prior_payloads[AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA.artifact_type]
+    variants_by_id = {
+        str(variant["variant_id"]): variant
+        for variant in variant_set["variants"]
+        if isinstance(variant, dict)
+    }
     return {
         "candidate_label": str(prompt["candidate"]["label"]),
         "comparison_rows": [
             {
-                "row_id": f"comparison_{str(variant['variant_id'])}",
-                "executed_variant_id": str(variant["variant_id"]),
-                "planned_probe_id": None,
-                "operation": str(variant["operation"]),
-                "planned_only": False,
-                "evidence_basis": "actual_ablation_variant",
+                "row_id": str(row["row_id"]),
                 "comparison_summary": (
                     "probe only; local field decides whether the feature is treasure or junk"
                 ),
-                "predicted_or_observed_effect": _variant_delta(str(variant["operation"])),
+                "predicted_or_observed_effect": _variant_delta(
+                    str(
+                        variants_by_id.get(str(row["executed_variant_id"]), {}).get(
+                            "operation",
+                            row["operation"],
+                        )
+                    )
+                ),
+                "reader_state_effect_estimate": (
+                    "internal estimate only; no human reader evidence"
+                ),
                 "rationale": "executed generated variant, not human reader evidence",
+                "risk_notes": "predicted-only comparison can overstate causal confidence",
+                "uncertainty": "medium; requires another autonomous pass",
                 "not_human_data": True,
             }
-            for variant in variants["variants"]
+            for row in row_work_order["row_skeletons"]
         ],
         "summary": (
             "Ablation comparison keeps the repair provisional and points to another "
@@ -3673,44 +4062,58 @@ def _build_ablation_variant_set(
 
 
 def _build_ablation_comparison(
+    *,
     subject: RevisionSubject,
     ablation_variant_set: dict[str, Any],
+    row_work_order: dict[str, Any],
 ) -> dict[str, Any]:
     candidate_terms = set(_words(subject.candidate_text.text))
-    rows = []
-    for variant in ablation_variant_set["variants"]:
-        text = str(variant["text"])
+    variants_by_id = {
+        str(variant["variant_id"]): variant
+        for variant in ablation_variant_set["variants"]
+        if isinstance(variant, dict)
+    }
+    interpretation_rows = []
+    for skeleton in row_work_order["row_skeletons"]:
+        variant = variants_by_id.get(str(skeleton["executed_variant_id"]))
+        text = str(variant["text"]) if isinstance(variant, dict) else ""
         terms = set(_words(text))
-        overlap = len(candidate_terms & terms)
-        rows.append(
+        overlap = len(candidate_terms & terms) if text else 0
+        interpretation_rows.append(
             {
-                "row_id": f"comparison_{variant['variant_id']}",
-                "executed_variant_id": variant["variant_id"],
-                "planned_probe_id": None,
-                "operation": variant["operation"],
-                "planned_only": False,
-                "evidence_basis": "actual_ablation_variant",
+                "row_id": str(skeleton["row_id"]),
                 "comparison_summary": (
                     "probe only; feature is neither good nor bad until the local field accepts it"
                 ),
-                "predicted_or_observed_effect": _variant_delta(str(variant["operation"])),
-                "rationale": (
-                    "executed fake variant with word overlap "
-                    f"{overlap}; useful only if it isolates the handle without leakage"
+                "predicted_or_observed_effect": _variant_delta(str(skeleton["operation"])),
+                "reader_state_effect_estimate": (
+                    "internal estimate only; no human reader evidence"
                 ),
+                "rationale": (
+                    f"controller-owned row {skeleton['row_id']} has word overlap {overlap}; "
+                    "useful only if it isolates the handle without leakage"
+                ),
+                "risk_notes": "fake comparison can only guide another internal pass",
+                "uncertainty": "medium; predicted-only internal comparison",
                 "not_human_data": True,
             }
         )
-    return {
-        "worker": "ablation_reread_comparator_v1_fake",
+    model_payload = {
         "candidate_label": subject.candidate_text.label,
-        "comparison_rows": rows,
+        "comparison_rows": interpretation_rows,
         "summary": (
             "Ablations are probe variants only; fake comparison suggests the inserted local "
             "consequence needs another cycle before it can count as resolved."
         ),
-        "fixture_only": True,
+        "not_human_data": True,
     }
+    return _merge_ablation_comparison_interpretation(
+        subject=subject,
+        work_order=row_work_order,
+        model_payload=model_payload,
+        fixture_only=True,
+        model_call_id=None,
+    )
 
 
 def _build_old_new_rival_comparison(
@@ -3894,6 +4297,9 @@ def _build_closed_loop_gate_report(
                 ablation_integrity.get("executed_variant_count", 0)
             ),
             "ablation_variant_count": int(ablation_integrity.get("variant_count", 0)),
+            "actual_ablation_variant_count": int(
+                ablation_integrity.get("actual_ablation_variant_count", 0)
+            ),
             "executed_ablation_variant_count": int(
                 ablation_integrity.get("executed_variant_count", 0)
             ),
@@ -3912,11 +4318,17 @@ def _build_closed_loop_gate_report(
             "executed_comparison_row_count": int(
                 ablation_integrity.get("executed_row_count", 0)
             ),
+            "actual_comparison_row_count": int(
+                ablation_integrity.get("actual_comparison_row_count", 0)
+            ),
             "predicted_only_comparison_row_count": int(
                 ablation_integrity.get("predicted_row_count", 0)
             ),
             "actual_ablation_comparison_evidence_count": int(
                 ablation_integrity.get("actual_evaluation_row_count", 0)
+            ),
+            "executed_counterfactual_evidence_available": bool(
+                ablation_integrity.get("executed_counterfactual_evidence_available", False)
             ),
         },
         "unresolved_blockers": unresolved,

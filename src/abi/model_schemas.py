@@ -1578,26 +1578,22 @@ def _revision_ablation_row_schema() -> dict[str, Any]:
     return _object_schema(
         {
             "row_id": {"type": "string"},
-            "executed_variant_id": {"type": ["string", "null"]},
-            "planned_probe_id": {"type": ["string", "null"]},
-            "operation": {"type": "string"},
-            "planned_only": {"type": "boolean"},
-            "evidence_basis": _revision_ablation_evidence_basis_schema(),
             "comparison_summary": {"type": "string"},
             "predicted_or_observed_effect": {"type": "string"},
+            "reader_state_effect_estimate": {"type": "string"},
             "rationale": {"type": "string"},
+            "risk_notes": {"type": "string"},
+            "uncertainty": {"type": "string"},
             "not_human_data": {"type": "boolean"},
         },
         [
             "row_id",
-            "executed_variant_id",
-            "planned_probe_id",
-            "operation",
-            "planned_only",
-            "evidence_basis",
             "comparison_summary",
             "predicted_or_observed_effect",
+            "reader_state_effect_estimate",
             "rationale",
+            "risk_notes",
+            "uncertainty",
             "not_human_data",
         ],
     )
@@ -3474,53 +3470,14 @@ def _validate_ablation_row(payload: dict[str, Any], label: str) -> dict[str, obj
         label,
         (
             "row_id",
-            "operation",
-            "evidence_basis",
             "comparison_summary",
             "predicted_or_observed_effect",
+            "reader_state_effect_estimate",
             "rationale",
+            "risk_notes",
+            "uncertainty",
         ),
     )
-    _require_nullable_string(payload, "executed_variant_id", field_prefix=f"{label}.")
-    _require_nullable_string(payload, "planned_probe_id", field_prefix=f"{label}.")
-    _require_type(payload, "planned_only", bool, field_prefix=f"{label}.")
-    if payload["evidence_basis"] not in AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS:
-        raise ModelValidationError(
-            f"{label}.evidence_basis must be one of "
-            f"{list(AUTONOMOUS_REVISION_ABLATION_EVIDENCE_BASIS)}"
-        )
-    if payload["planned_only"]:
-        if payload["executed_variant_id"] is not None:
-            raise ModelValidationError(
-                f"{label}.executed_variant_id must be null when planned_only is true"
-            )
-        if not payload["planned_probe_id"]:
-            raise ModelValidationError(
-                f"{label}.planned_probe_id is required when planned_only is true"
-            )
-        if payload["evidence_basis"] != "planned_ablation_probe":
-            raise ModelValidationError(
-                f"{label}.evidence_basis must be planned_ablation_probe when "
-                "planned_only is true"
-            )
-    else:
-        if not payload["executed_variant_id"]:
-            raise ModelValidationError(
-                f"{label}.executed_variant_id is required when planned_only is false"
-            )
-        if payload["planned_probe_id"] is not None:
-            raise ModelValidationError(
-                f"{label}.planned_probe_id must be null when planned_only is false"
-            )
-        if payload["evidence_basis"] == "planned_ablation_probe":
-            raise ModelValidationError(
-                f"{label}.evidence_basis cannot be planned_ablation_probe when "
-                "planned_only is false"
-            )
-    _require_true(payload, "not_human_data", field_prefix=f"{label}.")
-    validated["executed_variant_id"] = payload["executed_variant_id"]
-    validated["planned_probe_id"] = payload["planned_probe_id"]
-    validated["planned_only"] = payload["planned_only"]
     validated["not_human_data"] = True
     return validated
 
