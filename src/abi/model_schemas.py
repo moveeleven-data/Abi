@@ -1440,9 +1440,11 @@ def _revision_changed_span_schema() -> dict[str, Any]:
         {
             "before": {"type": "string"},
             "after": {"type": "string"},
+            "region": {"type": "string"},
+            "within_selected_target": {"type": "boolean"},
             "reason": {"type": "string"},
         },
-        ["before", "after", "reason"],
+        ["before", "after", "region", "within_selected_target", "reason"],
     )
 
 
@@ -1454,6 +1456,7 @@ def _revision_variant_schema() -> dict[str, Any]:
             "variant_probe": {"type": "string"},
             "ablation_probe": {"type": "string"},
             "text": {"type": "string"},
+            "executed": {"type": "boolean"},
             "expected_reader_state_change": {"type": "string"},
             "uncertainty": {"type": "string"},
         },
@@ -1463,6 +1466,7 @@ def _revision_variant_schema() -> dict[str, Any]:
             "variant_probe",
             "ablation_probe",
             "text",
+            "executed",
             "expected_reader_state_change",
             "uncertainty",
         ],
@@ -1477,6 +1481,8 @@ def _revision_ablation_row_schema() -> dict[str, Any]:
             "predicted_reread_pressure_delta": {"type": "string"},
             "local_law_read": {"type": "string"},
             "pass_fail_criterion": {"type": "string"},
+            "planned_only": {"type": "boolean"},
+            "evidence_basis": {"type": "string"},
             "not_human_data": {"type": "boolean"},
         },
         [
@@ -1485,8 +1491,32 @@ def _revision_ablation_row_schema() -> dict[str, Any]:
             "predicted_reread_pressure_delta",
             "local_law_read",
             "pass_fail_criterion",
+            "planned_only",
+            "evidence_basis",
             "not_human_data",
         ],
+    )
+
+
+_AUTONOMOUS_REVISION_JUDGMENT_KEYS = (
+    "reread_transformation_improved",
+    "opening_transformation_improved",
+    "local_embodiment_improved",
+    "overexplanation_decreased",
+    "fake_depth_risk_decreased",
+    "revised_candidate_became_more_schematic",
+    "rival_still_beats_candidate",
+    "another_revision_cycle_needed",
+)
+
+
+def _revision_judgment_provenance_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            key: _string_array_schema()
+            for key in _AUTONOMOUS_REVISION_JUDGMENT_KEYS
+        },
+        list(_AUTONOMOUS_REVISION_JUDGMENT_KEYS),
     )
 
 
@@ -1616,6 +1646,8 @@ def autonomous_revision_diff_report_json_schema() -> dict[str, Any]:
             "original_excerpt": {"type": "string"},
             "revised_excerpt": {"type": "string"},
             "changed_spans": {"type": "array", "items": _revision_changed_span_schema()},
+            "target_region_expanded": {"type": "boolean"},
+            "target_expansion_justification": {"type": "string"},
             "protected_effects_preserved": _string_array_schema(),
             "forbidden_changes_honored": _string_array_schema(),
             "explanation": {"type": "string"},
@@ -1630,6 +1662,8 @@ def autonomous_revision_diff_report_json_schema() -> dict[str, Any]:
             "original_excerpt",
             "revised_excerpt",
             "changed_spans",
+            "target_region_expanded",
+            "target_expansion_justification",
             "protected_effects_preserved",
             "forbidden_changes_honored",
             "explanation",
@@ -1678,6 +1712,7 @@ def autonomous_revision_old_new_rival_comparison_json_schema() -> dict[str, Any]
             "rival_pressure_preserved": {"type": "boolean"},
             "old_new_summary": {"type": "string"},
             "rival_pressure_summary": {"type": "string"},
+            "judgment_provenance": _revision_judgment_provenance_schema(),
             "not_human_data": {"type": "boolean"},
         },
         [
@@ -1694,6 +1729,7 @@ def autonomous_revision_old_new_rival_comparison_json_schema() -> dict[str, Any]
             "rival_pressure_preserved",
             "old_new_summary",
             "rival_pressure_summary",
+            "judgment_provenance",
             "not_human_data",
         ],
     )
@@ -2847,6 +2883,12 @@ def _validate_autonomous_revision_diff_report(payload: dict[str, Any]) -> dict[s
     ]
     if not changed_spans:
         raise ModelValidationError("changed_spans must not be empty")
+    _require_type(payload, "target_region_expanded", bool)
+    _require_type(payload, "target_expansion_justification", str)
+    if payload["target_region_expanded"] and not payload["target_expansion_justification"].strip():
+        raise ModelValidationError(
+            "target_expansion_justification is required when target_region_expanded is true"
+        )
     _require_string_list(payload, "protected_effects_preserved")
     _require_string_list(payload, "forbidden_changes_honored")
     _require_true(payload, "not_human_data")
@@ -2859,6 +2901,8 @@ def _validate_autonomous_revision_diff_report(payload: dict[str, Any]) -> dict[s
         "original_excerpt": payload["original_excerpt"],
         "revised_excerpt": payload["revised_excerpt"],
         "changed_spans": changed_spans,
+        "target_region_expanded": payload["target_region_expanded"],
+        "target_expansion_justification": payload["target_expansion_justification"],
         "protected_effects_preserved": payload["protected_effects_preserved"],
         "forbidden_changes_honored": payload["forbidden_changes_honored"],
         "explanation": payload["explanation"],
@@ -2926,6 +2970,10 @@ def _validate_autonomous_revision_old_new_rival_comparison(
         _require_type(payload, key, bool)
     for key in ("comparison_basis", "old_new_summary", "rival_pressure_summary"):
         _require_type(payload, key, str)
+    _require_type(payload, "judgment_provenance", dict)
+    judgment_provenance = _validate_revision_judgment_provenance(
+        payload["judgment_provenance"]
+    )
     _require_true(payload, "not_human_data")
     return {
         "reread_transformation_improved": payload["reread_transformation_improved"],
@@ -2943,6 +2991,7 @@ def _validate_autonomous_revision_old_new_rival_comparison(
         "rival_pressure_preserved": payload["rival_pressure_preserved"],
         "old_new_summary": payload["old_new_summary"],
         "rival_pressure_summary": payload["rival_pressure_summary"],
+        "judgment_provenance": judgment_provenance,
         "not_human_data": True,
     }
 
@@ -3010,12 +3059,15 @@ def _validate_revision_span_ref(payload: dict[str, Any], label: str) -> dict[str
     )
 
 
-def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, str]:
-    return _validate_object(payload, label, ("before", "after", "reason"))
+def _validate_changed_span(payload: dict[str, Any], label: str) -> dict[str, object]:
+    validated = _validate_object(payload, label, ("before", "after", "region", "reason"))
+    _require_type(payload, "within_selected_target", bool, field_prefix=f"{label}.")
+    validated["within_selected_target"] = payload["within_selected_target"]
+    return validated
 
 
-def _validate_revision_variant(payload: dict[str, Any], label: str) -> dict[str, str]:
-    return _validate_object(
+def _validate_revision_variant(payload: dict[str, Any], label: str) -> dict[str, object]:
+    validated = _validate_object(
         payload,
         label,
         (
@@ -3028,6 +3080,9 @@ def _validate_revision_variant(payload: dict[str, Any], label: str) -> dict[str,
             "uncertainty",
         ),
     )
+    _require_type(payload, "executed", bool, field_prefix=f"{label}.")
+    validated["executed"] = payload["executed"]
+    return validated
 
 
 def _validate_ablation_row(payload: dict[str, Any], label: str) -> dict[str, object]:
@@ -3040,10 +3095,36 @@ def _validate_ablation_row(payload: dict[str, Any], label: str) -> dict[str, obj
             "predicted_reread_pressure_delta",
             "local_law_read",
             "pass_fail_criterion",
+            "evidence_basis",
         ),
     )
+    _require_type(payload, "planned_only", bool, field_prefix=f"{label}.")
     _require_true(payload, "not_human_data", field_prefix=f"{label}.")
+    validated["planned_only"] = payload["planned_only"]
     validated["not_human_data"] = True
+    return validated
+
+
+def _validate_revision_judgment_provenance(payload: dict[str, Any]) -> dict[str, list[str]]:
+    allowed = {
+        "original_candidate_text",
+        "revised_candidate_text",
+        "actual_ablation_variant",
+        "predicted_ablation_effect",
+        "strongest_rival_text",
+        "prior_reader_lab_evidence",
+    }
+    validated = {}
+    for key in _AUTONOMOUS_REVISION_JUDGMENT_KEYS:
+        _require_string_list(payload, key, field_prefix="judgment_provenance.")
+        if not payload[key]:
+            raise ModelValidationError(f"judgment_provenance.{key} must not be empty")
+        invalid = [source for source in payload[key] if source not in allowed]
+        if invalid:
+            raise ModelValidationError(
+                f"judgment_provenance.{key} contains unsupported sources: {invalid}"
+            )
+        validated[key] = list(payload[key])
     return validated
 
 

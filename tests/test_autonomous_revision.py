@@ -9,6 +9,9 @@ from abi.controller.state import AUTONOMOUS_CLOSED_LOOP_REVISION_ACTIVE_PHASE, g
 from abi.db import connect
 from abi.model_calls import MODEL_CALL_SUCCESS, MODEL_CALL_VALIDATION_FAILED, list_model_calls
 from abi.model_schemas import (
+    AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
+    AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
+    AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
     AUTONOMOUS_REVISION_MODEL_SCHEMAS,
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
     json_schema_for_worker_schema,
@@ -146,6 +149,106 @@ def revision_stub_factory(
             mode=mode,
             target_schema=target_schema,
         )
+        clients.append(client)
+        return client
+
+    return _factory
+
+
+def dump_json(payload: dict[str, object]) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+class UnreportedMaterialChangeClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        if request.schema != AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA:
+            return raw_output
+        payload = json.loads(raw_output)
+        payload["text"] = (
+            str(payload["text"])
+            + " The cup by the sill made a second record that the diff never names."
+        )
+        return dump_json(payload)
+
+
+class TargetRegionViolationClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA:
+            payload["span_ref"]["region"] = "ending paragraph only"
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class ExplicitTargetExpansionClient(TargetRegionViolationClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA:
+            payload["target_region"] = "opening paragraph plus ending paragraph"
+            payload["target_region_expanded"] = True
+            payload["target_expansion_justification"] = (
+                "The selected ending pressure depends on the opening object record, "
+                "so the repair explicitly expands the target."
+            )
+            for span in payload["changed_spans"]:
+                span["within_selected_target"] = False
+                span["region"] = "opening paragraph"
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class PlannedOnlyAblationClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
+            payload["comparison_rows"].append(
+                {
+                    "variant_id": "planned_probe_99",
+                    "operation": "move_motif_earlier_later",
+                    "predicted_reread_pressure_delta": "planned_probe_only",
+                    "local_law_read": "planned probe, not executed ablation evidence",
+                    "pass_fail_criterion": "requires a generated variant before evidence use",
+                    "planned_only": True,
+                    "evidence_basis": "planned_probe_only",
+                    "not_human_data": True,
+                }
+            )
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+class InvalidAblationComparisonClient(FakeAutonomousRevisionModelClient):
+    def generate(self, request):
+        raw_output = super().generate(request)
+        payload = json.loads(raw_output)
+        if request.schema == AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA:
+            payload["comparison_rows"].append(
+                {
+                    "variant_id": "missing_variant_99",
+                    "operation": "move_motif_earlier_later",
+                    "predicted_reread_pressure_delta": "claimed_executed_without_variant",
+                    "local_law_read": "bad row should fail controller integrity",
+                    "pass_fail_criterion": "must reference a variant or be planned_only",
+                    "planned_only": False,
+                    "evidence_basis": "actual_variant_predicted_effect",
+                    "not_human_data": True,
+                }
+            )
+            self.payloads[request.schema.artifact_type] = payload
+            return dump_json(payload)
+        return raw_output
+
+
+def custom_revision_factory(clients: list[FakeAutonomousRevisionModelClient], client_cls):
+    def _factory(model: str) -> FakeAutonomousRevisionModelClient:
+        client = client_cls(provider="openai", model=model)
         clients.append(client)
         return client
 
@@ -518,16 +621,32 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
     assert diff["bounded_change"] is True
     assert diff["changed_spans"]
+    assert diff["target_region_expanded"] is False
 
     variants = read_payload(result.payload["artifact_paths"]["ablation_variant_set"])
     assert variants["variants"]
+    assert all(variant["executed"] is True for variant in variants["variants"])
     ablation = read_payload(result.payload["artifact_paths"]["ablation_reread_comparison"])
     assert ablation["comparison_rows"]
+    assert all(row["planned_only"] is False for row in ablation["comparison_rows"])
 
     comparison = read_payload(result.payload["artifact_paths"]["old_new_rival_comparison"])
     assert comparison["strongest_rival_present"] is True
     assert comparison["rival_pressure_preserved"] is True
     assert comparison["another_revision_cycle_needed"] is True
+    assert set(comparison["judgment_provenance"]) == {
+        "reread_transformation_improved",
+        "opening_transformation_improved",
+        "local_embodiment_improved",
+        "overexplanation_decreased",
+        "fake_depth_risk_decreased",
+        "revised_candidate_became_more_schematic",
+        "rival_still_beats_candidate",
+        "another_revision_cycle_needed",
+    }
+    assert "strongest_rival_text" in comparison["judgment_provenance"][
+        "rival_still_beats_candidate"
+    ]
 
     local_law = read_payload(result.payload["artifact_paths"]["local_law_case_note"])
     assert local_law["principle"]
@@ -539,6 +658,10 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert "no_fixture_only_core_evidence" not in gate_report["failed_gates"]
     assert "no_unresolved_internal_blockers" in gate_report["failed_gates"]
     assert "internal_operator_approval" in gate_report["missing_gates"]
+    assert gate_report["ablation_evidence"]["ablation_plan_exists"] is True
+    assert gate_report["ablation_evidence"]["ablation_variants_executed"] is True
+    assert gate_report["ablation_evidence"]["ablation_comparison_predicted_only"] is True
+    assert gate_report["ablation_evidence"]["ablation_comparison_actually_evaluated"] is False
     assert gate_report["human_validation_required"] is False
     assert gate_report["paper_validation_required"] is False
     assert gate_report["phase_shift_claim"] is False
@@ -549,6 +672,122 @@ def test_stubbed_openai_autonomous_revision_creates_model_backed_packet(tmp_path
     assert "no_unresolved_internal_blockers" in combined_blockers
     assert "real_human_validation_passed" not in combined_blockers
     assert "paper" not in final_report.message.lower()
+
+
+def test_stubbed_openai_unreported_material_change_fails_closed(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, UnreportedMaterialChangeClient),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "integrity validation failure" in result.payload["message"]
+    assert "revision_diff_report does not cover material text changes" in result.payload[
+        "message"
+    ]
+    assert result.payload["counts"]["model_calls"] == 8
+    assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
+    assert "autonomous_closed_loop_gate_report" not in result.payload["artifact_ids"]
+
+
+def test_stubbed_openai_target_region_violation_fails_closed(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, TargetRegionViolationClient),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "changes outside selected target region" in result.payload["message"]
+    assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
+
+
+def test_stubbed_openai_explicit_target_expansion_passes(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, ExplicitTargetExpansionClient),
+    )
+
+    assert result.exit_code == 0
+    diff = read_payload(result.payload["artifact_paths"]["revision_diff_report"])
+    gate_report = read_payload(result.payload["artifact_paths"]["autonomous_closed_loop_gate_report"])
+    assert diff["target_region_expanded"] is True
+    assert diff["target_expansion_justification"]
+    assert gate_report["integrity_report"]["target"]["target_region_expanded"] is True
+    assert gate_report["integrity_report"]["target"]["out_of_target_change_count"] >= 1
+    assert gate_report["eligible"] is False
+
+
+def test_stubbed_openai_planned_only_ablation_is_not_executed_evidence(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, PlannedOnlyAblationClient),
+    )
+
+    assert result.exit_code == 0
+    ablation = read_payload(result.payload["artifact_paths"]["ablation_reread_comparison"])
+    planned_rows = [row for row in ablation["comparison_rows"] if row["planned_only"]]
+    assert planned_rows
+
+    gate_report = read_payload(result.payload["artifact_paths"]["autonomous_closed_loop_gate_report"])
+    evidence = gate_report["ablation_evidence"]
+    assert evidence["planned_only_comparison_row_count"] == len(planned_rows)
+    assert evidence["ablation_variants_executed"] is True
+    assert evidence["ablation_comparison_predicted_only"] is True
+    assert evidence["ablation_comparison_actually_evaluated"] is False
+
+
+def test_stubbed_openai_invalid_ablation_alignment_fails_closed(tmp_path):
+    config, lab_payload = build_live_style_reader_lab_packet(tmp_path)
+    clients: list[FakeAutonomousRevisionModelClient] = []
+
+    result = run_autonomous_revision(
+        config,
+        client_name="openai",
+        reader_lab_packet=lab_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-autonomous-revision-model",
+        client_factory=custom_revision_factory(clients, InvalidAblationComparisonClient),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "ablation_reread_comparison rows are not aligned" in result.payload["message"]
+    assert "autonomous_closed_loop_packet" not in result.payload["artifact_ids"]
 
 
 def test_stubbed_openai_autonomous_revision_invalid_output_fails_closed(tmp_path):

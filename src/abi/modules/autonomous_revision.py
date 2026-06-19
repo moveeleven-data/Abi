@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 import json
 import os
 from pathlib import Path
@@ -72,6 +73,24 @@ AUTONOMOUS_REVISION_ARTIFACT_TYPES = (
     "local_law_case_note",
     "autonomous_closed_loop_gate_report",
     "autonomous_closed_loop_packet",
+)
+AUTONOMOUS_REVISION_PROVENANCE_SOURCES = {
+    "original_candidate_text",
+    "revised_candidate_text",
+    "actual_ablation_variant",
+    "predicted_ablation_effect",
+    "strongest_rival_text",
+    "prior_reader_lab_evidence",
+}
+AUTONOMOUS_REVISION_JUDGMENT_KEYS = (
+    "reread_transformation_improved",
+    "opening_transformation_improved",
+    "local_embodiment_improved",
+    "overexplanation_decreased",
+    "fake_depth_risk_decreased",
+    "revised_candidate_became_more_schematic",
+    "rival_still_beats_candidate",
+    "another_revision_cycle_needed",
 )
 AUTONOMOUS_REVISION_PROMPT_CONTRACT_PREFIX = "autonomous.revision"
 AUTONOMOUS_REVISION_FAKE_MODEL_PROVIDER = "fake"
@@ -146,6 +165,10 @@ class AutonomousRevisionResult:
     payload: dict[str, object]
     gate_records: tuple[GateRecord, ...] = ()
     model_results: tuple[ModelDriverResult, ...] = ()
+
+
+class RevisionIntegrityError(ValueError):
+    """Raised when cross-artifact revision evidence is internally inconsistent."""
 
 
 @dataclass(frozen=True)
@@ -476,10 +499,13 @@ def _write_fake_revision_packet(
             artifacts["old_new_rival_comparison"].id,
         ],
     )
+    integrity_report = _validate_revision_integrity(subject, payloads)
+    payloads["_integrity_report"] = integrity_report
 
     payloads["autonomous_closed_loop_gate_report"] = _build_closed_loop_gate_report(
         subject=subject,
         payloads=payloads,
+        integrity_report=integrity_report,
     )
     artifacts["autonomous_closed_loop_gate_report"] = writer.write_artifact(
         "autonomous_closed_loop_gate_report",
@@ -501,6 +527,7 @@ def _write_fake_revision_packet(
         packet_dir=output_dir,
         artifacts=artifacts,
         payloads=payloads,
+        integrity_report=integrity_report,
     )
     artifacts["autonomous_closed_loop_packet"] = writer.write_artifact(
         "autonomous_closed_loop_packet",
@@ -639,6 +666,21 @@ def _run_live_autonomous_revision(
         artifacts[worker.artifact_type] = result.parsed_artifact
         payloads[worker.artifact_type] = result.parsed_payload
 
+    try:
+        integrity_report = _validate_revision_integrity(subject, payloads)
+    except RevisionIntegrityError as error:
+        return _live_failure_result(
+            client_name=client_name,
+            model=model,
+            subject=subject,
+            packet_dir=output_dir,
+            artifacts=artifacts,
+            payloads=payloads,
+            model_results=model_results,
+            message=f"Autonomous revision stopped by integrity validation failure: {error}",
+        )
+    payloads["_integrity_report"] = integrity_report
+
     with connect(config.db_path) as connection:
         writer = PacketWriter(
             connection=connection,
@@ -653,6 +695,7 @@ def _run_live_autonomous_revision(
             subject=subject,
             payloads=payloads,
             fixture_only=fixture_only,
+            integrity_report=integrity_report,
         )
         payloads["autonomous_closed_loop_gate_report"].update(
             {
@@ -682,6 +725,7 @@ def _run_live_autonomous_revision(
             fixture_only=fixture_only,
             model_results=model_results,
             model=model,
+            integrity_report=integrity_report,
         )
         payloads["autonomous_closed_loop_packet"].update(
             {
@@ -841,6 +885,303 @@ def _parent_ids_for_revision_worker(
     return sorted(set(parent_ids))
 
 
+def _validate_revision_integrity(
+    subject: RevisionSubject,
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    diff_report = _validate_diff_integrity(subject, payloads)
+    ablation_report = _validate_ablation_integrity(payloads)
+    provenance_report = _validate_old_new_rival_provenance(subject, payloads)
+    return {
+        "diff": diff_report["diff"],
+        "target": diff_report["target"],
+        "ablation": ablation_report,
+        "old_new_rival_provenance": provenance_report,
+    }
+
+
+def _validate_diff_integrity(
+    subject: RevisionSubject,
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    original = subject.candidate_text.text
+    revised = str(payloads["revised_candidate_text"]["text"])
+    diff_report = payloads["revision_diff_report"]
+    handle = payloads["causal_handle_selection"]
+    selected_target_region = str(handle["span_ref"]["region"])
+    material_changes = _material_text_changes(original, revised)
+    reported_spans = list(diff_report["changed_spans"])
+    missing_changes = []
+    target_violations = []
+    out_of_target_changes = []
+
+    for change in material_changes:
+        matching_span = _matching_changed_span(reported_spans, change)
+        if matching_span is None:
+            missing_changes.append(_change_summary(change))
+            continue
+        within_selected_target = _region_matches_target(
+            str(change["region"]),
+            selected_target_region,
+        )
+        if not within_selected_target:
+            out_of_target_changes.append(_change_summary(change))
+            if (
+                not diff_report["target_region_expanded"]
+                or not str(diff_report["target_expansion_justification"]).strip()
+                or bool(matching_span["within_selected_target"])
+            ):
+                target_violations.append(_change_summary(change))
+
+    if missing_changes:
+        raise RevisionIntegrityError(
+            "revision_diff_report does not cover material text changes: "
+            + "; ".join(missing_changes)
+        )
+    if target_violations:
+        raise RevisionIntegrityError(
+            "revised_candidate_text changes outside selected target region "
+            f"{selected_target_region!r} without explicit target expansion: "
+            + "; ".join(target_violations)
+        )
+
+    return {
+        "diff": {
+            "material_change_count": len(material_changes),
+            "reported_changed_span_count": len(reported_spans),
+            "all_material_changes_reported": True,
+        },
+        "target": {
+            "selected_target_region": selected_target_region,
+            "reported_target_region": diff_report["target_region"],
+            "target_region_expanded": bool(diff_report["target_region_expanded"]),
+            "target_expansion_justification": diff_report["target_expansion_justification"],
+            "out_of_target_change_count": len(out_of_target_changes),
+            "out_of_target_changes": out_of_target_changes,
+        },
+    }
+
+
+def _validate_ablation_integrity(payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    variant_set = payloads["ablation_variant_set"]
+    comparison = payloads["ablation_reread_comparison"]
+    variants_by_id = {
+        str(variant["variant_id"]): variant
+        for variant in variant_set["variants"]
+    }
+    executed_variant_ids = {
+        variant_id
+        for variant_id, variant in variants_by_id.items()
+        if bool(variant["executed"])
+    }
+    invalid_rows = []
+    planned_only_rows = []
+    executed_rows = []
+    actual_evaluation_rows = []
+    predicted_rows = []
+
+    for row in comparison["comparison_rows"]:
+        variant_id = str(row["variant_id"])
+        planned_only = bool(row["planned_only"])
+        if variant_id not in variants_by_id:
+            if not planned_only:
+                invalid_rows.append(
+                    f"{variant_id} is not in ablation_variant_set and is not planned_only"
+                )
+            else:
+                planned_only_rows.append(variant_id)
+            continue
+        if variant_id not in executed_variant_ids and not planned_only:
+            invalid_rows.append(f"{variant_id} references an unexecuted variant")
+            continue
+        if planned_only:
+            planned_only_rows.append(variant_id)
+        else:
+            executed_rows.append(variant_id)
+        if row["evidence_basis"] == "actual_ablation_reread_evaluation" and not planned_only:
+            actual_evaluation_rows.append(variant_id)
+        else:
+            predicted_rows.append(variant_id)
+
+    if invalid_rows:
+        raise RevisionIntegrityError(
+            "ablation_reread_comparison rows are not aligned with ablation_variant_set: "
+            + "; ".join(invalid_rows)
+        )
+
+    return {
+        "variant_count": len(variants_by_id),
+        "executed_variant_count": len(executed_variant_ids),
+        "comparison_row_count": len(comparison["comparison_rows"]),
+        "planned_only_row_count": len(planned_only_rows),
+        "executed_row_count": len(executed_rows),
+        "actual_evaluation_row_count": len(actual_evaluation_rows),
+        "predicted_row_count": len(predicted_rows),
+        "comparison_predicted_only": len(actual_evaluation_rows) == 0,
+        "comparison_actually_evaluated": len(actual_evaluation_rows) > 0,
+        "planned_only_rows": planned_only_rows,
+        "executed_rows": executed_rows,
+    }
+
+
+def _validate_old_new_rival_provenance(
+    subject: RevisionSubject,
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    comparison = payloads["old_new_rival_comparison"]
+    provenance = comparison["judgment_provenance"]
+    invalid = []
+    for key in AUTONOMOUS_REVISION_JUDGMENT_KEYS:
+        sources = list(provenance.get(key, []))
+        if not sources:
+            invalid.append(f"{key} has no provenance")
+            continue
+        unsupported = [
+            source
+            for source in sources
+            if source not in AUTONOMOUS_REVISION_PROVENANCE_SOURCES
+        ]
+        if unsupported:
+            invalid.append(f"{key} has unsupported provenance: {unsupported}")
+    if subject.strongest_rival is not None and "strongest_rival_text" not in provenance[
+        "rival_still_beats_candidate"
+    ]:
+        invalid.append("rival_still_beats_candidate must cite strongest_rival_text")
+    if invalid:
+        raise RevisionIntegrityError(
+            "old_new_rival_comparison provenance is incomplete: " + "; ".join(invalid)
+        )
+    return {
+        "judgment_count": len(AUTONOMOUS_REVISION_JUDGMENT_KEYS),
+        "all_judgments_have_provenance": True,
+        "allowed_sources": sorted(AUTONOMOUS_REVISION_PROVENANCE_SOURCES),
+    }
+
+
+def _material_text_changes(original: str, revised: str) -> list[dict[str, str]]:
+    original_units = _diff_units(original)
+    revised_units = _diff_units(revised)
+    matcher = SequenceMatcher(None, original_units, revised_units, autojunk=False)
+    changes = []
+    for tag, original_start, original_end, revised_start, revised_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        before = " ".join(original_units[original_start:original_end]).strip()
+        after = " ".join(revised_units[revised_start:revised_end]).strip()
+        if not before and not after:
+            continue
+        if before == after:
+            continue
+        index = min(original_start, max(0, len(original_units) - 1))
+        changes.append(
+            {
+                "before": before,
+                "after": after,
+                "region": _region_for_unit_index(index, len(original_units)),
+                "tag": tag,
+            }
+        )
+    return changes
+
+
+def _reported_changed_spans_for_texts(
+    original: str,
+    revised: str,
+    target_region: str,
+    reason: str,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "before": change["before"],
+            "after": change["after"],
+            "region": change["region"],
+            "within_selected_target": _region_matches_target(change["region"], target_region),
+            "reason": reason,
+        }
+        for change in _material_text_changes(original, revised)
+    ]
+
+
+def _diff_units(text: str) -> list[str]:
+    paragraphs = [part.strip() for part in text.split("\n\n") if part.strip()]
+    if len(paragraphs) > 1:
+        return paragraphs
+    sentences = _sentences(text)
+    if sentences:
+        return sentences
+    stripped = text.strip()
+    return [stripped] if stripped else []
+
+
+def _region_for_unit_index(index: int, total: int) -> str:
+    if total <= 1:
+        return "whole artifact"
+    if index == 0:
+        return "opening paragraph"
+    if index >= total - 1:
+        return "ending paragraph"
+    return "middle paragraph"
+
+
+def _matching_changed_span(
+    reported_spans: list[dict[str, Any]],
+    change: dict[str, str],
+) -> dict[str, Any] | None:
+    for span in reported_spans:
+        if _span_covers_change(span, change):
+            return span
+    return None
+
+
+def _span_covers_change(span: dict[str, Any], change: dict[str, str]) -> bool:
+    before_actual = _normalize_diff_text(change["before"])
+    after_actual = _normalize_diff_text(change["after"])
+    before_reported = _normalize_diff_text(str(span.get("before", "")))
+    after_reported = _normalize_diff_text(str(span.get("after", "")))
+    return _text_covers(before_reported, before_actual) or _text_covers(
+        after_reported,
+        after_actual,
+    )
+
+
+def _text_covers(reported: str, actual: str) -> bool:
+    if not actual:
+        return False
+    if not reported:
+        return False
+    if reported in actual or actual in reported:
+        return True
+    reported_tokens = set(reported.split())
+    actual_tokens = set(actual.split())
+    if not reported_tokens or not actual_tokens:
+        return False
+    overlap = len(reported_tokens & actual_tokens)
+    return overlap / max(1, min(len(reported_tokens), len(actual_tokens))) >= 0.65
+
+
+def _normalize_diff_text(text: str) -> str:
+    return " ".join(_words(text))
+
+
+def _region_matches_target(change_region: str, selected_target_region: str) -> bool:
+    change = change_region.lower()
+    target = selected_target_region.lower()
+    if "whole" in target or "artifact" in target:
+        return True
+    if "opening-to" in target or "bridge" in target:
+        return "opening" in change or "middle" in change
+    for marker in ("opening", "middle", "ending"):
+        if marker in target and marker in change:
+            return True
+    return change in target or target in change
+
+
+def _change_summary(change: dict[str, str]) -> str:
+    before = change["before"][:80].replace("\n", " ")
+    after = change["after"][:80].replace("\n", " ")
+    return f"{change['region']} before={before!r} after={after!r}"
+
+
 def _fake_model_payload_for_revision_schema(
     schema: WorkerSchema,
     prompt: dict[str, Any],
@@ -963,21 +1304,23 @@ def _fake_model_diff_payload(
     original = str(prompt["candidate"]["text"])
     handle = prior_payloads[AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA.artifact_type]
     revised = prior_payloads[AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA.artifact_type]
+    target_region = str(handle["span_ref"]["region"])
     return {
         "full_rewrite": False,
         "bounded_change": True,
         "operation_type": "append_local_consequence",
-        "target_region": str(handle["span_ref"]["region"]),
+        "target_region": target_region,
         "causal_handle": str(handle["causal_handle"]),
         "original_excerpt": _first_sentence(original),
         "revised_excerpt": _first_two_sentences(str(revised["text"])),
-        "changed_spans": [
-            {
-                "before": _first_sentence(original),
-                "after": _first_two_sentences(str(revised["text"])),
-                "reason": "bounded insertion adds consequence while preserving object-world",
-            }
-        ],
+        "changed_spans": _reported_changed_spans_for_texts(
+            original,
+            str(revised["text"]),
+            target_region,
+            "bounded insertion adds consequence while preserving object-world",
+        ),
+        "target_region_expanded": False,
+        "target_expansion_justification": "",
         "protected_effects_preserved": list(handle["protected_effects"]),
         "forbidden_changes_honored": list(handle["forbidden_changes"]),
         "explanation": "The repair targets one local causal handle instead of rewriting the artifact.",
@@ -1044,6 +1387,7 @@ def _fake_model_ablation_variants_payload(
                 "variant_probe": description,
                 "ablation_probe": "compare internal first-read/reread deltas",
                 "text": text,
+                "executed": True,
                 "expected_reader_state_change": _expected_ablation_change(operation),
                 "uncertainty": "model-guided probe, not reader evidence",
             }
@@ -1070,6 +1414,8 @@ def _fake_model_ablation_comparison_payload(
                     "probe only; local field decides whether the feature is treasure or junk"
                 ),
                 "pass_fail_criterion": "isolate the handle without scaffold leakage",
+                "planned_only": False,
+                "evidence_basis": "actual_variant_predicted_effect",
                 "not_human_data": True,
             }
             for variant in variants["variants"]
@@ -1115,6 +1461,7 @@ def _fake_model_old_new_rival_payload(
         "rival_pressure_summary": (
             "Strongest rival pressure remains active and cannot be collapsed into a pass."
         ),
+        "judgment_provenance": _default_judgment_provenance(rival_score is not None),
         "not_human_data": True,
     }
 
@@ -1407,10 +1754,14 @@ def _build_revision_diff_report(
     revised_words = set(_words(revised))
     added_words = sorted(revised_words - original_words)[:20]
     removed_words = sorted(original_words - revised_words)[:20]
+    target_region = str(handle_selection["span_ref"]["region"])
     return {
         "worker": "revision_diff_report_v1_fake",
         "full_rewrite": False,
         "bounded_change": True,
+        "operation_type": "append_local_consequence",
+        "target_region": target_region,
+        "causal_handle": handle_selection["causal_handle"],
         "operation": {
             "type": "append_local_consequence",
             "target_region": handle_selection["span_ref"]["region"],
@@ -1418,6 +1769,17 @@ def _build_revision_diff_report(
         },
         "original_excerpt": _first_sentence(original),
         "revised_excerpt": _first_two_sentences(revised),
+        "changed_spans": _reported_changed_spans_for_texts(
+            original,
+            revised,
+            target_region,
+            (
+                "The fake recomposer adds one local consequence without replacing the "
+                "artifact's governing field."
+            ),
+        ),
+        "target_region_expanded": False,
+        "target_expansion_justification": "",
         "added_words_sample": added_words,
         "removed_words_sample": removed_words,
         "original_word_count": len(_words(original)),
@@ -1493,6 +1855,7 @@ def _build_ablation_variant_set(
                 "ablation_probe": "compare internal first-read/reread deltas against revised candidate",
                 "text": text,
                 "text_sha256": sha256_text(text),
+                "executed": True,
                 "expected_reader_state_change": _expected_ablation_change(operation),
                 "uncertainty": "fake variant, not reader evidence",
             }
@@ -1525,6 +1888,8 @@ def _build_ablation_comparison(
                 "pass_fail_criterion": (
                     "useful if it isolates the handle without adding scaffold leakage"
                 ),
+                "planned_only": False,
+                "evidence_basis": "actual_variant_predicted_effect",
                 "not_human_data": True,
             }
         )
@@ -1600,6 +1965,7 @@ def _build_old_new_rival_comparison(
         "another_revision_cycle_needed": True,
         "comparison_basis": "deterministic fake internal comparison, not human data",
         "ablation_summary": ablation_comparison["summary"],
+        "judgment_provenance": _default_judgment_provenance(rival is not None),
         "fixture_only": True,
     }
 
@@ -1641,12 +2007,16 @@ def _build_closed_loop_gate_report(
     subject: RevisionSubject,
     payloads: dict[str, dict[str, Any]],
     fixture_only: bool = True,
+    integrity_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     comparison = payloads["old_new_rival_comparison"]
+    ablation_integrity = (integrity_report or {}).get("ablation", {})
     selected_failure_type = payloads["selected_failure_diagnosis"]["selected_failure_type"]
     unresolved = [f"selected failure remains provisional: {selected_failure_type}"]
     if fixture_only:
         unresolved.append("closed-loop comparison is deterministic fixture evidence")
+    if not ablation_integrity.get("comparison_actually_evaluated", False):
+        unresolved.append("ablation comparison is predicted-only, not counterfactual proof")
     if comparison["rival_still_beats_candidate"] is True:
         unresolved.append("strongest rival still matches or beats revised candidate")
     if comparison["another_revision_cycle_needed"]:
@@ -1708,6 +2078,29 @@ def _build_closed_loop_gate_report(
             "compared old/new/rival internally",
         ],
         "fixture_fake_evidence": fixture_only,
+        "integrity_report": integrity_report or {},
+        "ablation_evidence": {
+            "ablation_plan_exists": "counterfactual_ablation_plan" in subject.lab_artifacts,
+            "ablation_variants_executed": bool(
+                ablation_integrity.get("executed_variant_count", 0)
+            ),
+            "ablation_variant_count": int(ablation_integrity.get("variant_count", 0)),
+            "executed_ablation_variant_count": int(
+                ablation_integrity.get("executed_variant_count", 0)
+            ),
+            "ablation_comparison_predicted_only": bool(
+                ablation_integrity.get("comparison_predicted_only", True)
+            ),
+            "ablation_comparison_actually_evaluated": bool(
+                ablation_integrity.get("comparison_actually_evaluated", False)
+            ),
+            "planned_only_comparison_row_count": int(
+                ablation_integrity.get("planned_only_row_count", 0)
+            ),
+            "executed_comparison_row_count": int(
+                ablation_integrity.get("executed_row_count", 0)
+            ),
+        },
         "unresolved_blockers": unresolved,
         "rival_still_stronger": comparison["rival_still_beats_candidate"],
         "needs_another_cycle": comparison["another_revision_cycle_needed"],
@@ -1745,6 +2138,7 @@ def _build_packet_summary(
     fixture_only: bool = True,
     model_results: list[ModelDriverResult] | None = None,
     model: str | None = None,
+    integrity_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     gate_report = payloads["autonomous_closed_loop_gate_report"]
     return {
@@ -1775,6 +2169,7 @@ def _build_packet_summary(
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
         "fixture_only": fixture_only,
+        "integrity_report": integrity_report or {},
         "model": model,
         "model_call_ids": [
             result.model_call.id for result in (model_results or [])
@@ -1992,6 +2387,52 @@ def _score_text(text: str) -> dict[str, object]:
         "reread_transformation_score": min(10, 3 + len(retained) + (1 if words > 60 else 0)),
         "local_embodiment_score": min(10, 3 + len(retained) - process_penalty),
         "compression_score": max(1, min(10, 10 - abs(words - 120) // 40)),
+    }
+
+
+def _default_judgment_provenance(strongest_rival_present: bool) -> dict[str, list[str]]:
+    rival_sources = (
+        ["revised_candidate_text", "strongest_rival_text"]
+        if strongest_rival_present
+        else ["revised_candidate_text", "prior_reader_lab_evidence"]
+    )
+    return {
+        "reread_transformation_improved": [
+            "original_candidate_text",
+            "revised_candidate_text",
+            "predicted_ablation_effect",
+            "prior_reader_lab_evidence",
+        ],
+        "opening_transformation_improved": [
+            "original_candidate_text",
+            "revised_candidate_text",
+        ],
+        "local_embodiment_improved": [
+            "original_candidate_text",
+            "revised_candidate_text",
+            "strongest_rival_text",
+        ]
+        if strongest_rival_present
+        else ["original_candidate_text", "revised_candidate_text"],
+        "overexplanation_decreased": [
+            "original_candidate_text",
+            "revised_candidate_text",
+            "prior_reader_lab_evidence",
+        ],
+        "fake_depth_risk_decreased": [
+            "revised_candidate_text",
+            "prior_reader_lab_evidence",
+        ],
+        "revised_candidate_became_more_schematic": [
+            "revised_candidate_text",
+            "prior_reader_lab_evidence",
+        ],
+        "rival_still_beats_candidate": rival_sources,
+        "another_revision_cycle_needed": [
+            "revised_candidate_text",
+            "predicted_ablation_effect",
+            "prior_reader_lab_evidence",
+        ],
     }
 
 
