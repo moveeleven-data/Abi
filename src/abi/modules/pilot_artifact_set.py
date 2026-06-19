@@ -101,6 +101,12 @@ class PilotRivalImportResult:
 
 
 @dataclass(frozen=True)
+class PilotReaderKitExportResult:
+    exit_code: int
+    payload: dict[str, object]
+
+
+@dataclass(frozen=True)
 class PilotModelWorkerSpec:
     schema: WorkerSchema
     worker_role: WorkerRole
@@ -389,7 +395,24 @@ def import_pilot_rival(
             parent_ids=[artifacts["pilot_neutral_label_map_private"].id],
         )
 
-        combined_artifacts.update(artifacts)
+        payloads["pilot_readiness_report"] = _build_readiness_report_payload(
+            client_name=str(packet_payload.get("client", "imported")),
+            fixture_only=False,
+            payloads=payloads,
+        )
+        artifacts["pilot_readiness_report"] = writer.write_artifact(
+            "pilot_readiness_report",
+            payloads["pilot_readiness_report"],
+            parent_ids=[
+                artifacts["pilot_strongest_rival_slot"].id,
+                artifacts["pilot_blinded_reader_bundle"].id,
+            ],
+        )
+
+        combined_artifacts = _manifest_artifacts_for_rival_import(
+            base_artifacts=base_artifacts,
+            derived_artifacts=artifacts,
+        )
         payloads["pilot_artifact_set_manifest"] = _build_artifact_set_manifest_payload(
             artifacts=combined_artifacts,
             payloads=payloads,
@@ -401,25 +424,15 @@ def import_pilot_rival(
             parent_ids=[
                 base_artifacts["pilot_source_manifest"].id,
                 artifacts["pilot_blinded_reader_bundle"].id,
+                artifacts["pilot_readiness_report"].id,
                 artifacts[PILOT_RIVAL_IMPORT_ARTIFACT_TYPE].id,
             ],
         )
 
-        payloads["pilot_readiness_report"] = _build_readiness_report_payload(
-            client_name=str(packet_payload.get("client", "imported")),
-            fixture_only=False,
-            payloads=payloads,
+        combined_artifacts = _manifest_artifacts_for_rival_import(
+            base_artifacts=base_artifacts,
+            derived_artifacts=artifacts,
         )
-        artifacts["pilot_readiness_report"] = writer.write_artifact(
-            "pilot_readiness_report",
-            payloads["pilot_readiness_report"],
-            parent_ids=[
-                artifacts["pilot_artifact_set_manifest"].id,
-                artifacts["pilot_strongest_rival_slot"].id,
-            ],
-        )
-
-        combined_artifacts.update(artifacts)
         payloads["pilot_packet"] = _build_rival_import_packet_summary_payload(
             run_id=run_id,
             packet_dir=derived_packet_dir,
@@ -461,6 +474,147 @@ def import_pilot_rival(
             accepted=True,
             message=None,
         ),
+    )
+
+
+def export_pilot_reader_kit(
+    config: AbiConfig,
+    *,
+    packet_dir: Path | str,
+    out_dir: Path | str,
+    reader_count: int,
+) -> PilotReaderKitExportResult:
+    source_packet_dir = _resolve_path(config, packet_dir)
+    output_dir = _resolve_path(config, out_dir)
+    private_root = (config.root / "inputs" / "private").resolve()
+    if reader_count <= 0:
+        return _reader_kit_refusal(
+            packet_dir=source_packet_dir,
+            out_dir=output_dir,
+            message="Pilot reader-kit export refused; reader-count must be positive.",
+        )
+    if not source_packet_dir.exists() or not source_packet_dir.is_dir():
+        return _reader_kit_refusal(
+            packet_dir=source_packet_dir,
+            out_dir=output_dir,
+            message=f"Pilot reader-kit export refused; packet directory not found: {source_packet_dir}",
+        )
+    if not output_dir.is_relative_to(private_root):
+        return _reader_kit_refusal(
+            packet_dir=source_packet_dir,
+            out_dir=output_dir,
+            message=(
+                "Pilot reader-kit export refused; out-dir must be under "
+                f"{private_root}."
+            ),
+        )
+
+    try:
+        packet_payload = read_json_file(source_packet_dir / "pilot_packet.json")["payload"]
+        bundle_payload = read_json_file(
+            source_packet_dir / "pilot_blinded_reader_bundle.json"
+        )["payload"]
+        label_map_payload = read_json_file(
+            source_packet_dir / "pilot_neutral_label_map_private.json"
+        )["payload"]
+        reader_items = list(bundle_payload["reader_items"])
+        label_map = dict(label_map_payload["label_map"])
+    except (KeyError, TypeError, FileNotFoundError, json.JSONDecodeError) as error:
+        return _reader_kit_refusal(
+            packet_dir=source_packet_dir,
+            out_dir=output_dir,
+            message=f"Pilot reader-kit export refused; invalid packet inputs: {error}",
+        )
+    if len(reader_items) < 2:
+        return _reader_kit_refusal(
+            packet_dir=source_packet_dir,
+            out_dir=output_dir,
+            message="Pilot reader-kit export refused; reader bundle must contain at least two texts.",
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    reader_files = []
+    schedule_readers = []
+    for reader_number in range(1, reader_count + 1):
+        reader_id = f"reader_{reader_number:03d}"
+        ordered_items = _rotated_reader_items(reader_items, reader_number - 1)
+        reader_path = output_dir / f"{reader_id}_bundle.md"
+        reader_path.write_text(
+            _reader_bundle_markdown(reader_id=reader_id, ordered_items=ordered_items),
+            encoding="utf-8",
+            newline="\n",
+        )
+        reader_files.append(str(reader_path))
+        schedule_readers.append(
+            {
+                "reader_id": reader_id,
+                "presentation_order": [
+                    {
+                        "position": position,
+                        "label": str(item["label"]),
+                        "source_class": str(label_map[str(item["label"])]["source_class"]),
+                    }
+                    for position, item in enumerate(ordered_items, start=1)
+                ],
+            }
+        )
+
+    response_template_path = output_dir / "response_form_template.md"
+    response_template_path.write_text(
+        _response_form_template_markdown(),
+        encoding="utf-8",
+        newline="\n",
+    )
+    order_schedule_path = output_dir / "order_schedule_private.json"
+    order_schedule_path.write_text(
+        json.dumps(
+            {
+                "private": True,
+                "not_for_reader_distribution": True,
+                "packet_dir": str(source_packet_dir),
+                "packet_id": packet_payload.get("packet_id"),
+                "reader_count": reader_count,
+                "readers": schedule_readers,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    operator_readme_path = output_dir / "operator_readme.md"
+    operator_readme_path.write_text(
+        _operator_readme_markdown(
+            packet_dir=source_packet_dir,
+            reader_count=reader_count,
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    return PilotReaderKitExportResult(
+        exit_code=0,
+        payload={
+            "accepted": True,
+            "refused": False,
+            "packet_dir": str(source_packet_dir),
+            "out_dir": str(output_dir),
+            "reader_count": reader_count,
+            "reader_bundle_files": reader_files,
+            "response_form_template": str(response_template_path),
+            "order_schedule_private": str(order_schedule_path),
+            "operator_readme": str(operator_readme_path),
+            "order_is_counterbalanced": len(
+                {
+                    tuple(item["label"] for item in _rotated_reader_items(reader_items, index))
+                    for index in range(reader_count)
+                }
+            )
+            > 1,
+            "private_output_only": True,
+            "message": None,
+        },
     )
 
 
@@ -822,6 +976,35 @@ def _build_source_manifest_payload(
         "content_copied_to_docs": False,
         "private_source_policy": "inputs/private/ is gitignored; source files stay outside tracked docs.",
     }
+
+
+def _manifest_artifacts_for_rival_import(
+    *,
+    base_artifacts: dict[str, ArtifactRecord],
+    derived_artifacts: dict[str, ArtifactRecord],
+) -> dict[str, ArtifactRecord]:
+    artifact_types = (
+        "pilot_source_manifest",
+        "pilot_generation_plan",
+        "pilot_abi_candidate_ref",
+        "pilot_direct_prompt_baseline",
+        "pilot_raw_model_baseline",
+    )
+    artifacts = {
+        artifact_type: base_artifacts[artifact_type]
+        for artifact_type in artifact_types
+    }
+    for artifact_type in (
+        PILOT_RIVAL_IMPORT_ARTIFACT_TYPE,
+        "pilot_strongest_rival_slot",
+        "pilot_neutral_label_map_private",
+        "pilot_blinded_reader_bundle",
+        "pilot_readiness_report",
+        "pilot_artifact_set_manifest",
+    ):
+        if artifact_type in derived_artifacts:
+            artifacts[artifact_type] = derived_artifacts[artifact_type]
+    return artifacts
 
 
 def _build_generation_plan_payload(
@@ -1358,6 +1541,109 @@ def _rival_import_refusal(
             "message": message,
         },
     )
+
+
+def _reader_kit_refusal(
+    *,
+    packet_dir: Path,
+    out_dir: Path,
+    message: str,
+) -> PilotReaderKitExportResult:
+    return PilotReaderKitExportResult(
+        exit_code=1,
+        payload={
+            "accepted": False,
+            "refused": True,
+            "packet_dir": str(packet_dir),
+            "out_dir": str(out_dir),
+            "reader_bundle_files": [],
+            "message": message,
+        },
+    )
+
+
+def _rotated_reader_items(
+    reader_items: list[object],
+    offset: int,
+) -> list[dict[str, object]]:
+    items = [dict(item) for item in reader_items if isinstance(item, dict)]
+    shift = offset % len(items)
+    return items[shift:] + items[:shift]
+
+
+def _reader_bundle_markdown(
+    *,
+    reader_id: str,
+    ordered_items: list[dict[str, object]],
+) -> str:
+    lines = [
+        f"# Reader Bundle {reader_id.removeprefix('reader_')}",
+        "",
+        "Read each text in the order shown. Do not return to earlier responses while completing first-read notes.",
+        "",
+    ]
+    for position, item in enumerate(ordered_items, start=1):
+        lines.extend(
+            [
+                f"## Item {position}: {item['label']}",
+                "",
+                str(item["text"]).strip(),
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _response_form_template_markdown() -> str:
+    return """# Response Form Template
+
+## First Read
+
+- What did you think each text was doing on first read?
+- Which image, phrase, or sentence held your attention most strongly?
+- What felt unresolved, hidden, or unclear?
+- Summarize each text in one or two sentences.
+- Rate attention intensity from 1 to 5.
+- Rate confusion from 1 to 5.
+- Rate overexplicitness from 1 to 5.
+
+## Reread
+
+- Did the opening of each text change in meaning after reread?
+- What hidden consequence became clearer, if any?
+- What did the text make you carry back to the beginning?
+- Summarize each text again in one or two sentences.
+- What changed between first read and reread?
+
+## Comparison
+
+- Which text produced the strongest reread change?
+- Which text lost the most when paraphrased?
+- Which text felt most overexplained?
+- Which text most sustained attention without telling you what to think?
+- Rank the texts from strongest to weakest for reread effect.
+"""
+
+
+def _operator_readme_markdown(
+    *,
+    packet_dir: Path,
+    reader_count: int,
+) -> str:
+    return f"""# Pilot Reader Kit Operator Notes
+
+This directory is private operator material generated from:
+
+`{packet_dir}`
+
+Send each reader exactly one `reader_###_bundle.md` file and a copy of `response_form_template.md`.
+
+Do not send `order_schedule_private.json`; it contains the private source-class mapping needed for analysis.
+
+Do not describe which text is the Abi candidate, which texts are baselines, or which text is the rival.
+
+Reader count: {reader_count}
+"""
 
 
 def _read_base_pilot_payloads(

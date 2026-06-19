@@ -544,6 +544,83 @@ def test_pilot_import_rival_rebuilds_reader_bundle_without_mutating_source_packe
     assert slot["strongest_rival_gate_satisfied"] is False
     assert slot["strongest_rival_comparison_passed"] is False
 
+    manifest = read_payload(payload["new_artifact_paths"]["pilot_artifact_set_manifest"])
+    packet = read_payload(payload["new_artifact_paths"]["pilot_packet"])
+    for artifact_type in (
+        "pilot_blinded_reader_bundle",
+        "pilot_neutral_label_map_private",
+        "pilot_readiness_report",
+        "pilot_strongest_rival_import",
+        "pilot_strongest_rival_slot",
+    ):
+        assert manifest["artifact_ids"][artifact_type] == packet["artifact_ids"][artifact_type]
+        assert manifest["artifact_ids"][artifact_type] == payload["new_artifact_ids"][artifact_type]
+    assert packet["artifact_ids"]["pilot_artifact_set_manifest"] == payload["new_artifact_ids"][
+        "pilot_artifact_set_manifest"
+    ]
+    assert manifest["artifact_ids"]["pilot_abi_candidate_ref"] == original.payload["artifact_ids"][
+        "pilot_abi_candidate_ref"
+    ]
+
+    kit_dir = tmp_path / "inputs" / "private" / "pilot_001" / "reader_kit"
+    export_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "pilot",
+            "export-reader-kit",
+            "--packet-dir",
+            payload["packet_dir"],
+            "--out-dir",
+            str(kit_dir),
+            "--reader-count",
+            "6",
+        ]
+    )
+    export_payload = json.loads(capsys.readouterr().out)
+
+    assert export_exit == 0
+    assert export_payload["accepted"] is True
+    assert export_payload["out_dir"] == str(kit_dir.resolve())
+    assert len(export_payload["reader_bundle_files"]) == 6
+    assert export_payload["order_is_counterbalanced"] is True
+    response_template = Path(export_payload["response_form_template"])
+    assert response_template.exists()
+    assert "First Read" in response_template.read_text(encoding="utf-8")
+    forbidden_reader_terms = (
+        "source_class",
+        "abi_candidate",
+        "direct_prompt_baseline",
+        "raw_model_baseline",
+        "strongest_rival",
+    )
+    for reader_file in export_payload["reader_bundle_files"]:
+        text = Path(reader_file).read_text(encoding="utf-8")
+        assert "Text A" in text or "Text B" in text or "Text C" in text or "Text D" in text
+        lowered = text.lower()
+        for forbidden in forbidden_reader_terms:
+            assert forbidden not in lowered
+
+    schedule = json.loads(Path(export_payload["order_schedule_private"]).read_text(encoding="utf-8"))
+    assert schedule["private"] is True
+    assert schedule["not_for_reader_distribution"] is True
+    source_classes = {
+        item["source_class"]
+        for reader in schedule["readers"]
+        for item in reader["presentation_order"]
+    }
+    assert source_classes == {
+        "abi_candidate",
+        "direct_prompt_baseline",
+        "raw_model_baseline",
+        "strongest_rival",
+    }
+    orders = [
+        tuple(item["label"] for item in reader["presentation_order"])
+        for reader in schedule["readers"]
+    ]
+    assert len(set(orders)) > 1
+
     with connect(config.db_path) as connection:
         gates = list_gates(connection, payload["run_id"])
         final_report = check_finalization(

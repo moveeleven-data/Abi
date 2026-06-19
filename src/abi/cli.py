@@ -53,6 +53,7 @@ from abi.modules.production_run import (
 from abi.modules.pilot_artifact_set import (
     PILOT_ARTIFACT_SET_CLIENTS,
     PILOT_ARTIFACT_SET_MAX_MODEL_CALLS_DEFAULT,
+    export_pilot_reader_kit,
     import_pilot_rival,
     run_pilot_artifact_set,
 )
@@ -288,6 +289,28 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Private strongest-rival text file to import as Text D.",
     )
+    pilot_export_reader_kit_parser = pilot_subparsers.add_parser(
+        "export-reader-kit",
+        help="Export private counterbalanced reader bundles from a pilot packet.",
+    )
+    pilot_export_reader_kit_parser.add_argument(
+        "--packet-dir",
+        type=Path,
+        required=True,
+        help="Derived pilot packet directory containing a blinded reader bundle.",
+    )
+    pilot_export_reader_kit_parser.add_argument(
+        "--out-dir",
+        type=Path,
+        required=True,
+        help="Private output directory under inputs/private/.",
+    )
+    pilot_export_reader_kit_parser.add_argument(
+        "--reader-count",
+        type=int,
+        required=True,
+        help="Number of counterbalanced reader bundles to write.",
+    )
     calibration_parser = subparsers.add_parser(
         "calibration",
         help="Run deterministic human calibration commands",
@@ -432,6 +455,13 @@ def main(argv: list[str] | None = None) -> int:
             config,
             packet_dir=args.packet_dir,
             rival_file=args.rival_file,
+        )
+    if args.command == "pilot" and args.pilot_command == "export-reader-kit":
+        return _cmd_pilot_export_reader_kit(
+            config,
+            packet_dir=args.packet_dir,
+            out_dir=args.out_dir,
+            reader_count=args.reader_count,
         )
     if args.command == "calibration" and args.calibration_command == "demo":
         return _cmd_calibration_demo(config)
@@ -684,6 +714,23 @@ def _cmd_pilot_import_rival(
         config,
         packet_dir=packet_dir,
         rival_file=rival_file,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_pilot_export_reader_kit(
+    config: AbiConfig,
+    *,
+    packet_dir: Path,
+    out_dir: Path,
+    reader_count: int,
+) -> int:
+    result = export_pilot_reader_kit(
+        config,
+        packet_dir=packet_dir,
+        out_dir=out_dir,
+        reader_count=reader_count,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
