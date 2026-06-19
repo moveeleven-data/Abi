@@ -23,6 +23,11 @@ from abi.live_model import LIVE_WORKERS, run_live_abi_ear_worker
 from abi.model_calls import get_model_call, list_model_calls, model_call_to_dict
 from abi.model_driver import run_model_driver_demo
 from abi.modules.abi_ear import run_abi_ear_demo
+from abi.modules.internal_reader_lab import (
+    INTERNAL_READER_LAB_CLIENTS,
+    INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
+    run_internal_reader_lab,
+)
 from abi.modules.live_abi_ear import (
     LIVE_ABI_EAR_CLIENTS,
     LIVE_ABI_EAR_MAX_MODEL_CALLS_DEFAULT,
@@ -219,6 +224,41 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Private strongest-rival text file to import as Text D.",
     )
+    autonomous_parser = subparsers.add_parser(
+        "autonomous",
+        help="Run autonomous internal creative-engine commands",
+    )
+    autonomous_subparsers = autonomous_parser.add_subparsers(
+        dest="autonomous_command",
+        required=True,
+    )
+    reader_lab_parser = autonomous_subparsers.add_parser(
+        "reader-lab",
+        help="Run the Autonomous Internal Reader Lab v1 packet",
+    )
+    reader_lab_parser.add_argument(
+        "--client",
+        choices=INTERNAL_READER_LAB_CLIENTS,
+        required=True,
+        help="Internal reader lab client path to use.",
+    )
+    reader_lab_parser.add_argument(
+        "--packet-dir",
+        type=Path,
+        required=True,
+        help="Pilot candidate/baseline/rival packet directory to inspect.",
+    )
+    reader_lab_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    reader_lab_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for internal reader workers.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -340,6 +380,14 @@ def main(argv: list[str] | None = None) -> int:
             config,
             packet_dir=args.packet_dir,
             rival_file=args.rival_file,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "reader-lab":
+        return _cmd_autonomous_reader_lab(
+            config,
+            client_name=args.client,
+            packet_dir=args.packet_dir,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
         )
     if args.command == "controller" and args.controller_command == "status":
         return _cmd_controller_status(config)
@@ -556,6 +604,25 @@ def _cmd_pilot_import_rival(
         config,
         packet_dir=packet_dir,
         rival_file=rival_file,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_reader_lab(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    packet_dir: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_internal_reader_lab(
+        config,
+        client_name=client_name,
+        packet_dir=packet_dir,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code

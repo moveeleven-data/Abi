@@ -17,7 +17,7 @@ Abi is being developed as an autonomous creative engine. The active runtime path
 9. rival preservation
 10. fail-closed autonomous finalization
 
-The next development milestone is **Autonomous Internal Reader Lab v1**.
+The next development milestone after the deterministic reader-lab scaffold is targeted recomposition and ablation execution.
 
 ## Removed From Active Path
 
@@ -61,4 +61,4 @@ The legacy `final_artifact` profile may remain in the codebase as an external/pu
 
 ## Claims Not Made
 
-This repo state makes no final claim and no phase-shift claim. It has not completed Autonomous Internal Reader Lab v1, has not beaten a strongest rival, and has not passed hostile internal audit.
+This repo state makes no final claim and no phase-shift claim. The deterministic Autonomous Internal Reader Lab v1 scaffold is internal evidence only; Abi has not beaten a strongest rival, cleared fixture-only blockers, or passed hostile internal audit.

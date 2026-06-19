@@ -25,8 +25,8 @@ Legacy external validation concepts remain historical context only. The `final_a
 
 ## Claims Not Made
 
-Abi has not completed Autonomous Internal Reader Lab v1, has not beaten a strongest rival, has not passed hostile internal audit, and makes no final or phase-shift claim.
+Abi has a deterministic fake Autonomous Internal Reader Lab v1 scaffold. It has not beaten a strongest rival, cleared fixture-only blockers, passed hostile internal audit, or made any final or phase-shift claim.
 
 ## Next Work
 
-The next single branch/task should implement Autonomous Internal Reader Lab v1: internal stream-reader traces, internal reread traces, failure diagnosis, targeted recomposition, counterfactual ablation, hostile internal reader reports, and internal rival comparison.
+The next single branch/task should execute targeted recomposition and counterfactual ablation against bounded candidate regions, while preserving rival pressure and fail-closed autonomous finalization.

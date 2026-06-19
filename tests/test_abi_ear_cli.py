@@ -48,6 +48,7 @@ def test_source_uses_no_model_or_api_client_imports():
     live_adapter_paths = {
         Path("src/abi/live_model.py"),
         Path("src/abi/openai_adapter.py"),
+        Path("src/abi/modules/internal_reader_lab.py"),
         Path("src/abi/modules/live_abi_ear.py"),
         Path("src/abi/modules/live_reread.py"),
         Path("src/abi/modules/production_run.py"),

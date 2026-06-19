@@ -23,6 +23,7 @@ PHASE10_PRODUCTION_RUN_ACTIVE_PHASE = "phase10_source_to_artifact_production_run
 PHASE11_EVALUATION_BASELINES_ACTIVE_PHASE = "phase11_evaluation_baselines"
 PHASE13_FINAL_ARTIFACT_PACKET_ACTIVE_PHASE = "phase13_final_artifact_packet"
 PHASE16_FIRST_REAL_CANDIDATE_SET_ACTIVE_PHASE = "phase16_first_real_candidate_set"
+AUTONOMOUS_INTERNAL_READER_LAB_ACTIVE_PHASE = "autonomous_internal_reader_lab_v1"
 
 
 @dataclass(frozen=True)

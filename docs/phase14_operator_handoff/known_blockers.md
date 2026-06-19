@@ -22,7 +22,7 @@ The active `autonomous_creative_candidate` profile remains fail-closed until int
 
 ## Evidence Blockers
 
-Abi has not completed internal reader-state workers, targeted recomposition, counterfactual ablation, hostile internal reader audit, or internal rival comparison.
+Abi has deterministic fake internal reader-state artifacts, failure diagnosis, recomposition planning, ablation planning, hostile internal reader reporting, and internal rival comparison. It has not executed targeted recomposition, executed ablation, cleared fixture-only evidence, or resolved internal blockers.
 
 Fixture and fake-client outputs remain engineering artifacts. They do not satisfy `no_fixture_only_core_evidence`.
 

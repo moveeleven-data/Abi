@@ -2,19 +2,16 @@
 
 Last realigned: 2026-06-19
 
-This file name is historical. The active next step is not human validation or paper evidence. The active next step is Autonomous Internal Reader Lab v1.
+This file name is historical. The active next step is not human validation or paper evidence. The deterministic Autonomous Internal Reader Lab v1 scaffold exists; the next step is targeted recomposition and ablation execution.
 
 ## Recommended Next Work
 
-1. Build internal stream-reader state workers.
-2. Build internal reread trace workers.
-3. Produce failure diagnosis artifacts.
-4. Produce targeted recomposition plans.
-5. Produce counterfactual ablation plans or results.
-6. Preserve strongest-rival artifacts.
-7. Add internal rival comparison.
-8. Add hostile internal reader reports.
-9. Keep `autonomous_creative_candidate` fail-closed until internal gates are satisfied.
+1. Execute bounded targeted recomposition plans against candidate regions.
+2. Execute lightweight counterfactual ablation checks.
+3. Preserve strongest-rival artifacts through the recomposition step.
+4. Rerun internal stream/reread/forensic/hostile traces after changes.
+5. Compare recomposed candidate against baselines and strongest rival.
+6. Keep `autonomous_creative_candidate` fail-closed until internal gates are satisfied.
 
 ## Do Not Treat As Next Work
 

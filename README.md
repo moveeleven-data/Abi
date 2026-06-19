@@ -6,7 +6,7 @@ Abi is not a public-validation harness right now. Human readers, browser ChatGPT
 
 ## Project Status
 
-- Current implemented surface: deterministic infrastructure, artifact/run registries, guarded model-call records, Abi Ear, Minimal Reread, production/candidate scaffolds, pilot candidate/baseline/rival artifact sets, and strongest-rival import.
+- Current implemented surface: deterministic infrastructure, artifact/run registries, guarded model-call records, Abi Ear, Minimal Reread, production/candidate scaffolds, pilot candidate/baseline/rival artifact sets, strongest-rival import, and Autonomous Internal Reader Lab v1 fake packets.
 - Active finalization profile: `autonomous_creative_candidate`.
 - Current finalization status: fail-closed until internal autonomous gates are explicitly satisfied.
 - Legacy external profile: `final_artifact` remains present as historical/external validation policy, but it is not the active development path.
@@ -55,6 +55,7 @@ Fake-client and candidate packet paths:
 .\.venv\Scripts\abi.exe reread live-demo --client fake
 .\.venv\Scripts\abi.exe production live-demo --client fake
 .\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
+.\.venv\Scripts\abi.exe autonomous reader-lab --client fake --packet-dir <packet_dir>
 ```
 
 Strongest-rival preservation:
@@ -112,6 +113,7 @@ Examples that refuse without opt-in:
 .\.venv\Scripts\abi.exe reread live-demo --client openai
 .\.venv\Scripts\abi.exe production live-demo --client openai
 .\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source
+.\.venv\Scripts\abi.exe autonomous reader-lab --client openai --packet-dir <packet_dir>
 ```
 
 Opt-in examples:
@@ -123,6 +125,7 @@ Opt-in examples:
 .\.venv\Scripts\abi.exe reread live-demo --client openai --allow-live-model --max-model-calls 12
 .\.venv\Scripts\abi.exe production live-demo --client openai --allow-live-model --max-model-calls 24
 .\.venv\Scripts\abi.exe pilot artifact-set --client openai --source-dir inputs/private/phase16_source --allow-live-model --max-model-calls 36
+.\.venv\Scripts\abi.exe autonomous reader-lab --client openai --packet-dir <packet_dir> --allow-live-model --max-model-calls 12
 ```
 
 Do not run live OpenAI commands casually. Install optional live dependencies only for an intentional manual live smoke test:
@@ -143,21 +146,19 @@ inputs/private/
 
 The pilot artifact-set command hashes source files and records filenames. Private source contents may be sent to OpenAI only during explicit `--allow-live-model` runs and must stay out of tracked docs.
 
-## Validation Roadmap
+## Autonomous Roadmap
 
-The next development milestone is **Autonomous Internal Reader Lab v1**.
+The current development milestone is **Autonomous Internal Reader Lab v1**.
 
-The next branch should build internal reader-state workers and internal comparison machinery, not a human-reader dry run. Do not use browser ChatGPT sessions as ad hoc readers. Do not use external humans as core Abi evaluators.
+Do not use browser ChatGPT sessions as ad hoc readers. Do not use external humans as core Abi evaluators.
 
 Near-term work should focus on:
 
-1. Internal stream-reader traces for candidate text.
-2. Internal reread traces with failure diagnosis.
-3. Targeted recomposition plans.
-4. Counterfactual ablation plans or results.
-5. Rival preservation and internal rival comparison.
-6. Hostile internal reader reports.
-7. Fail-closed `autonomous_creative_candidate` readiness.
+1. Expand internal reader-state workers beyond deterministic fake mode.
+2. Execute targeted recomposition against bounded candidate regions.
+3. Execute counterfactual ablation checks.
+4. Preserve strongest-rival pressure through internal comparison.
+5. Keep fail-closed `autonomous_creative_candidate` readiness.
 
 ## Where To Find Docs
 

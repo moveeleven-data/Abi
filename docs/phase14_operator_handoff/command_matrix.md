@@ -33,6 +33,7 @@ Last realigned: 2026-06-19
 | Model-call inspection | `abi model-call list`, `abi model-call show <model_call_id>` |
 | Candidate packets | `abi ear live-demo --client fake`, `abi reread live-demo --client fake`, `abi production live-demo --client fake`, `abi pilot artifact-set --client fake --source-dir <dir>` |
 | Rival preservation | `abi pilot import-rival --packet-dir <packet_dir> --rival-file <rival_file>` |
+| Internal reader lab | `abi autonomous reader-lab --client fake --packet-dir <packet_dir>` |
 | Gates and profiles | `abi gate list`, `abi finalization status`, `abi finalization status --profile autonomous_creative_candidate`, `abi finalize --profile autonomous_creative_candidate` |
 
 ## Retired Active Commands

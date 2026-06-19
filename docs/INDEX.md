@@ -30,6 +30,7 @@ Use the README for exact syntax. The active command groups are:
 - `abi production`
 - `abi pilot artifact-set`
 - `abi pilot import-rival`
+- `abi autonomous reader-lab`
 - `abi model-driver`
 - `abi model-call`
 - `abi artifact`

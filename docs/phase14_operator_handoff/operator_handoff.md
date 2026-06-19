@@ -6,7 +6,7 @@ Last realigned: 2026-06-19
 
 Abi is now oriented as an autonomous creative-engine scaffold. The active path is internal reader-state work, failure diagnosis, targeted recomposition, counterfactual ablation, rival preservation, and fail-closed autonomous finalization.
 
-Abi has not completed Autonomous Internal Reader Lab v1, has not beaten a strongest rival, has not passed hostile internal audit, and makes no final or phase-shift claim.
+Abi has a deterministic fake Autonomous Internal Reader Lab v1 scaffold. It has not beaten a strongest rival, cleared fixture-only blockers, passed hostile internal audit, or made any final or phase-shift claim.
 
 ## Quick Verification
 
@@ -41,4 +41,4 @@ Read these files together:
 - `finalization_profile_summary.md`
 - `fresh_clone_verification.md`
 
-The next operator should begin with the README, then plan Autonomous Internal Reader Lab v1 on a new branch after this realignment is committed and main is clean.
+The next operator should begin with the README, then plan bounded targeted recomposition and ablation execution on a new branch after this work is committed and main is clean.
