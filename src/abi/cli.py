@@ -28,6 +28,11 @@ from abi.modules.autonomous_revision import (
     AUTONOMOUS_REVISION_MAX_MODEL_CALLS_DEFAULT,
     run_autonomous_revision,
 )
+from abi.modules.ablation_informed_revision import (
+    ABLATION_INFORMED_REVISION_CLIENTS,
+    ABLATION_INFORMED_REVISION_MAX_MODEL_CALLS_DEFAULT,
+    run_ablation_informed_revision,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_CLIENTS,
     EXECUTED_ABLATION_MAX_MODEL_CALLS_DEFAULT,
@@ -323,6 +328,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=EXECUTED_ABLATION_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for executed ablation workers.",
     )
+    autonomous_revise_from_ablation_parser = autonomous_subparsers.add_parser(
+        "revise-from-ablation",
+        help="Run one ablation-informed bounded revision cycle",
+    )
+    autonomous_revise_from_ablation_parser.add_argument(
+        "--client",
+        choices=ABLATION_INFORMED_REVISION_CLIENTS,
+        required=True,
+        help="Ablation-informed revision client path to use.",
+    )
+    autonomous_revise_from_ablation_parser.add_argument(
+        "--executed-ablation-packet",
+        type=Path,
+        required=True,
+        help="Executed ablation packet directory to revise from.",
+    )
+    autonomous_revise_from_ablation_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_revise_from_ablation_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=ABLATION_INFORMED_REVISION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for ablation-informed revision.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -466,6 +498,14 @@ def main(argv: list[str] | None = None) -> int:
             config,
             client_name=args.client,
             revision_packet=args.revision_packet,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "revise-from-ablation":
+        return _cmd_autonomous_revise_from_ablation(
+            config,
+            client_name=args.client,
+            executed_ablation_packet=args.executed_ablation_packet,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
         )
@@ -739,6 +779,25 @@ def _cmd_autonomous_ablate(
         config,
         client_name=client_name,
         revision_packet=revision_packet,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_revise_from_ablation(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    executed_ablation_packet: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_ablation_informed_revision(
+        config,
+        client_name=client_name,
+        executed_ablation_packet=executed_ablation_packet,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
     )

@@ -26,10 +26,11 @@ def test_abi_ear_demo_cli_outputs_summary(tmp_path, capsys, monkeypatch):
     assert Path(payload["packet_dir"]).is_dir()
 
 
-def test_readme_documents_abi_ear_demo_command():
+def test_readme_describes_abi():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert r".\.venv\Scripts\abi.exe ear demo" in readme
+    assert readme.startswith("# Abi")
+    assert "germ -> differentiation -> pressure -> crisis -> recomposition -> return" in readme
 
 
 def test_source_uses_no_model_or_api_client_imports():
@@ -50,6 +51,7 @@ def test_source_uses_no_model_or_api_client_imports():
         Path("src/abi/openai_adapter.py"),
         Path("src/abi/modules/autonomous_revision.py"),
         Path("src/abi/modules/internal_reader_lab.py"),
+        Path("src/abi/modules/ablation_informed_revision.py"),
         Path("src/abi/modules/live_abi_ear.py"),
         Path("src/abi/modules/live_reread.py"),
         Path("src/abi/modules/production_run.py"),

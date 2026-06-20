@@ -625,12 +625,7 @@ def test_pilot_cli_fake_and_openai_guard(tmp_path, capsys, monkeypatch):
     assert "--allow-live-model" in openai_payload["message"]
 
 
-def test_private_source_directory_is_gitignored_and_readme_documents_command():
+def test_private_source_directory_is_gitignored():
     gitignore = Path(".gitignore").read_text(encoding="utf-8")
-    readme = Path("README.md").read_text(encoding="utf-8")
 
     assert "inputs/private/" in gitignore
-    assert (
-        r".\.venv\Scripts\abi.exe pilot artifact-set --client fake "
-        r"--source-dir fixtures/production_harness"
-    ) in readme

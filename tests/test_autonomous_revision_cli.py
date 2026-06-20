@@ -2,6 +2,9 @@ import json
 from pathlib import Path
 
 from abi.cli import main
+from abi.modules.ablation_informed_revision import (
+    ABLATION_INFORMED_REVISION_ARTIFACT_TYPES,
+)
 from abi.modules.autonomous_revision import AUTONOMOUS_REVISION_ARTIFACT_TYPES
 from abi.modules.executed_ablation import EXECUTED_ABLATION_ARTIFACT_TYPES
 
@@ -177,6 +180,85 @@ def test_autonomous_ablate_cli_fake_and_openai_guard(tmp_path, capsys, monkeypat
             "openai",
             "--revision-packet",
             revise_payload["packet_dir"],
+        ]
+    )
+    openai_payload = json.loads(capsys.readouterr().out)
+
+    assert openai_exit == 1
+    assert openai_payload["refused"] is True
+    assert "--allow-live-model" in openai_payload["message"]
+    assert openai_payload["counts"]["model_calls"] == 0
+
+
+def test_autonomous_revise_from_ablation_cli_fake_and_openai_guard(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    lab_payload = build_reader_lab_packet(tmp_path, capsys)
+    revise_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "revise",
+            "--client",
+            "fake",
+            "--reader-lab-packet",
+            lab_payload["packet_dir"],
+        ]
+    )
+    revise_payload = json.loads(capsys.readouterr().out)
+    assert revise_exit == 0
+
+    ablate_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "ablate",
+            "--client",
+            "fake",
+            "--revision-packet",
+            revise_payload["packet_dir"],
+        ]
+    )
+    ablate_payload = json.loads(capsys.readouterr().out)
+    assert ablate_exit == 0
+
+    cycle2_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "revise-from-ablation",
+            "--client",
+            "fake",
+            "--executed-ablation-packet",
+            ablate_payload["packet_dir"],
+        ]
+    )
+    cycle2_payload = json.loads(capsys.readouterr().out)
+
+    assert cycle2_exit == 0
+    assert cycle2_payload["accepted"] is True
+    assert set(cycle2_payload["artifact_ids"]) == set(
+        ABLATION_INFORMED_REVISION_ARTIFACT_TYPES
+    )
+    assert cycle2_payload["counts"]["model_calls"] == 0
+    assert cycle2_payload["gate_report"]["eligible"] is False
+
+    openai_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "revise-from-ablation",
+            "--client",
+            "openai",
+            "--executed-ablation-packet",
+            ablate_payload["packet_dir"],
         ]
     )
     openai_payload = json.loads(capsys.readouterr().out)

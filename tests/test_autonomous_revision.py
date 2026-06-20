@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,11 @@ from abi.modules.autonomous_revision import (
     _load_revision_subject,
     _validate_revision_work_order_payload,
     run_autonomous_revision,
+)
+from abi.modules.ablation_informed_revision import (
+    ABLATION_INFORMED_REVISION_ARTIFACT_TYPES,
+    BASE_CHOICE_CONTROLLER_COMPOSED,
+    run_ablation_informed_revision,
 )
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
@@ -186,6 +192,18 @@ def build_fake_revision_packet(tmp_path: Path, *, with_rival: bool = True):
     assert revision.exit_code == 0
     assert revision.payload["accepted"] is True
     return config, revision.payload
+
+
+def build_fake_executed_ablation_packet(tmp_path: Path):
+    config, revision_payload = build_fake_revision_packet(tmp_path, with_rival=True)
+    ablation = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=revision_payload["packet_dir"],
+    )
+    assert ablation.exit_code == 0
+    assert ablation.payload["accepted"] is True
+    return config, ablation.payload
 
 
 def revision_stub_factory(
@@ -2505,6 +2523,165 @@ def test_executed_ablation_invalid_model_output_fails_before_parsed_artifact(tmp
     assert failed_call["parsed_output_artifact_id"] is None
     assert "ablation_internal_reader_comparison" not in result.payload["artifact_ids"]
     assert "executed_ablation_gate_report" not in result.payload["artifact_ids"]
+
+
+def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert set(result.payload["artifact_ids"]) == set(
+        ABLATION_INFORMED_REVISION_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["model_calls"] == 0
+
+    subject = read_payload(
+        result.payload["artifact_paths"]["ablation_informed_revision_subject_manifest"]
+    )
+    assert subject["source_autonomous_revision_packet_id"] == "packet_0001"
+    assert subject["source_reader_lab_packet_id"] == "packet_0001"
+    assert subject["strongest_rival"] is not None
+
+    evidence = read_payload(result.payload["artifact_paths"]["ablation_evidence_summary"])
+    assert evidence["previous_repair_treated_as_proven"] is False
+    assert evidence["packet_0030_treated_as_proven_improvement"] is False
+    assert evidence["previous_repair_causal_status"] in {
+        "noncausal_or_cosmetic",
+        "ambiguous",
+        "useful_but_insufficient",
+    }
+    assert "record" in evidence["evidence_interpretation"]
+
+    base = read_payload(result.payload["artifact_paths"]["cycle2_base_candidate_selection"])
+    assert base["selected_base_choice"] == BASE_CHOICE_CONTROLLER_COMPOSED
+    assert base["previous_repair_treated_as_proven"] is False
+    assert base["embodiment_preserving_insight_represented"] is True
+    assert base["record_law_proof_compression_deferred_to_patch"] is True
+    assert "packet_0030_revised_candidate" in base["allowed_choices"]
+    assert "as if nothing happened" not in base["selected_base_text"]
+
+    handle = read_payload(result.payload["artifact_paths"]["selected_next_failure_or_handle"])
+    assert handle["selected_next_handle"] == "record_law_proof_answer_compression"
+    assert handle["strongest_rival_pressure_preserved"] is True
+    assert "opening patch" in handle["why_better_supported_than_repeating_opening_patch"]
+
+    work_order = read_payload(
+        result.payload["artifact_paths"]["ablation_informed_revision_work_order"]
+    )
+    assert work_order["controller_owned"] is True
+    assert work_order["selected_base_candidate"] == BASE_CHOICE_CONTROLLER_COMPOSED
+    assert work_order["base_candidate_text_sha256"] == base["selected_base_text_sha256"]
+    assert work_order["patchable_spans"]
+    assert work_order["strongest_rival_reference"] is not None
+
+    patch = read_payload(result.payload["artifact_paths"]["cycle2_patch_proposal"])
+    assert patch["bounded_patch_set"] is True
+    assert patch["full_rewrite"] is False
+    assert patch["patches"]
+    assert all(item["bounded_patch"] is True for item in patch["patches"])
+
+    revised = read_payload(result.payload["artifact_paths"]["cycle2_revised_candidate_text"])
+    assert revised["assembled_by_controller"] is True
+    assert revised["bounded_recomposition"] is True
+    assert revised["full_rewrite"] is False
+    assert revised["non_final"] is True
+    assert revised["not_finalization_eligible"] is True
+    assert revised["supersedes_packet_0030_patch"] is True
+    assert revised["source_patch_ids"]
+
+    diff = read_payload(result.payload["artifact_paths"]["cycle2_revision_diff_report"])
+    assert diff["controller_owned"] is True
+    assert diff["changed_spans"]
+    assert all(span["before_text"] for span in diff["changed_spans"])
+    assert all(span["after_text"] for span in diff["changed_spans"])
+    assert all("evidence_source" in span for span in diff["changed_spans"])
+
+    comparison = read_payload(
+        result.payload["artifact_paths"]["cycle2_preliminary_old_new_rival_comparison"]
+    )
+    assert comparison["preliminary_not_proof"] is True
+    assert comparison["does_not_count_as_executed_ablation_evidence"] is True
+    assert comparison["record_law_proof_compression_improved_discovery"] is True
+    assert comparison["cycle2_should_proceed_to_executed_ablation_next"] is True
+
+    gate = read_payload(result.payload["artifact_paths"]["cycle2_gate_report"])
+    assert gate["eligible"] is False
+    assert gate["passed"] is False
+    assert gate["final_gates_marked_passed"] == []
+    assert gate["cycle2_requires_executed_ablation_before_claim"] is True
+    assert gate["human_validation_required"] is False
+    assert gate["paper_validation_required"] is False
+    assert gate["phase_shift_claim"] is False
+
+    with connect(config.db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+    assert "paper" not in final_report.message.lower()
+
+
+def test_ablation_informed_revision_refuses_missing_packet(tmp_path):
+    config = config_for(tmp_path)
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=tmp_path / "missing_ablation_packet",
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "not found" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_ablation_informed_revision_refuses_without_causal_effect_report(tmp_path):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    invalid_packet = tmp_path / "invalid_executed_ablation_packet"
+    shutil.copytree(Path(ablation_payload["packet_dir"]), invalid_packet)
+    packet_path = invalid_packet / "executed_ablation_packet.json"
+    envelope = json.loads(packet_path.read_text(encoding="utf-8"))
+    del envelope["payload"]["artifact_ids"]["ablation_causal_effect_report"]
+    packet_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=invalid_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "ablation_causal_effect_report" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_ablation_informed_revision_openai_guard_refuses_before_model_call(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "--allow-live-model" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
 
 
 def test_stubbed_openai_autonomous_revision_invalid_output_fails_closed(tmp_path):

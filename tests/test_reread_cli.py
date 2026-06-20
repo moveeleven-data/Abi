@@ -30,7 +30,11 @@ def test_reread_demo_cli_outputs_summary(tmp_path, capsys, monkeypatch):
     assert status_payload["latest_run"]["active_phase"] == "phase2_minimal_reread"
 
 
-def test_readme_documents_reread_demo_command():
-    readme = Path("README.md").read_text(encoding="utf-8")
+def test_reread_demo_command_remains_available(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("ABI_DB_PATH", raising=False)
+    monkeypatch.delenv("ABI_RUNS_DIR", raising=False)
+    monkeypatch.delenv("ABI_OUTPUTS_DIR", raising=False)
 
-    assert r".\.venv\Scripts\abi.exe reread demo" in readme
+    assert main(["--root", str(tmp_path), "reread", "demo"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["packet_id"] == "packet_0001"
