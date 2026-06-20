@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import abi.modules.ablation_informed_revision as ablation_informed_revision_module
 import abi.modules.autonomous_revision as autonomous_revision_module
 from abi.artifacts import list_artifacts
 from abi.config import AbiConfig
@@ -689,22 +690,42 @@ class StubAblationInformedRevisionClient:
             )
         if request.schema == ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA:
             prompt = json.loads(request.input_text)
-            span_id = prompt["patchable_span_ids"][0]
+            replacements = {
+                "cycle2_patch_span_001": (
+                    "together they make a record, local and plain, not a message sent "
+                    "from elsewhere."
+                ),
+                "cycle2_patch_span_002": "It keeps a law of staying and change.",
+                "cycle2_patch_span_003": (
+                    "The proof, if there is one, has to join the line from within it."
+                ),
+                "cycle2_patch_span_005": "No completed answer has entered this local story.",
+            }
+            patches = []
+            for span in prompt["patchable_spans"]:
+                span_id = span["patch_span_id"]
+                replacement = replacements.get(
+                    span_id,
+                    f"{span['exact_text']} compressed",
+                )
+                if self.mode == "noop_patch" and not patches:
+                    replacement = span["exact_text"]
+                patches.append(
+                    {
+                        "patch_span_id": span_id,
+                        "replacement_text": replacement,
+                        "rationale": (
+                            "Compress explanation into local object-bound pressure."
+                        ),
+                        "local_law_explanation": (
+                            "The scene should carry the pressure before naming it."
+                        ),
+                        "uncertainty": "medium",
+                    }
+                )
             return dump_json(
                 {
-                    "patches": [
-                        {
-                            "patch_span_id": span_id,
-                            "replacement_text": "It held the night in the grain",
-                            "rationale": (
-                                "Compress explanation into a local object action."
-                            ),
-                            "local_law_explanation": (
-                                "The grain can carry the pressure without naming proof."
-                            ),
-                            "uncertainty": "medium",
-                        }
-                    ],
+                    "patches": patches,
                     "preserves_necessary_philosophical_pressure": (
                         "The replacement keeps the night's pressure in the object-world."
                     ),
@@ -2689,6 +2710,13 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
     assert patch["patches"]
     assert all(item["bounded_patch"] is True for item in patch["patches"])
 
+    ledger = read_payload(result.payload["artifact_paths"]["cycle2_applied_patch_ledger"])
+    assert ledger["controller_owned"] is True
+    assert ledger["proposed_patch_count"] == len(patch["patches"])
+    assert ledger["applied_patch_count"] == len(patch["patches"])
+    assert ledger["rejected_patch_count"] == 0
+    assert ledger["all_applied_patches_reflected_in_text"] is True
+
     revised = read_payload(result.payload["artifact_paths"]["cycle2_revised_candidate_text"])
     assert revised["assembled_by_controller"] is True
     assert revised["bounded_recomposition"] is True
@@ -2696,7 +2724,9 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
     assert revised["non_final"] is True
     assert revised["not_finalization_eligible"] is True
     assert revised["supersedes_packet_0030_patch"] is True
-    assert revised["source_patch_ids"]
+    assert revised["applied_patch_ids"] == ledger["applied_patch_ids"]
+    assert revised["source_patch_ids"] == ledger["applied_patch_ids"]
+    assert revised["applied_patch_count"] == ledger["applied_patch_count"]
 
     diff = read_payload(result.payload["artifact_paths"]["cycle2_revision_diff_report"])
     assert diff["controller_owned"] is True
@@ -2704,12 +2734,18 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
     assert all(span["before_text"] for span in diff["changed_spans"])
     assert all(span["after_text"] for span in diff["changed_spans"])
     assert all("evidence_source" in span for span in diff["changed_spans"])
+    assert diff["diff_changed_span_count"] == ledger["applied_patch_count"]
+    assert diff["source_patch_ids"] == ledger["applied_patch_ids"]
+    assert diff["text_matches_diff"] is True
+    assert diff["all_applied_patches_reflected_in_text"] is True
 
     comparison = read_payload(
         result.payload["artifact_paths"]["cycle2_preliminary_old_new_rival_comparison"]
     )
     assert comparison["preliminary_not_proof"] is True
     assert comparison["does_not_count_as_executed_ablation_evidence"] is True
+    assert comparison["comparison_uses_actual_revised_text"] is True
+    assert comparison["actual_revised_text_sha256"] == revised["text_sha256"]
     assert comparison["record_law_proof_compression_improved_discovery"] is True
     assert comparison["cycle2_should_proceed_to_executed_ablation_next"] is True
 
@@ -2718,6 +2754,9 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
     assert gate["passed"] is False
     assert gate["final_gates_marked_passed"] == []
     assert gate["cycle2_requires_executed_ablation_before_claim"] is True
+    assert gate["integrity"]["text_diff_consistency_passed"] is True
+    assert gate["integrity"]["comparison_uses_actual_revised_text"] is True
+    assert gate["integrity"]["ready_for_executed_ablation"] is True
     assert gate["human_validation_required"] is False
     assert gate["paper_validation_required"] is False
     assert gate["phase_shift_claim"] is False
@@ -2850,6 +2889,7 @@ def test_ablation_informed_revision_stubbed_openai_success_is_controller_bounded
     work_order = read_payload(
         result.payload["artifact_paths"]["ablation_informed_revision_work_order"]
     )
+    ledger = read_payload(result.payload["artifact_paths"]["cycle2_applied_patch_ledger"])
     revised = read_payload(result.payload["artifact_paths"]["cycle2_revised_candidate_text"])
     diff = read_payload(result.payload["artifact_paths"]["cycle2_revision_diff_report"])
     comparison = read_payload(
@@ -2894,18 +2934,42 @@ def test_ablation_informed_revision_stubbed_openai_success_is_controller_bounded
     assert work_order["patchable_spans"]
     assert patch["bounded_patch_set"] is True
     assert patch["full_rewrite"] is False
-    assert patch["patches"][0]["patch_span_id"] in work_order["patchable_span_ids"]
-    assert patch["patches"][0]["before_text_owned_by_controller"]
+    assert len(patch["patches"]) == len(work_order["patchable_spans"])
+    assert all(
+        item["patch_span_id"] in work_order["patchable_span_ids"]
+        for item in patch["patches"]
+    )
+    assert all(item["before_text_owned_by_controller"] for item in patch["patches"])
+
+    assert ledger["proposed_patch_count"] == len(patch["patches"])
+    assert ledger["applied_patch_count"] == len(patch["patches"])
+    assert ledger["rejected_patch_count"] == 0
+    assert ledger["applied_patch_ids"] == [item["patch_id"] for item in patch["patches"]]
+    assert ledger["all_applied_patches_reflected_in_text"] is True
 
     assert revised["assembled_by_controller"] is True
     assert revised["full_rewrite"] is False
-    assert revised["source_patch_ids"]
+    assert revised["source_patch_ids"] == ledger["applied_patch_ids"]
+    assert revised["applied_patch_ids"] == ledger["applied_patch_ids"]
+    assert revised["applied_patch_count"] == ledger["applied_patch_count"]
     assert diff["controller_owned"] is True
-    assert diff["changed_spans"][0]["before_text"]
+    assert diff["diff_changed_span_count"] == ledger["applied_patch_count"]
+    assert diff["source_patch_ids"] == ledger["applied_patch_ids"]
+    assert diff["text_matches_diff"] is True
+    assert diff["all_diff_spans_reflected_in_text"] is True
+    assert all(span["before_text"] for span in diff["changed_spans"])
     assert comparison["preliminary_not_proof"] is True
     assert comparison["does_not_count_as_executed_ablation_evidence"] is True
+    assert comparison["comparison_uses_actual_revised_text"] is True
+    assert comparison["actual_revised_text_sha256"] == revised["text_sha256"]
     assert gate["eligible"] is False
     assert gate["passed"] is False
+    assert gate["integrity"]["proposed_patch_count"] == ledger["proposed_patch_count"]
+    assert gate["integrity"]["applied_patch_count"] == ledger["applied_patch_count"]
+    assert gate["integrity"]["rejected_patch_count"] == 0
+    assert gate["integrity"]["text_diff_consistency_passed"] is True
+    assert gate["integrity"]["comparison_uses_actual_revised_text"] is True
+    assert gate["integrity"]["ready_for_executed_ablation"] is True
     assert gate["human_validation_required"] is False
     assert gate["paper_validation_required"] is False
     assert gate["phase_shift_claim"] is False
@@ -2919,6 +2983,126 @@ def test_ablation_informed_revision_stubbed_openai_success_is_controller_bounded
         )
     assert final_report.refused is True
     assert "paper" not in final_report.message.lower()
+
+
+def test_ablation_informed_revision_stubbed_openai_rejects_noop_patch_without_diff(
+    tmp_path,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(clients, mode="noop_patch"),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+
+    patch = read_payload(result.payload["artifact_paths"]["cycle2_patch_proposal"])
+    ledger = read_payload(result.payload["artifact_paths"]["cycle2_applied_patch_ledger"])
+    revised = read_payload(result.payload["artifact_paths"]["cycle2_revised_candidate_text"])
+    diff = read_payload(result.payload["artifact_paths"]["cycle2_revision_diff_report"])
+
+    assert ledger["proposed_patch_count"] == len(patch["patches"])
+    assert ledger["rejected_patch_count"] == 1
+    assert ledger["rejected_patch_ids"] == ["cycle2_patch_001"]
+    assert "cycle2_patch_001" not in revised["applied_patch_ids"]
+    assert "cycle2_patch_001" in revised["rejected_patch_ids"]
+    assert all(
+        span["patch_id"] != "cycle2_patch_001" for span in diff["changed_spans"]
+    )
+    assert diff["diff_changed_span_count"] == ledger["applied_patch_count"]
+    assert diff["text_matches_diff"] is True
+
+
+def test_ablation_informed_revision_silent_dropped_patch_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    original = ablation_informed_revision_module._build_revised_candidate
+
+    def _dropped_source_patch_ids(*args, **kwargs):
+        payload = original(*args, **kwargs)
+        payload["source_patch_ids"] = []
+        payload["applied_patch_ids"] = []
+        return payload
+
+    monkeypatch.setattr(
+        ablation_informed_revision_module,
+        "_build_revised_candidate",
+        _dropped_source_patch_ids,
+    )
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "source_patch_ids omits" in result.payload["message"]
+    assert "cycle2_applied_patch_ledger" in result.payload["artifact_ids"]
+    assert "cycle2_revised_candidate_text" not in result.payload["artifact_ids"]
+    assert "cycle2_revision_diff_report" not in result.payload["artifact_ids"]
+    assert "cycle2_preliminary_old_new_rival_comparison" not in result.payload["artifact_ids"]
+    assert "cycle2_gate_report" not in result.payload["artifact_ids"]
+    assert "cycle2_packet" not in result.payload["artifact_ids"]
+
+
+def test_ablation_informed_revision_unapplied_diff_patch_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    original = ablation_informed_revision_module._build_diff_report
+
+    def _diff_reports_unapplied_patch(*args, **kwargs):
+        payload = original(*args, **kwargs)
+        payload["changed_spans"].append(
+            {
+                "changed_span_id": "cycle2_change_unapplied",
+                "patch_id": "cycle2_patch_unapplied",
+                "patch_span_id": "cycle2_patch_span_unapplied",
+                "source_patch_span_ids": ["cycle2_patch_span_unapplied"],
+                "before_text": "not in base",
+                "after_text": "not in revised",
+                "operation_type": "replace",
+                "change_rationale": "test corruption",
+                "evidence_source": "test",
+                "preserves_or_supersedes_packet_0030_prior_patch": "supersedes",
+                "inside_target": True,
+                "within_selected_target": True,
+            }
+        )
+        payload["diff_changed_span_count"] = len(payload["changed_spans"])
+        return payload
+
+    monkeypatch.setattr(
+        ablation_informed_revision_module,
+        "_build_diff_report",
+        _diff_reports_unapplied_patch,
+    )
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "diff reports a patch" in result.payload["message"]
+    assert "cycle2_preliminary_old_new_rival_comparison" not in result.payload["artifact_ids"]
+    assert "cycle2_gate_report" not in result.payload["artifact_ids"]
+    assert "cycle2_packet" not in result.payload["artifact_ids"]
 
 
 def test_ablation_informed_revision_stubbed_openai_invented_base_fails_closed(

@@ -46,6 +46,7 @@ ABLATION_INFORMED_REVISION_ARTIFACT_TYPES = (
     "selected_next_failure_or_handle",
     "ablation_informed_revision_work_order",
     "cycle2_patch_proposal",
+    "cycle2_applied_patch_ledger",
     "cycle2_revised_candidate_text",
     "cycle2_revision_diff_report",
     "cycle2_preliminary_old_new_rival_comparison",
@@ -66,6 +67,10 @@ class AblationInformedRevisionResult:
     payload: dict[str, object]
     gate_records: tuple[GateRecord, ...] = ()
     model_results: tuple[ModelDriverResult, ...] = ()
+
+
+class AblationInformedRevisionIntegrityError(ValueError):
+    """Raised when controller patch ledger, revised text, and diff disagree."""
 
 
 @dataclass(frozen=True)
@@ -537,33 +542,82 @@ def _run_packet(
             fixture_only=fixture_only,
             model_call_id=None,
         )
-        payloads["cycle2_revised_candidate_text"] = _build_revised_candidate(
+        payloads["cycle2_applied_patch_ledger"] = _build_applied_patch_ledger(
             base_selection=payloads["cycle2_base_candidate_selection"],
+            work_order=payloads["ablation_informed_revision_work_order"],
             patch_proposal=payloads["cycle2_patch_proposal"],
             fixture_only=fixture_only,
         )
+        try:
+            _validate_applied_patch_ledger(payloads["cycle2_applied_patch_ledger"])
+        except AblationInformedRevisionIntegrityError as error:
+            return _failure_result(
+                client_name=client_name,
+                model=model,
+                subject=subject,
+                packet_dir=output_dir,
+                artifacts=artifacts,
+                payloads=payloads,
+                model_results=model_results,
+                message=str(error),
+            )
+        artifacts["cycle2_applied_patch_ledger"] = writer.write_artifact(
+            "cycle2_applied_patch_ledger",
+            payloads["cycle2_applied_patch_ledger"],
+            parent_ids=[
+                artifacts["cycle2_base_candidate_selection"].id,
+                artifacts["ablation_informed_revision_work_order"].id,
+                artifacts["cycle2_patch_proposal"].id,
+            ],
+        )
+
+        payloads["cycle2_revised_candidate_text"] = _build_revised_candidate(
+            base_selection=payloads["cycle2_base_candidate_selection"],
+            applied_patch_ledger=payloads["cycle2_applied_patch_ledger"],
+            applied_patch_ledger_artifact_id=artifacts["cycle2_applied_patch_ledger"].id,
+            fixture_only=fixture_only,
+        )
+
+        payloads["cycle2_revision_diff_report"] = _build_diff_report(
+            base_selection=payloads["cycle2_base_candidate_selection"],
+            work_order=payloads["ablation_informed_revision_work_order"],
+            applied_patch_ledger=payloads["cycle2_applied_patch_ledger"],
+            revised_candidate=payloads["cycle2_revised_candidate_text"],
+            fixture_only=fixture_only,
+        )
+        try:
+            _validate_text_diff_integrity(
+                applied_patch_ledger=payloads["cycle2_applied_patch_ledger"],
+                revised_candidate=payloads["cycle2_revised_candidate_text"],
+                diff_report=payloads["cycle2_revision_diff_report"],
+            )
+        except AblationInformedRevisionIntegrityError as error:
+            return _failure_result(
+                client_name=client_name,
+                model=model,
+                subject=subject,
+                packet_dir=output_dir,
+                artifacts=artifacts,
+                payloads=payloads,
+                model_results=model_results,
+                message=str(error),
+            )
+
         artifacts["cycle2_revised_candidate_text"] = writer.write_artifact(
             "cycle2_revised_candidate_text",
             payloads["cycle2_revised_candidate_text"],
             parent_ids=[
                 artifacts["cycle2_base_candidate_selection"].id,
                 artifacts["cycle2_patch_proposal"].id,
+                artifacts["cycle2_applied_patch_ledger"].id,
             ],
-        )
-
-        payloads["cycle2_revision_diff_report"] = _build_diff_report(
-            base_selection=payloads["cycle2_base_candidate_selection"],
-            work_order=payloads["ablation_informed_revision_work_order"],
-            patch_proposal=payloads["cycle2_patch_proposal"],
-            revised_candidate=payloads["cycle2_revised_candidate_text"],
-            fixture_only=fixture_only,
         )
         artifacts["cycle2_revision_diff_report"] = writer.write_artifact(
             "cycle2_revision_diff_report",
             payloads["cycle2_revision_diff_report"],
             parent_ids=[
                 artifacts["ablation_informed_revision_work_order"].id,
-                artifacts["cycle2_patch_proposal"].id,
+                artifacts["cycle2_applied_patch_ledger"].id,
                 artifacts["cycle2_revised_candidate_text"].id,
             ],
         )
@@ -589,7 +643,9 @@ def _run_packet(
         payloads["cycle2_gate_report"] = _build_gate_report(
             subject=subject,
             evidence_summary=payloads["ablation_evidence_summary"],
+            applied_patch_ledger=payloads["cycle2_applied_patch_ledger"],
             revised_candidate=payloads["cycle2_revised_candidate_text"],
+            diff_report=payloads["cycle2_revision_diff_report"],
             preliminary_comparison=payloads[
                 "cycle2_preliminary_old_new_rival_comparison"
             ],
@@ -1414,21 +1470,149 @@ def _build_patch_proposal(
     }
 
 
-def _build_revised_candidate(
+def _build_applied_patch_ledger(
     *,
     base_selection: dict[str, Any],
+    work_order: dict[str, Any],
     patch_proposal: dict[str, Any],
     fixture_only: bool,
 ) -> dict[str, Any]:
     text = str(base_selection["selected_base_text"])
-    source_patch_ids = []
-    source_patch_span_ids = []
+    spans_by_id = {
+        str(span["patch_span_id"]): span for span in work_order["patchable_spans"]
+    }
+    ledger_entries = []
     for patch in patch_proposal["patches"]:
-        span_before = _span_before_from_patch_id(base_selection, patch)
-        if span_before and span_before in text:
-            text = text.replace(span_before, str(patch["replacement_text"]), 1)
-            source_patch_ids.append(str(patch["patch_id"]))
-            source_patch_span_ids.append(str(patch["patch_span_id"]))
+        patch_id = str(patch["patch_id"])
+        patch_span_id = str(patch["patch_span_id"])
+        span = spans_by_id.get(patch_span_id)
+        before_text = str(span["exact_text"]) if span is not None else ""
+        after_text = str(patch["replacement_text"])
+        status = "rejected"
+        rejection_reason = "patch_span_id_not_in_controller_inventory"
+        changed = False
+        controller_applied = False
+
+        if span is not None:
+            if before_text not in text:
+                rejection_reason = "before_text_not_found_in_current_controller_text"
+            elif before_text == after_text:
+                rejection_reason = "replacement_text_matches_before_text"
+            else:
+                text = text.replace(before_text, after_text, 1)
+                status = "applied"
+                rejection_reason = None
+                changed = True
+                controller_applied = True
+
+        ledger_entries.append(
+            {
+                "patch_id": patch_id,
+                "patch_span_id": patch_span_id,
+                "target_span_id": patch_span_id,
+                "patch_target_id": patch["patch_target_id"],
+                "before_text": before_text,
+                "after_text": after_text,
+                "operation_type": "replace",
+                "application_status": status,
+                "rejection_reason": rejection_reason,
+                "changed": changed,
+                "source_evidence": patch["evidence_source"],
+                "evidence_supporting_change": [
+                    patch["evidence_source"],
+                    "cycle2_patch_proposal",
+                ],
+                "controller_applied": controller_applied,
+                "bounded_patch": bool(patch.get("bounded_patch")),
+                "rationale": patch["rationale"],
+                "local_law_explanation": patch.get("local_law_explanation"),
+                "uncertainty": patch.get("uncertainty"),
+                "reflected_after_application": (
+                    after_text in text if status == "applied" else False
+                ),
+            }
+        )
+
+    applied = [
+        entry for entry in ledger_entries if entry["application_status"] == "applied"
+    ]
+    rejected = [
+        entry for entry in ledger_entries if entry["application_status"] == "rejected"
+    ]
+    return {
+        "worker": "cycle2_applied_patch_ledger_v1_controller",
+        "controller_owned": True,
+        "base_candidate_choice": base_selection["selected_base_choice"],
+        "base_text_sha256": base_selection["selected_base_text_sha256"],
+        "revised_text": text,
+        "revised_text_sha256": sha256_text(text),
+        "ledger_entries": ledger_entries,
+        "proposed_patch_count": len(ledger_entries),
+        "applied_patch_count": len(applied),
+        "rejected_patch_count": len(rejected),
+        "applied_patch_ids": [str(entry["patch_id"]) for entry in applied],
+        "rejected_patch_ids": [str(entry["patch_id"]) for entry in rejected],
+        "applied_patch_span_ids": [str(entry["patch_span_id"]) for entry in applied],
+        "rejected_patch_span_ids": [str(entry["patch_span_id"]) for entry in rejected],
+        "all_proposed_patches_accounted_for": (
+            len(applied) + len(rejected) == len(ledger_entries)
+        ),
+        "all_applied_patches_reflected_in_text": all(
+            bool(entry["reflected_after_application"]) for entry in applied
+        ),
+        "silent_drop_detected": False,
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
+def _validate_applied_patch_ledger(ledger: dict[str, Any]) -> None:
+    entries = list(ledger.get("ledger_entries", []))
+    statuses = [str(entry.get("application_status", "")) for entry in entries]
+    invalid = [status for status in statuses if status not in {"applied", "rejected"}]
+    if invalid:
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; patch ledger contains a patch "
+            "that is neither applied nor rejected."
+        )
+    if len(statuses) != int(ledger["proposed_patch_count"]):
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; proposed patch count does not "
+            "match patch ledger entries."
+        )
+    if statuses.count("applied") != int(ledger["applied_patch_count"]):
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; applied patch count is inconsistent."
+        )
+    if statuses.count("rejected") != int(ledger["rejected_patch_count"]):
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; rejected patch count is inconsistent."
+        )
+    if not ledger["all_proposed_patches_accounted_for"]:
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; patch ledger silently dropped a patch."
+        )
+    if not ledger["all_applied_patches_reflected_in_text"]:
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; applied patch is not reflected "
+            "in revised text."
+        )
+
+
+def _build_revised_candidate(
+    *,
+    base_selection: dict[str, Any],
+    applied_patch_ledger: dict[str, Any],
+    applied_patch_ledger_artifact_id: str,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    text = str(applied_patch_ledger["revised_text"])
+    applied_patch_ids = list(applied_patch_ledger["applied_patch_ids"])
+    rejected_patch_ids = list(applied_patch_ledger["rejected_patch_ids"])
+    applied_patch_span_ids = list(applied_patch_ledger["applied_patch_span_ids"])
     return {
         "worker": "cycle2_revised_candidate_text_v1_controller",
         "text": text,
@@ -1437,8 +1621,21 @@ def _build_revised_candidate(
         "assembled_by_controller": True,
         "base_candidate_choice": base_selection["selected_base_choice"],
         "base_candidate_text_sha256": base_selection["selected_base_text_sha256"],
-        "source_patch_ids": source_patch_ids,
-        "source_patch_span_ids": source_patch_span_ids,
+        "source_patch_ids": applied_patch_ids,
+        "source_patch_span_ids": applied_patch_span_ids,
+        "applied_patch_ids": applied_patch_ids,
+        "rejected_patch_ids": rejected_patch_ids,
+        "applied_patch_count": int(applied_patch_ledger["applied_patch_count"]),
+        "rejected_patch_count": int(applied_patch_ledger["rejected_patch_count"]),
+        "proposed_patch_count": int(applied_patch_ledger["proposed_patch_count"]),
+        "applied_patch_ledger": {
+            "artifact_id": applied_patch_ledger_artifact_id,
+            "applied_patch_count": int(applied_patch_ledger["applied_patch_count"]),
+            "rejected_patch_count": int(applied_patch_ledger["rejected_patch_count"]),
+            "all_applied_patches_reflected_in_text": bool(
+                applied_patch_ledger["all_applied_patches_reflected_in_text"]
+            ),
+        },
         "bounded_recomposition": True,
         "full_rewrite": False,
         "previous_repair_treated_as_proven": False,
@@ -1457,35 +1654,44 @@ def _build_diff_report(
     *,
     base_selection: dict[str, Any],
     work_order: dict[str, Any],
-    patch_proposal: dict[str, Any],
+    applied_patch_ledger: dict[str, Any],
     revised_candidate: dict[str, Any],
     fixture_only: bool,
 ) -> dict[str, Any]:
-    spans_by_id = {
-        str(span["patch_span_id"]): span for span in work_order["patchable_spans"]
-    }
     changed_spans = []
-    for patch in patch_proposal["patches"]:
-        span = spans_by_id[str(patch["patch_span_id"])]
-        before = str(span["exact_text"])
-        after = str(patch["replacement_text"])
+    for entry in applied_patch_ledger["ledger_entries"]:
+        if entry["application_status"] != "applied":
+            continue
         changed_spans.append(
             {
                 "changed_span_id": f"cycle2_change_{len(changed_spans) + 1:03d}",
-                "patch_id": patch["patch_id"],
-                "patch_span_id": patch["patch_span_id"],
-                "source_patch_span_ids": [patch["patch_span_id"]],
-                "before_text": before,
-                "after_text": after,
-                "change_rationale": patch["rationale"],
-                "evidence_source": patch["evidence_source"],
-                "preserves_or_supersedes_packet_0030_prior_patch": patch[
-                    "preserves_or_supersedes_packet_0030_prior_patch"
-                ],
+                "patch_id": entry["patch_id"],
+                "patch_span_id": entry["patch_span_id"],
+                "source_patch_span_ids": [entry["patch_span_id"]],
+                "before_text": entry["before_text"],
+                "after_text": entry["after_text"],
+                "operation_type": entry["operation_type"],
+                "change_rationale": entry["rationale"],
+                "evidence_source": entry["source_evidence"],
+                "preserves_or_supersedes_packet_0030_prior_patch": "supersedes",
                 "inside_target": True,
                 "within_selected_target": True,
             }
         )
+    text_matches_diff = _diff_reconstructs_revised_text(
+        base_text=str(base_selection["selected_base_text"]),
+        changed_spans=changed_spans,
+        revised_text=str(revised_candidate["text"]),
+    )
+    all_diff_spans_reflected = all(
+        str(span["after_text"]) in str(revised_candidate["text"])
+        for span in changed_spans
+    )
+    all_applied_reflected = bool(
+        applied_patch_ledger["all_applied_patches_reflected_in_text"]
+    )
+    applied_patch_count = int(applied_patch_ledger["applied_patch_count"])
+    rejected_patch_count = int(applied_patch_ledger["rejected_patch_count"])
     return {
         "worker": "cycle2_revision_diff_report_v1_controller",
         "controller_owned": True,
@@ -1496,6 +1702,14 @@ def _build_diff_report(
         "source_patch_span_ids": list(revised_candidate["source_patch_span_ids"]),
         "changed_spans": changed_spans,
         "material_change_count": len(changed_spans),
+        "proposed_patch_count": int(applied_patch_ledger["proposed_patch_count"]),
+        "applied_patch_count": applied_patch_count,
+        "rejected_patch_count": rejected_patch_count,
+        "diff_changed_span_count": len(changed_spans),
+        "text_matches_diff": text_matches_diff,
+        "all_applied_patches_reflected_in_text": all_applied_reflected,
+        "all_diff_spans_reflected_in_text": all_diff_spans_reflected,
+        "rejected_patch_ids": list(applied_patch_ledger["rejected_patch_ids"]),
         "bounded_change": True,
         "full_rewrite": False,
         "all_material_changes_reported": True,
@@ -1507,6 +1721,64 @@ def _build_diff_report(
         "no_phase_shift_claim": True,
         "fixture_only": fixture_only,
     }
+
+
+def _diff_reconstructs_revised_text(
+    *,
+    base_text: str,
+    changed_spans: list[dict[str, Any]],
+    revised_text: str,
+) -> bool:
+    reconstructed = base_text
+    for span in changed_spans:
+        before_text = str(span["before_text"])
+        after_text = str(span["after_text"])
+        if before_text not in reconstructed:
+            return False
+        reconstructed = reconstructed.replace(before_text, after_text, 1)
+    return sha256_text(reconstructed) == sha256_text(revised_text)
+
+
+def _validate_text_diff_integrity(
+    *,
+    applied_patch_ledger: dict[str, Any],
+    revised_candidate: dict[str, Any],
+    diff_report: dict[str, Any],
+) -> None:
+    applied_patch_ids = list(applied_patch_ledger["applied_patch_ids"])
+    revised_source_patch_ids = list(revised_candidate["source_patch_ids"])
+    diff_patch_ids = [str(span["patch_id"]) for span in diff_report["changed_spans"]]
+    if revised_source_patch_ids != applied_patch_ids:
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; revised_candidate_text "
+            "source_patch_ids omits or reorders an applied patch."
+        )
+    if diff_patch_ids != applied_patch_ids:
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; diff reports a patch that was "
+            "not applied or omits an applied patch."
+        )
+    if int(diff_report["diff_changed_span_count"]) != int(
+        applied_patch_ledger["applied_patch_count"]
+    ):
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; diff_changed_span_count does not "
+            "match applied_patch_count."
+        )
+    if not diff_report["text_matches_diff"]:
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; revised text does not match diff."
+        )
+    if not diff_report["all_applied_patches_reflected_in_text"]:
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; not all applied patches are "
+            "reflected in revised text."
+        )
+    if not diff_report["all_diff_spans_reflected_in_text"]:
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; diff span after_text is not "
+            "reflected in revised text."
+        )
 
 
 def _build_preliminary_comparison(
@@ -1531,6 +1803,9 @@ def _build_preliminary_comparison(
         "comparison_basis": "deterministic ablation-informed preliminary comparison; not proof",
         "preliminary_not_proof": True,
         "does_not_count_as_executed_ablation_evidence": True,
+        "comparison_uses_actual_revised_text": True,
+        "actual_revised_text_sha256": revised_candidate["text_sha256"],
+        "actual_revised_word_count": revised_candidate["word_count"],
         "compared_items": [
             "original Text A",
             "packet_0030 revised Text A",
@@ -1579,7 +1854,9 @@ def _build_gate_report(
     *,
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
+    applied_patch_ledger: dict[str, Any],
     revised_candidate: dict[str, Any],
+    diff_report: dict[str, Any],
     preliminary_comparison: dict[str, Any],
     fixture_only: bool,
 ) -> dict[str, Any]:
@@ -1590,6 +1867,18 @@ def _build_gate_report(
     ]
     if fixture_only:
         unresolved.append("fake ablation-informed revision mode is fixture-only")
+    text_diff_consistency = bool(
+        diff_report["text_matches_diff"]
+        and diff_report["all_applied_patches_reflected_in_text"]
+        and diff_report["all_diff_spans_reflected_in_text"]
+        and diff_report["diff_changed_span_count"]
+        == applied_patch_ledger["applied_patch_count"]
+    )
+    comparison_uses_actual = bool(
+        preliminary_comparison["comparison_uses_actual_revised_text"]
+        and preliminary_comparison["actual_revised_text_sha256"]
+        == revised_candidate["text_sha256"]
+    )
     gate_results = [
         _gate_result("ablation_informed_revision_packet_exists", True),
         _gate_result(
@@ -1598,6 +1887,11 @@ def _build_gate_report(
             in {"noncausal_or_cosmetic", "ambiguous"},
         ),
         _gate_result("cycle2_bounded_revision_produced", True),
+        _gate_result("cycle2_text_diff_integrity_passed", text_diff_consistency),
+        _gate_result(
+            "cycle2_comparison_uses_actual_revised_text",
+            comparison_uses_actual,
+        ),
         _gate_result("strongest_rival_pressure_preserved", True),
         _gate_result(
             "cycle2_executed_ablation_completed",
@@ -1622,6 +1916,16 @@ def _build_gate_report(
         ],
         "previous_repair_treated_as_proven": False,
         "cycle2_bounded_revision_produced": bool(revised_candidate["text"]),
+        "integrity": {
+            "proposed_patch_count": applied_patch_ledger["proposed_patch_count"],
+            "applied_patch_count": applied_patch_ledger["applied_patch_count"],
+            "rejected_patch_count": applied_patch_ledger["rejected_patch_count"],
+            "text_diff_consistency_passed": text_diff_consistency,
+            "comparison_uses_actual_revised_text": comparison_uses_actual,
+            "ready_for_executed_ablation": (
+                text_diff_consistency and comparison_uses_actual
+            ),
+        },
         "strongest_rival_pressure_preserved": preliminary_comparison[
             "strongest_rival_remains_stronger"
         ],
