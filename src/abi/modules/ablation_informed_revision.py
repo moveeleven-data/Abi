@@ -57,11 +57,18 @@ ABLATION_INFORMED_REVISION_ARTIFACT_TYPES = (
 )
 
 BASE_CHOICE_ORIGINAL = "original_candidate"
+BASE_CHOICE_SOURCE_REVISION_CURRENT = "source_revision_current_candidate"
 BASE_CHOICE_PACKET_0030 = "packet_0030_revised_candidate"
 BASE_CHOICE_EMBODIMENT = "embodiment_preserving_ablation_variant"
 BASE_CHOICE_RECORD = "record_label_compression_ablation_variant"
 BASE_CHOICE_CONTROLLER_COMPOSED = "controller_composed_base_from_evidence_supported_changes"
 BASE_CHOICE_DOMINANT_VARIANT = "dominant_countable_ablation_variant"
+PIVOT_REPAIR_PRESERVING_BASE_CHOICES = frozenset(
+    {
+        BASE_CHOICE_SOURCE_REVISION_CURRENT,
+        BASE_CHOICE_CONTROLLER_COMPOSED,
+    }
+)
 
 HANDLE_RECORD_COMPRESSION = "record_law_proof_answer_compression"
 RESIDUAL_BLOCKER_CANDIDATES = (
@@ -380,6 +387,10 @@ def _run_packet(
             ],
         )
 
+    pivot_base_locked = _pivot_base_lock_required(
+        payloads["residual_blocker_pivot_report"],
+        payloads["ablation_evidence_summary"],
+    )
     if model_client is not None:
         base_parent_ids = [
             artifacts["ablation_evidence_summary"].id,
@@ -388,49 +399,89 @@ def _run_packet(
             subject.revision_artifacts["revised_candidate_text"].id,
             subject.artifacts["actual_ablation_variant_set"].id,
         ]
-        result = _run_base_selection_model(
-            config=config,
-            subject=subject,
-            output_dir=output_dir,
-            model_client=model_client,
-            evidence_summary=payloads["ablation_evidence_summary"],
-            dominance_report=payloads["ablation_evidence_dominance_report"],
-            residual_pivot_report=payloads["residual_blocker_pivot_report"],
-            parent_ids=base_parent_ids,
-        )
-        model_results.append(result)
-        if not result.accepted or result.parsed_payload is None:
-            return _failure_result(
-                client_name=client_name,
-                model=model,
-                subject=subject,
-                packet_dir=output_dir,
-                artifacts=artifacts,
-                payloads=payloads,
-                model_results=model_results,
-                message=_model_failure_message("base selection", result),
-            )
-        payloads["cycle2_base_candidate_selection"] = _build_base_selection(
-            subject,
-            payloads["ablation_evidence_summary"],
-            payloads["ablation_evidence_dominance_report"],
-            payloads["residual_blocker_pivot_report"],
-            model_payload=result.parsed_payload,
-            model_call_id=result.model_call.id,
-            fixture_only=fixture_only,
-        )
-        artifacts["cycle2_base_candidate_selection"], model_results[-1] = (
-            _write_model_produced_artifact(
+        if pivot_base_locked:
+            with connect(config.db_path) as connection:
+                writer = PacketWriter(
+                    connection=connection,
+                    run_id=subject.run_id,
+                    packet_dir=output_dir,
+                    lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+                    created_by="ablation_informed_revision_cycle_v1_controller",
+                    fixture_only=fixture_only,
+                    model_call_id=None,
+                )
+                payloads["cycle2_base_candidate_selection"] = _build_base_selection(
+                    subject,
+                    payloads["ablation_evidence_summary"],
+                    payloads["ablation_evidence_dominance_report"],
+                    payloads["residual_blocker_pivot_report"],
+                    fixture_only=fixture_only,
+                )
+                try:
+                    _validate_pivot_locked_base_selection(
+                        subject=subject,
+                        base_selection=payloads["cycle2_base_candidate_selection"],
+                    )
+                except AblationInformedRevisionIntegrityError as error:
+                    return _failure_result(
+                        client_name=client_name,
+                        model=model,
+                        subject=subject,
+                        packet_dir=output_dir,
+                        artifacts=artifacts,
+                        payloads=payloads,
+                        model_results=model_results,
+                        message=str(error),
+                    )
+                artifacts["cycle2_base_candidate_selection"] = writer.write_artifact(
+                    "cycle2_base_candidate_selection",
+                    payloads["cycle2_base_candidate_selection"],
+                    parent_ids=base_parent_ids,
+                )
+        else:
+            result = _run_base_selection_model(
                 config=config,
-                result=result,
-                run_id=subject.run_id,
-                packet_dir=output_dir,
-                artifact_type="cycle2_base_candidate_selection",
-                payload=payloads["cycle2_base_candidate_selection"],
+                subject=subject,
+                output_dir=output_dir,
+                model_client=model_client,
+                evidence_summary=payloads["ablation_evidence_summary"],
+                dominance_report=payloads["ablation_evidence_dominance_report"],
+                residual_pivot_report=payloads["residual_blocker_pivot_report"],
                 parent_ids=base_parent_ids,
+            )
+            model_results.append(result)
+            if not result.accepted or result.parsed_payload is None:
+                return _failure_result(
+                    client_name=client_name,
+                    model=model,
+                    subject=subject,
+                    packet_dir=output_dir,
+                    artifacts=artifacts,
+                    payloads=payloads,
+                    model_results=model_results,
+                    message=_model_failure_message("base selection", result),
+                )
+            payloads["cycle2_base_candidate_selection"] = _build_base_selection(
+                subject,
+                payloads["ablation_evidence_summary"],
+                payloads["ablation_evidence_dominance_report"],
+                payloads["residual_blocker_pivot_report"],
+                model_payload=result.parsed_payload,
+                model_call_id=result.model_call.id,
                 fixture_only=fixture_only,
             )
-        )
+            artifacts["cycle2_base_candidate_selection"], model_results[-1] = (
+                _write_model_produced_artifact(
+                    config=config,
+                    result=result,
+                    run_id=subject.run_id,
+                    packet_dir=output_dir,
+                    artifact_type="cycle2_base_candidate_selection",
+                    payload=payloads["cycle2_base_candidate_selection"],
+                    parent_ids=base_parent_ids,
+                    fixture_only=fixture_only,
+                )
+            )
 
         handle_parent_ids = [
             artifacts["ablation_evidence_summary"].id,
@@ -502,6 +553,22 @@ def _run_packet(
                 payloads["residual_blocker_pivot_report"],
                 fixture_only=fixture_only,
             )
+            try:
+                _validate_pivot_locked_base_selection(
+                    subject=subject,
+                    base_selection=payloads["cycle2_base_candidate_selection"],
+                )
+            except AblationInformedRevisionIntegrityError as error:
+                return _failure_result(
+                    client_name=client_name,
+                    model=model,
+                    subject=subject,
+                    packet_dir=output_dir,
+                    artifacts=artifacts,
+                    payloads=payloads,
+                    model_results=model_results,
+                    message=str(error),
+                )
             artifacts["cycle2_base_candidate_selection"] = writer.write_artifact(
                 "cycle2_base_candidate_selection",
                 payloads["cycle2_base_candidate_selection"],
@@ -1011,8 +1078,14 @@ def _validate_model_base_selection(
     dominance_report: dict[str, Any],
     residual_pivot_report: dict[str, Any],
 ) -> None:
+    pivot_base_locked = bool(residual_pivot_report.get("pivot_required"))
     allowed_ids = {
-        option["base_candidate_id"] for option in _base_options(subject, dominance_report)
+        option["base_candidate_id"]
+        for option in _base_options(
+            subject,
+            dominance_report,
+            pivot_base_locked=pivot_base_locked,
+        )
     }
     selected = str(payload.get("selected_base_candidate_id", ""))
     if selected not in allowed_ids:
@@ -1023,7 +1096,7 @@ def _validate_model_base_selection(
     if not prior_status:
         raise ModelValidationError("prior_repair_causal_status must not be empty")
     pivot_preserve_choice = bool(residual_pivot_report.get("pivot_required")) and (
-        selected in {BASE_CHOICE_PACKET_0030, BASE_CHOICE_CONTROLLER_COMPOSED}
+        selected in PIVOT_REPAIR_PRESERVING_BASE_CHOICES
     )
     if bool(residual_pivot_report.get("pivot_required")):
         if not pivot_preserve_choice:
@@ -1593,7 +1666,7 @@ def _build_residual_pivot_report(
         "base_policy": {
             "preserve_current_useful_repair": pivot_required,
             "recommended_base_candidate_id": (
-                BASE_CHOICE_PACKET_0030 if pivot_required else None
+                BASE_CHOICE_SOURCE_REVISION_CURRENT if pivot_required else None
             ),
             "source_revision_not_treated_as_proven": True,
         },
@@ -1680,6 +1753,49 @@ def _select_residual_blocker(
     return preferred if preferred in candidate_ids else str(candidates[0]["blocker_id"])
 
 
+def _pivot_base_lock_required(
+    residual_pivot_report: dict[str, Any],
+    evidence_summary: dict[str, Any],
+) -> bool:
+    return bool(
+        residual_pivot_report["pivot_required"]
+        and residual_pivot_report["prior_handle_status"] == "exhausted_for_now"
+        and evidence_summary["previous_repair_causal_status"] == "useful_but_insufficient"
+        and evidence_summary["repair_has_causal_support"]
+        and evidence_summary["strongest_rival_pressure_remains_blocking"]
+    )
+
+
+def _validate_pivot_locked_base_selection(
+    *,
+    subject: AblationInformedSubject,
+    base_selection: dict[str, Any],
+) -> None:
+    if not base_selection["base_selection_locked_by_controller"]:
+        return
+    if base_selection["selected_base_candidate_id"] not in (
+        PIVOT_REPAIR_PRESERVING_BASE_CHOICES
+    ):
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; pivot-required base lock selected "
+            "a non-preserving base."
+        )
+    if not str(base_selection["selected_base_text"]).strip():
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; pivot-required base text is empty."
+        )
+    if (
+        base_selection["selected_base_candidate_id"]
+        == BASE_CHOICE_SOURCE_REVISION_CURRENT
+        and sha256_text(str(base_selection["selected_base_text"]))
+        != sha256_text(subject.source_revised_candidate_text)
+    ):
+        raise AblationInformedRevisionIntegrityError(
+            "Ablation-informed revision refused; pivot-required source-revision "
+            "base does not match the current source revision text."
+        )
+
+
 def _build_base_selection(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
@@ -1690,13 +1806,21 @@ def _build_base_selection(
     model_call_id: str | None = None,
     fixture_only: bool,
 ) -> dict[str, Any]:
-    choices = _base_options(subject, dominance_report)
+    pivot_base_locked = _pivot_base_lock_required(
+        residual_pivot_report,
+        evidence_summary,
+    )
+    choices = _base_options(
+        subject,
+        dominance_report,
+        pivot_base_locked=pivot_base_locked,
+    )
     selected_choice = (
-        str(model_payload["selected_base_candidate_id"])
-        if model_payload is not None
+        BASE_CHOICE_SOURCE_REVISION_CURRENT
+        if pivot_base_locked
         else (
-            str(residual_pivot_report["base_policy"]["recommended_base_candidate_id"])
-            if residual_pivot_report["pivot_required"]
+            str(model_payload["selected_base_candidate_id"])
+            if model_payload is not None
             else str(dominance_report["recommended_base_candidate_id"])
         )
     )
@@ -1722,7 +1846,7 @@ def _build_base_selection(
         selected_choice == dominance_report["recommended_base_candidate_id"]
     )
     pivot_preserve_choice = bool(residual_pivot_report["pivot_required"]) and (
-        selected_choice in {BASE_CHOICE_PACKET_0030, BASE_CHOICE_CONTROLLER_COMPOSED}
+        selected_choice in PIVOT_REPAIR_PRESERVING_BASE_CHOICES
     )
     weaker_with_rejection = (
         dominance_detected
@@ -1732,26 +1856,24 @@ def _build_base_selection(
     )
     return {
         "worker": (
-            "cycle2_base_candidate_selection_v1_model_driver"
-            if model_payload is not None
-            else "cycle2_base_candidate_selection_v1_controller"
+            "cycle2_base_candidate_selection_v1_controller_locked"
+            if pivot_base_locked
+            else (
+                "cycle2_base_candidate_selection_v1_model_driver"
+                if model_payload is not None
+                else "cycle2_base_candidate_selection_v1_controller"
+            )
         ),
         "controller_owned": True,
         "source_revision_packet_kind": subject.source_revision_packet_kind,
         "source_revision_packet_id": subject.revision_packet_id,
-        "allowed_choices": [
-            BASE_CHOICE_ORIGINAL,
-            BASE_CHOICE_PACKET_0030,
-            BASE_CHOICE_EMBODIMENT,
-            BASE_CHOICE_RECORD,
-            BASE_CHOICE_CONTROLLER_COMPOSED,
-            *(
-                [BASE_CHOICE_DOMINANT_VARIANT]
-                if dominance_report.get("best_countable_variant_id")
-                else []
-            ),
-        ],
+        "allowed_choices": [option["base_candidate_id"] for option in choices],
         "base_candidate_options": choices,
+        "unavailable_base_options": (
+            _unavailable_pivot_base_options(subject, dominance_report)
+            if pivot_base_locked
+            else []
+        ),
         "selected_base_candidate_id": selected_choice,
         "selected_base_choice": selected_choice,
         "selected_base_text": selected_text,
@@ -1766,6 +1888,23 @@ def _build_base_selection(
                 "revision is evidence to inspect, not proof to stack onto."
             )
         ),
+        "pivot_required": residual_pivot_report["pivot_required"],
+        "base_selection_locked_by_controller": pivot_base_locked,
+        "preserved_source_revision_packet_id": (
+            subject.revision_packet_id if pivot_base_locked else None
+        ),
+        "preserved_useful_repair": pivot_base_locked,
+        "why_model_did_not_own_base_selection": (
+            "Residual pivot evidence says the current repair is useful but "
+            "exhausted for this handle; the controller must preserve that source "
+            "revision before any model-selected residual blocker is patched."
+            if pivot_base_locked
+            else None
+        ),
+        "prior_handle_preserved": (
+            not residual_pivot_report["pivot_required"] or pivot_preserve_choice
+        ),
+        "prior_handle_status": residual_pivot_report["prior_handle_status"],
         "why_packet_0030_not_treated_as_proven": (
             str(model_selection["why_packet_0030_not_proven"])
             if model_payload is not None
@@ -1796,9 +1935,9 @@ def _build_base_selection(
             ],
             "base_preserves_current_useful_repair": (
                 not residual_pivot_report["pivot_required"]
-                or selected_choice
-                in {BASE_CHOICE_PACKET_0030, BASE_CHOICE_CONTROLLER_COMPOSED}
+                or selected_choice in PIVOT_REPAIR_PRESERVING_BASE_CHOICES
             ),
+            "base_selection_locked_by_controller": pivot_base_locked,
         },
         "ablation_evidence_dominance": {
             "dominance_detected": dominance_detected,
@@ -2778,7 +2917,7 @@ def _build_gate_report(
     prior_handle_preserved = bool(
         not pivot_required
         or applied_patch_ledger["base_candidate_choice"]
-        in {BASE_CHOICE_PACKET_0030, BASE_CHOICE_CONTROLLER_COMPOSED}
+        in PIVOT_REPAIR_PRESERVING_BASE_CHOICES
     )
     strategic_ready_for_ablation = (
         evidence_dominance_checked
@@ -3689,6 +3828,14 @@ def _residual_replacements() -> dict[str, dict[str, str]]:
                 "In the morning, the table is still there, and the dust under it "
                 "has become part of the same event."
             ),
+            (
+                "The packet was assembled from 2 frozen source file(s): "
+                "source_note.md, theory_fragment.md. It keeps the source set "
+                "visible without claiming a reader effect."
+            ): (
+                "The ring of damp wood, the table leg, and the morning keep the "
+                "source pressure visible without claiming a reader effect."
+            ),
         },
         "separation_pressure_overnaming": {
             (
@@ -3788,9 +3935,19 @@ def _base_option(choice: str, text: str, basis: str) -> dict[str, Any]:
 def _base_options(
     subject: AblationInformedSubject,
     dominance_report: dict[str, Any] | None = None,
+    *,
+    pivot_base_locked: bool = False,
 ) -> list[dict[str, Any]]:
     original = subject.original_candidate.text
     source_revision = subject.source_revised_candidate_text
+    source_current_option = _base_option(
+        BASE_CHOICE_SOURCE_REVISION_CURRENT,
+        source_revision,
+        (
+            "current source revision candidate preserving the useful repair "
+            f"({subject.source_revision_packet_kind})"
+        ),
+    )
     embodiment = _variant_text_by_operation_id(
         subject,
         "operation_embodiment_preserving_repair",
@@ -3802,12 +3959,22 @@ def _base_options(
         fallback=source_revision,
     )
     controller_composed = _compose_cycle2_base_from_evidence(original, source_revision)
+    if pivot_base_locked:
+        return [
+            source_current_option,
+            _base_option(
+                BASE_CHOICE_CONTROLLER_COMPOSED,
+                controller_composed,
+                "controller-composed base preserving the useful source repair",
+            ),
+        ]
     options = [
         _base_option(
             BASE_CHOICE_ORIGINAL,
             original,
             "original reader-facing candidate from the pilot packet",
         ),
+        source_current_option,
         _base_option(
             BASE_CHOICE_PACKET_0030,
             source_revision,
@@ -3851,6 +4018,23 @@ def _base_options(
     return options
 
 
+def _unavailable_pivot_base_options(
+    subject: AblationInformedSubject,
+    dominance_report: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    unavailable = []
+    for option in _base_options(subject, dominance_report):
+        if option["base_candidate_id"] in PIVOT_REPAIR_PRESERVING_BASE_CHOICES:
+            continue
+        marked = dict(option)
+        marked["available"] = False
+        marked["unavailable_reason"] = (
+            "pivot_required base lock preserves the current useful source repair"
+        )
+        unavailable.append(marked)
+    return unavailable
+
+
 def _base_text_for_choice(
     subject: AblationInformedSubject,
     choice: str,
@@ -3858,7 +4042,7 @@ def _base_text_for_choice(
 ) -> str:
     if choice == BASE_CHOICE_ORIGINAL:
         return subject.original_candidate.text
-    if choice == BASE_CHOICE_PACKET_0030:
+    if choice in {BASE_CHOICE_SOURCE_REVISION_CURRENT, BASE_CHOICE_PACKET_0030}:
         return subject.source_revised_candidate_text
     if choice == BASE_CHOICE_EMBODIMENT:
         return _variant_text_by_operation_id(
