@@ -1,15 +1,18 @@
 # Abi
 
-Abi is an autonomous creative engine for building artifacts through a triply isometric
-design: the machine process, the artifact's subject/form, and the reader-state
-transformation are all described in the same symbolic terms. Its core pattern is
-germ -> differentiation -> pressure -> crisis -> recomposition -> return: the
-architecture uses that pattern to generate, read, diagnose, revise, ablate, and compare
-creative work, while the target artifact embodies the same transformation and the
-internal reader model tests whether the artifact caused that transformation. Abi begins
-with one narrow literary-metaphysical domain so the architecture, topic, and reader
-effect can be maximally aligned, then aims to generalize the same causal-creative loop
-into a broader creative intelligence system.
+Abi is an autonomous creative engine built around one repeating pattern:
+
+germ -> differentiation -> pressure -> crisis -> recomposition -> return
+
+That same pattern appears three times.
+
+1. Abi's **architecture** follows it while it grows a work from a small beginning, tests it under pressure, revises it, and returns with a stronger version.
+
+2. The **essay** follows it in form and subject. A small opening image unfolds into separation, tension, and return.
+
+2. Abi’s **internal reader** follows it too. It begins with fragments, feels pressure as the work develops, reorganizes its understanding, and returns to the opening with a changed view.
+
+Abi starts in one narrow literary-metaphysical domain so the machine, the artifact, and the reader transformation can be aligned as tightly as possible. The long-term aim is to generalize that same creative loop into a broader system for making and improving art.
 
 ## How It Works
 
