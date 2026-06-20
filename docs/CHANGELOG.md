@@ -10,8 +10,9 @@ preserved across the build.
 
 Current endpoint in Git history:
 
-- `3311390 Add guarded live ablation-informed revision`
-- Branch state at changelog creation: `main`
+- `544e967 Allow executed ablation of ablation-informed revision packets`
+- Active branch during latest changelog update:
+  `fix/revise-from-ablation-source-packet-adapter`
 - The active runtime direction is the autonomous creative-engine path.
 
 ## Standing Invariants
@@ -1025,6 +1026,90 @@ Verification after implementation:
 - Guarded OpenAI command without `--allow-live-model` refused before model calls.
 - `autonomous_creative_candidate` finalization remained refused.
 
+## Ablation-Informed Integrity And Source-Packet Adapter Work
+
+Commits:
+
+- `c2e2e2a Enforce ablation-informed patch ledger integrity`
+- `544e967 Allow executed ablation of ablation-informed revision packets`
+
+Implemented:
+
+- Hardened ablation-informed revision packet integrity around patch ledgers,
+  diff consistency, and controller-owned text spans.
+- Added executed-ablation support for revision source packets whose
+  `revision_packet_kind` is `ablation_informed_revision`.
+- Preserved support for older executed-ablation packets sourced from
+  `autonomous_revision`.
+- Added source packet metadata so executed-ablation packets can record whether
+  their source was an original autonomous revision packet or a later
+  ablation-informed revision packet.
+- Prevented adapter code from assuming every executed-ablation source packet
+  contains legacy autonomous closed-loop files.
+- Preserved fail-closed behavior when required source files or integrity gates
+  are missing.
+
+Verification:
+
+- `ruff check .` passed.
+- `pytest` passed after the executed-ablation source-packet adapter work.
+- Executed ablation of ablation-informed revision packets produced valid
+  executed-ablation packets without weakening finalization.
+
+## Revise-From-Ablation Source-Packet Adapter
+
+Current branch work:
+
+- `fix/revise-from-ablation-source-packet-adapter`
+
+Implemented:
+
+- `abi autonomous revise-from-ablation` now consumes executed-ablation packets
+  sourced from either:
+  - `autonomous_revision`
+  - `ablation_informed_revision`
+- Added source-kind detection and normalization for cycle2 ablation-informed
+  source packets.
+- Added required-file and integrity checks for ablation-informed source packets:
+  - `cycle2_packet.json`
+  - `cycle2_revised_candidate_text.json`
+  - `cycle2_revision_diff_report.json`
+  - `cycle2_applied_patch_ledger.json`
+  - `cycle2_gate_report.json`
+- Required the ablation-informed source packet to preserve:
+  - text/diff consistency
+  - applied-patch ledger consistency
+  - non-final status
+  - no phase-shift claim
+  - no finalization eligibility
+- Normalized source packet evidence into the ablation-informed revision subject
+  manifest without treating newer cycle2 packets as legacy packet_0030 packets.
+- Preserved compatibility aliases where older packet consumers still expect
+  packet_0030-style fields.
+- Updated packet outputs to record:
+  - `source_revision_packet_kind`
+  - `source_revision_packet_id`
+  - `source_revision_packet_dir`
+  - source artifact IDs
+  - source revision diff
+  - source patch ledger
+- Updated the evidence summary and base-selection outputs so they refer to the
+  actual source revision packet and its executed-ablation verdicts.
+- Kept strongest-rival pressure, bounded revision behavior, and controller
+  ownership intact.
+
+Verification:
+
+- `ruff check .` passed.
+- `pytest` passed with 211 tests.
+- Fake revise-from-ablation from old source packet succeeded:
+  `abi autonomous revise-from-ablation --client fake --executed-ablation-packet runs\run_8fa54199f23f3d8e\executed_ablation\packet_0004`
+- Fake revise-from-ablation from ablation-informed source packet succeeded:
+  `abi autonomous revise-from-ablation --client fake --executed-ablation-packet runs\run_8fa54199f23f3d8e\executed_ablation\packet_0008`
+- Guarded OpenAI path without `--allow-live-model` refused before model calls:
+  `abi autonomous revise-from-ablation --client openai --executed-ablation-packet runs\run_8fa54199f23f3d8e\executed_ablation\packet_0008`
+- `autonomous_creative_candidate` finalization remained refused.
+
 ## Current Runtime Surface
 
 The current repo includes these active areas:
@@ -1090,4 +1175,3 @@ Across the session, these boundaries remained intact:
 - No dashboard.
 - No agent-loop framework.
 - No `SKILL.md`.
-

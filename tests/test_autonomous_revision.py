@@ -45,6 +45,7 @@ from abi.modules.autonomous_revision import (
 from abi.modules.ablation_informed_revision import (
     ABLATION_INFORMED_REVISION_ARTIFACT_TYPES,
     BASE_CHOICE_CONTROLLER_COMPOSED,
+    BASE_CHOICE_PACKET_0030,
     run_ablation_informed_revision,
 )
 from abi.modules.executed_ablation import (
@@ -220,6 +221,19 @@ def build_fake_ablation_informed_revision_packet(tmp_path: Path):
     assert revision.exit_code == 0
     assert revision.payload["accepted"] is True
     return config, revision.payload
+
+
+def build_fake_executed_ablation_from_ablation_informed_packet(tmp_path: Path):
+    config, revision_payload = build_fake_ablation_informed_revision_packet(tmp_path)
+    ablation = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=revision_payload["packet_dir"],
+    )
+    assert ablation.exit_code == 0
+    assert ablation.payload["accepted"] is True
+    assert ablation.payload["revision_packet_kind"] == "ablation_informed_revision"
+    return config, ablation.payload, revision_payload
 
 
 def revision_stub_factory(
@@ -2934,6 +2948,155 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
         )
     assert final_report.refused is True
     assert "paper" not in final_report.message.lower()
+
+
+def test_ablation_informed_revision_accepts_ablation_informed_source_packet(tmp_path):
+    config, ablation_payload, source_revision_payload = (
+        build_fake_executed_ablation_from_ablation_informed_packet(tmp_path)
+    )
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_revision_packet_kind"] == "ablation_informed_revision"
+    assert result.payload["source_revision_packet_id"] == source_revision_payload["packet_id"]
+
+    subject = read_payload(
+        result.payload["artifact_paths"]["ablation_informed_revision_subject_manifest"]
+    )
+    assert subject["source_revision_packet_kind"] == "ablation_informed_revision"
+    assert subject["source_revision_packet_id"] == source_revision_payload["packet_id"]
+    assert subject["source_patch_ledger"]["applied_patch_ids"]
+    assert subject["source_revision_diff"]["source_patch_span_ids"]
+    assert subject["source_revised_candidate"]["artifact_id"] == subject[
+        "revision_artifact_ids"
+    ]["revised_candidate_text"]
+
+    evidence = read_payload(result.payload["artifact_paths"]["ablation_evidence_summary"])
+    assert evidence["source_revision_packet_kind"] == "ablation_informed_revision"
+    assert evidence["source_revision_packet_id"] == source_revision_payload["packet_id"]
+    assert evidence["previous_repair_causal_status"] in {
+        "noncausal_or_cosmetic",
+        "ambiguous",
+        "useful_but_insufficient",
+    }
+    assert "recommended_next_action" in evidence
+    assert evidence["previous_repair_treated_as_proven"] is False
+
+    base = read_payload(result.payload["artifact_paths"]["cycle2_base_candidate_selection"])
+    assert base["source_revision_packet_kind"] == "ablation_informed_revision"
+    assert base["source_revision_packet_id"] == source_revision_payload["packet_id"]
+    assert any(
+        option["base_candidate_id"] == BASE_CHOICE_PACKET_0030
+        and "ablation_informed_revision" in option["basis"]
+        for option in base["base_candidate_options"]
+    )
+
+    work_order = read_payload(
+        result.payload["artifact_paths"]["ablation_informed_revision_work_order"]
+    )
+    assert work_order["source_revision_packet_kind"] == "ablation_informed_revision"
+    assert work_order["source_revision_packet_id"] == source_revision_payload["packet_id"]
+
+    packet = read_payload(result.payload["artifact_paths"]["cycle2_packet"])
+    assert packet["source_revision_packet_kind"] == "ablation_informed_revision"
+    assert packet["source_revision_packet_id"] == source_revision_payload["packet_id"]
+
+    gate = read_payload(result.payload["artifact_paths"]["cycle2_gate_report"])
+    assert gate["eligible"] is False
+    assert gate["phase_shift_claim"] is False
+    assert gate["final_gates_marked_passed"] == []
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("cycle2_revised_candidate_text.json", "cycle2_revised_candidate_text.json"),
+        ("cycle2_revision_diff_report.json", "cycle2_revision_diff_report.json"),
+        ("cycle2_applied_patch_ledger.json", "cycle2_applied_patch_ledger.json"),
+    ],
+)
+def test_ablation_informed_revision_refuses_ablation_informed_source_missing_file(
+    tmp_path,
+    filename,
+    expected,
+):
+    config, ablation_payload, source_revision_payload = (
+        build_fake_executed_ablation_from_ablation_informed_packet(tmp_path)
+    )
+    Path(source_revision_payload["packet_dir"], filename).unlink()
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert expected in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field_name", "expected"),
+    [
+        ("text_diff_consistency_passed", "text_diff_consistency_passed"),
+        ("comparison_uses_actual_revised_text", "comparison_uses_actual_revised_text"),
+    ],
+)
+def test_ablation_informed_revision_refuses_ablation_informed_source_bad_integrity(
+    tmp_path,
+    field_name,
+    expected,
+):
+    config, ablation_payload, source_revision_payload = (
+        build_fake_executed_ablation_from_ablation_informed_packet(tmp_path)
+    )
+    gate_path = Path(source_revision_payload["packet_dir"], "cycle2_gate_report.json")
+    envelope = json.loads(gate_path.read_text(encoding="utf-8"))
+    envelope["payload"]["integrity"][field_name] = False
+    gate_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert expected in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_ablation_informed_revision_openai_guard_refuses_ablation_informed_source(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    config, ablation_payload, _source_revision_payload = (
+        build_fake_executed_ablation_from_ablation_informed_packet(tmp_path)
+    )
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        client_factory=ablation_informed_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "--allow-live-model" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert clients == []
 
 
 def test_ablation_informed_revision_refuses_missing_packet(tmp_path):

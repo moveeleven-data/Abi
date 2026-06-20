@@ -60,6 +60,17 @@ BASE_CHOICE_EMBODIMENT = "embodiment_preserving_ablation_variant"
 BASE_CHOICE_RECORD = "record_label_compression_ablation_variant"
 BASE_CHOICE_CONTROLLER_COMPOSED = "controller_composed_base_from_evidence_supported_changes"
 
+SOURCE_REVISION_KIND_AUTONOMOUS = "autonomous_revision"
+SOURCE_REVISION_KIND_ABLATION_INFORMED = "ablation_informed_revision"
+
+ABLATION_INFORMED_SOURCE_REQUIRED_FILES = (
+    "cycle2_packet.json",
+    "cycle2_revised_candidate_text.json",
+    "cycle2_revision_diff_report.json",
+    "cycle2_applied_patch_ledger.json",
+    "cycle2_gate_report.json",
+)
+
 
 @dataclass(frozen=True)
 class AblationInformedRevisionResult:
@@ -89,6 +100,7 @@ class AblationInformedSubject:
     packet_artifact_id: str | None
     artifacts: dict[str, ArtifactRecord]
     payloads: dict[str, dict[str, Any]]
+    source_revision_packet_kind: str
     revision_packet_dir: Path
     revision_packet_id: str
     revision_artifacts: dict[str, ArtifactRecord]
@@ -105,7 +117,20 @@ class AblationInformedSubject:
 
     @property
     def packet_0030_revised_text(self) -> str:
+        return self.source_revised_candidate_text
+
+    @property
+    def source_revised_candidate_text(self) -> str:
         return str(self.revision_payloads["revised_candidate_text"]["text"])
+
+    @property
+    def source_selected_failure_or_handle(self) -> str | None:
+        selected = self.revision_payloads.get("selected_failure_diagnosis", {})
+        return (
+            selected.get("selected_failure_type")
+            or selected.get("selected_next_handle")
+            or selected.get("previous_selected_failure")
+        )
 
     @property
     def strongest_rival(self) -> SourceText | None:
@@ -361,9 +386,12 @@ def _run_packet(
         handle_parent_ids = [
             artifacts["ablation_evidence_summary"].id,
             artifacts["cycle2_base_candidate_selection"].id,
-            subject.revision_artifacts["selected_failure_diagnosis"].id,
             subject.artifacts["ablation_causal_effect_report"].id,
         ]
+        if "selected_failure_diagnosis" in subject.revision_artifacts:
+            handle_parent_ids.append(
+                subject.revision_artifacts["selected_failure_diagnosis"].id
+            )
         result = _run_handle_selection_model(
             config=config,
             subject=subject,
@@ -440,8 +468,12 @@ def _run_packet(
                 payloads["selected_next_failure_or_handle"],
                 parent_ids=[
                     artifacts["ablation_evidence_summary"].id,
-                    subject.revision_artifacts["selected_failure_diagnosis"].id,
                     subject.artifacts["ablation_causal_effect_report"].id,
+                    *(
+                        [subject.revision_artifacts["selected_failure_diagnosis"].id]
+                        if "selected_failure_diagnosis" in subject.revision_artifacts
+                        else []
+                    ),
                 ],
             )
 
@@ -833,9 +865,8 @@ def _prompt_for_handle_selection(
                 "Select the next bounded causal handle from executed ablation evidence "
                 "without treating the prior repair as proven."
             ),
-            "previous_selected_failure": subject.revision_payloads[
-                "selected_failure_diagnosis"
-            ].get("selected_failure_type"),
+            "source_revision_packet_kind": subject.source_revision_packet_kind,
+            "previous_selected_failure": subject.source_selected_failure_or_handle,
             "base_selection": {
                 "selected_base_candidate_id": base_selection[
                     "selected_base_candidate_id"
@@ -1021,6 +1052,17 @@ def _build_subject_manifest(
         "executed_ablation_artifact_ids": {
             artifact_type: artifact.id for artifact_type, artifact in subject.artifacts.items()
         },
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
+        "source_revision_packet_dir": str(subject.revision_packet_dir),
+        "source_revision_artifact_ids": {
+            artifact_type: artifact.id
+            for artifact_type, artifact in subject.revision_artifacts.items()
+        },
+        "revision_artifact_ids": {
+            artifact_type: artifact.id
+            for artifact_type, artifact in subject.revision_artifacts.items()
+        },
         "source_autonomous_revision_packet_id": subject.revision_packet_id,
         "source_autonomous_revision_packet_dir": str(subject.revision_packet_dir),
         "source_reader_lab_packet_id": subject.reader_lab_packet_id,
@@ -1028,11 +1070,38 @@ def _build_subject_manifest(
         "source_packet_id": subject.source_packet_id,
         "source_packet_dir": str(subject.source_packet_dir),
         "original_candidate": _text_ref(subject.original_candidate),
+        "source_revised_candidate": {
+            "artifact_id": subject.revision_artifacts["revised_candidate_text"].id,
+            "text_sha256": sha256_text(subject.source_revised_candidate_text),
+            "word_count": len(_words(subject.source_revised_candidate_text)),
+        },
         "packet_0030_revised_candidate": {
             "artifact_id": subject.revision_artifacts["revised_candidate_text"].id,
-            "text_sha256": sha256_text(subject.packet_0030_revised_text),
-            "word_count": len(_words(subject.packet_0030_revised_text)),
+            "text_sha256": sha256_text(subject.source_revised_candidate_text),
+            "word_count": len(_words(subject.source_revised_candidate_text)),
         },
+        "source_revision_diff": {
+            "artifact_id": subject.revision_artifacts["revision_diff_report"].id,
+            "source_patch_ids": list(
+                subject.revision_payloads["revision_diff_report"].get(
+                    "source_patch_ids",
+                    [],
+                )
+            ),
+            "source_patch_span_ids": list(
+                subject.revision_payloads["revision_diff_report"].get(
+                    "source_patch_span_ids",
+                    [],
+                )
+            ),
+            "changed_span_count": len(
+                subject.revision_payloads["revision_diff_report"].get(
+                    "changed_spans",
+                    [],
+                )
+            ),
+        },
+        "source_patch_ledger": _source_patch_ledger_reference(subject),
         "strongest_rival": _text_ref(subject.strongest_rival),
         "previous_repair_causal_status": subject.payloads[
             "ablation_causal_effect_report"
@@ -1070,6 +1139,8 @@ def _build_evidence_summary(
     return {
         "worker": "ablation_evidence_summary_v1_controller",
         "source_executed_ablation_packet_id": subject.packet_id,
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
         "previous_repair_causal_status": causal["selected_repair_causal_status"],
         "previous_repair_treated_as_proven": False,
         "packet_0030_treated_as_proven_improvement": False,
@@ -1084,6 +1155,8 @@ def _build_evidence_summary(
         "strongest_rival_pressure_remains_blocking": causal[
             "strongest_rival_pressure_remains_blocking"
         ],
+        "recommended_next_action": causal["recommended_next_action"],
+        "selected_repair_appears_causal": causal["selected_repair_appears_causal"],
         "countable_evidence_variant_count": execution[
             "countable_evidence_variant_count"
         ],
@@ -1091,12 +1164,7 @@ def _build_evidence_summary(
         "comparison_internal_consistency": consistency[
             "comparison_internal_consistency"
         ],
-        "evidence_interpretation": (
-            "The first repair is treated as weak/noncausal evidence. Cycle 2 may "
-            "preserve only the supported opening compression while superseding the "
-            "flattened embodiment and moving the main handle to record/law/proof/"
-            "answer compression."
-        ),
+        "evidence_interpretation": _evidence_interpretation(causal, old_new),
         "requires_cycle2_executed_ablation_before_improvement_claim": True,
         "not_human_data": True,
         "non_final": True,
@@ -1130,6 +1198,8 @@ def _build_base_selection(
             else "cycle2_base_candidate_selection_v1_controller"
         ),
         "controller_owned": True,
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
         "allowed_choices": [
             BASE_CHOICE_ORIGINAL,
             BASE_CHOICE_PACKET_0030,
@@ -1147,17 +1217,25 @@ def _build_base_selection(
             str(model_selection["evidence_rationale"])
             if model_payload is not None
             else (
-                "Use a controller-composed base: preserve the supported removal of 'as if "
-                "nothing happened' while restoring concrete embodiment from the original/"
-                "embodiment-preserving evidence. Packet_0030 is not treated as proven."
+                "Use a controller-composed base from source-revision and executed "
+                "ablation evidence while preserving concrete embodiment. The source "
+                "revision is evidence to inspect, not proof to stack onto."
             )
         ),
         "why_packet_0030_not_treated_as_proven": (
             str(model_selection["why_packet_0030_not_proven"])
             if model_payload is not None
             else (
-                "Executed ablation marked the prior repair weak/noncausal, so packet_0030 "
-                "is evidence to inspect rather than proof to stack onto."
+                "Executed ablation evidence is diagnostic. The source revision is "
+                "evidence to inspect rather than proof to stack onto."
+            )
+        ),
+        "why_source_revision_not_treated_as_proven": (
+            str(model_selection["why_packet_0030_not_proven"])
+            if model_payload is not None
+            else (
+                "Executed ablation evidence is diagnostic. The source revision is "
+                "not final proof of improvement."
             )
         ),
         "previous_repair_causal_status": evidence_summary["previous_repair_causal_status"],
@@ -1189,6 +1267,9 @@ def _build_base_selection(
         "packet_0030_changes_preserved_if_supported": [
             "removed 'as if nothing happened' from the opening embodiment field"
         ],
+        "source_revision_changes_preserved_if_supported": list(
+            _source_revision_preservation_notes(subject)
+        ),
         "embodiment_preserving_insight_represented": True,
         "record_law_proof_compression_deferred_to_patch": True,
         "non_final": True,
@@ -1207,7 +1288,6 @@ def _build_next_handle(
     model_call_id: str | None = None,
     fixture_only: bool,
 ) -> dict[str, Any]:
-    selected_failure = subject.revision_payloads["selected_failure_diagnosis"]
     model_selection = model_payload or {}
     return {
         "worker": (
@@ -1215,17 +1295,22 @@ def _build_next_handle(
             if model_payload is not None
             else "selected_next_failure_or_handle_v1_controller"
         ),
-        "previous_selected_failure": selected_failure.get("selected_failure_type"),
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
+        "previous_selected_failure": subject.source_selected_failure_or_handle,
         "previous_repair_causal_status": evidence_summary[
             "previous_repair_causal_status"
         ],
+        "selected_repair_appears_causal": evidence_summary[
+            "selected_repair_appears_causal"
+        ],
+        "recommended_next_action": evidence_summary["recommended_next_action"],
         "why_previous_repair_was_weak_or_cosmetic": (
             str(model_selection["why_previous_repair_weak_or_cosmetic"])
             if model_payload is not None
             else (
-                "Executed ablation reported revert performs same or better and repair "
-                "has no strong causal support, so the packet_0030 opening patch cannot "
-                "be reused as proof of improvement."
+                "Executed ablation evidence is diagnostic and still leaves blockers, "
+                "so the source revision cannot be reused as proof of improvement."
             )
         ),
         "executed_ablation_evidence": {
@@ -1251,9 +1336,9 @@ def _build_next_handle(
             str(model_selection["why_handle_better_than_opening_patch"])
             if model_payload is not None
             else (
-                "Record-label compression was countable executed evidence and improved "
-                "discovery in the ablation comparison, while repeating packet_0030's "
-                "opening patch would preserve an unproven repair."
+                "The selected handle follows countable executed evidence and the "
+                "recommended next action rather than merely repeating the opening "
+                "patch; strongest-rival pressure remains preserved."
             )
         ),
         "revision_goal": [
@@ -1320,6 +1405,9 @@ def _build_work_order(
         "controller_owned": True,
         "source_executed_ablation_packet_dir": str(subject.packet_dir),
         "source_executed_ablation_packet_id": subject.packet_id,
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_dir": str(subject.revision_packet_dir),
+        "source_revision_packet_id": subject.revision_packet_id,
         "source_autonomous_revision_packet_dir": str(subject.revision_packet_dir),
         "source_autonomous_revision_packet_id": subject.revision_packet_id,
         "source_reader_lab_packet_dir": str(subject.reader_lab_packet_dir),
@@ -1789,7 +1877,7 @@ def _build_preliminary_comparison(
     fixture_only: bool,
 ) -> dict[str, Any]:
     original_score = _score_text(subject.original_candidate.text)
-    packet_0030_score = _score_text(subject.packet_0030_revised_text)
+    source_revision_score = _score_text(subject.source_revised_candidate_text)
     cycle2_score = _score_text(str(revised_candidate["text"]))
     rival_score = (
         _score_text(subject.strongest_rival.text)
@@ -1806,9 +1894,11 @@ def _build_preliminary_comparison(
         "comparison_uses_actual_revised_text": True,
         "actual_revised_text_sha256": revised_candidate["text_sha256"],
         "actual_revised_word_count": revised_candidate["word_count"],
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
         "compared_items": [
             "original Text A",
-            "packet_0030 revised Text A",
+            "source revision Text A",
             "cycle2 revised candidate",
             "strongest rival Text D",
             "record-label compression ablation variant",
@@ -1816,17 +1906,24 @@ def _build_preliminary_comparison(
         ],
         "scores": {
             "original": original_score,
-            "packet_0030": packet_0030_score,
+            "source_revision": source_revision_score,
+            "packet_0030": source_revision_score,
             "cycle2": cycle2_score,
             "strongest_rival": rival_score,
         },
         "cycle2_reduced_overexplanation": (
             cycle2_score["overexplanation_score"]
-            < packet_0030_score["overexplanation_score"]
+            < source_revision_score["overexplanation_score"]
+        ),
+        "cycle2_preserved_embodiment_better_than_source_revision": (
+            cycle2_score["local_embodiment_score"]
+            >= source_revision_score["local_embodiment_score"]
+            and "The legs are steady." in cycle2_text
+            and "A spoon lies on its side" in cycle2_text
         ),
         "cycle2_preserved_embodiment_better_than_packet_0030": (
             cycle2_score["local_embodiment_score"]
-            >= packet_0030_score["local_embodiment_score"]
+            >= source_revision_score["local_embodiment_score"]
             and "The legs are steady." in cycle2_text
             and "A spoon lies on its side" in cycle2_text
         ),
@@ -1882,9 +1979,9 @@ def _build_gate_report(
     gate_results = [
         _gate_result("ablation_informed_revision_packet_exists", True),
         _gate_result(
-            "previous_repair_causal_status_recorded_as_weak",
+            "previous_repair_causal_status_recorded",
             evidence_summary["previous_repair_causal_status"]
-            in {"noncausal_or_cosmetic", "ambiguous"},
+            in {"noncausal_or_cosmetic", "ambiguous", "useful_but_insufficient"},
         ),
         _gate_result("cycle2_bounded_revision_produced", True),
         _gate_result("cycle2_text_diff_integrity_passed", text_diff_consistency),
@@ -1973,6 +2070,9 @@ def _build_packet_summary(
         "packet_dir": str(packet_dir),
         "source_executed_ablation_packet_id": subject.packet_id,
         "source_executed_ablation_packet_dir": str(subject.packet_dir),
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
+        "source_revision_packet_dir": str(subject.revision_packet_dir),
         "source_autonomous_revision_packet_id": subject.revision_packet_id,
         "source_reader_lab_packet_id": subject.reader_lab_packet_id,
         "artifact_types": list(ABLATION_INFORMED_REVISION_ARTIFACT_TYPES),
@@ -2048,6 +2148,92 @@ def _load_subject(connection, packet_dir: Path) -> AblationInformedSubject:
 
     subject_manifest = payloads["executed_ablation_subject_manifest"]
     revision_packet_dir = Path(str(subject_manifest["revision_packet_dir"])).resolve()
+    source_kind = _detect_source_revision_kind(subject_manifest, revision_packet_dir)
+    if source_kind == SOURCE_REVISION_KIND_AUTONOMOUS:
+        (
+            revision_packet,
+            revision_packet_id,
+            revision_artifacts,
+            revision_payloads,
+            source_packet_dir,
+            reader_lab_packet_dir,
+            reader_lab_packet_id,
+        ) = _load_autonomous_source_revision(connection, revision_packet_dir)
+    elif source_kind == SOURCE_REVISION_KIND_ABLATION_INFORMED:
+        (
+            revision_packet,
+            revision_packet_id,
+            revision_artifacts,
+            revision_payloads,
+            source_packet_dir,
+            reader_lab_packet_dir,
+            reader_lab_packet_id,
+        ) = _load_ablation_informed_source_revision(connection, revision_packet_dir)
+    else:
+        raise ValueError(f"unsupported source revision packet kind: {source_kind}")
+
+    source_texts = _load_source_texts(source_packet_dir)
+    if not any(text.source_class == "abi_candidate" for text in source_texts):
+        raise ValueError("source packet does not include an Abi candidate text")
+    return AblationInformedSubject(
+        run_id=run_id,
+        packet_dir=packet_dir,
+        packet_id=packet_id,
+        packet_artifact_id=packet_artifact.id if packet_artifact is not None else None,
+        artifacts=artifacts,
+        payloads=payloads,
+        source_revision_packet_kind=source_kind,
+        revision_packet_dir=revision_packet_dir,
+        revision_packet_id=revision_packet_id,
+        revision_artifacts=revision_artifacts,
+        revision_payloads=revision_payloads,
+        reader_lab_packet_dir=reader_lab_packet_dir,
+        reader_lab_packet_id=reader_lab_packet_id,
+        source_packet_dir=source_packet_dir,
+        source_packet_id=str(revision_packet["source_packet_id"]),
+        source_texts=tuple(source_texts),
+    )
+
+
+def _detect_source_revision_kind(
+    subject_manifest: dict[str, Any],
+    revision_packet_dir: Path,
+) -> str:
+    declared = str(subject_manifest.get("revision_packet_kind", ""))
+    if declared in {
+        SOURCE_REVISION_KIND_AUTONOMOUS,
+        SOURCE_REVISION_KIND_ABLATION_INFORMED,
+    }:
+        return declared
+    if (revision_packet_dir / "autonomous_closed_loop_packet.json").exists():
+        return SOURCE_REVISION_KIND_AUTONOMOUS
+    if (revision_packet_dir / "cycle2_packet.json").exists():
+        return SOURCE_REVISION_KIND_ABLATION_INFORMED
+    if any(
+        (revision_packet_dir / filename).exists()
+        for filename in ABLATION_INFORMED_SOURCE_REQUIRED_FILES[1:]
+    ):
+        raise ValueError(
+            "ablation_informed_revision source is missing cycle2_packet.json"
+        )
+    raise ValueError(
+        "source revision packet must contain autonomous_closed_loop_packet.json "
+        "or cycle2_packet.json"
+    )
+
+
+def _load_autonomous_source_revision(
+    connection,
+    revision_packet_dir: Path,
+) -> tuple[
+    dict[str, Any],
+    str,
+    dict[str, ArtifactRecord],
+    dict[str, dict[str, Any]],
+    Path,
+    Path,
+    str,
+]:
     revision_packet = read_json_file(
         revision_packet_dir / "autonomous_closed_loop_packet.json"
     )["payload"]
@@ -2068,29 +2254,228 @@ def _load_subject(connection, packet_dir: Path) -> AblationInformedSubject:
         artifact = _artifact_from_packet(connection, revision_artifact_ids, artifact_type)
         revision_artifacts[artifact_type] = artifact
         revision_payloads[artifact_type] = _artifact_payload(artifact)
-
-    source_packet_dir = Path(str(revision_packet["source_packet_dir"])).resolve()
-    reader_lab_packet_dir = Path(str(revision_packet["reader_lab_packet_dir"])).resolve()
-    source_texts = _load_source_texts(source_packet_dir)
-    if not any(text.source_class == "abi_candidate" for text in source_texts):
-        raise ValueError("source packet does not include an Abi candidate text")
-    return AblationInformedSubject(
-        run_id=run_id,
-        packet_dir=packet_dir,
-        packet_id=packet_id,
-        packet_artifact_id=packet_artifact.id if packet_artifact is not None else None,
-        artifacts=artifacts,
-        payloads=payloads,
-        revision_packet_dir=revision_packet_dir,
-        revision_packet_id=str(revision_packet["packet_id"]),
-        revision_artifacts=revision_artifacts,
-        revision_payloads=revision_payloads,
-        reader_lab_packet_dir=reader_lab_packet_dir,
-        reader_lab_packet_id=str(revision_packet["reader_lab_packet_id"]),
-        source_packet_dir=source_packet_dir,
-        source_packet_id=str(revision_packet["source_packet_id"]),
-        source_texts=tuple(source_texts),
+    return (
+        revision_packet,
+        str(revision_packet["packet_id"]),
+        revision_artifacts,
+        revision_payloads,
+        Path(str(revision_packet["source_packet_dir"])).resolve(),
+        Path(str(revision_packet["reader_lab_packet_dir"])).resolve(),
+        str(revision_packet["reader_lab_packet_id"]),
     )
+
+
+def _load_ablation_informed_source_revision(
+    connection,
+    revision_packet_dir: Path,
+) -> tuple[
+    dict[str, Any],
+    str,
+    dict[str, ArtifactRecord],
+    dict[str, dict[str, Any]],
+    Path,
+    Path,
+    str,
+]:
+    revision_packet_envelope, revision_packet = _read_source_revision_payload_file(
+        revision_packet_dir,
+        "cycle2_packet.json",
+        "cycle2_packet",
+    )
+    revision_artifact_ids = dict(revision_packet["artifact_ids"])
+    required = {
+        "ablation_informed_revision_subject_manifest": (
+            "ablation_informed_revision_subject_manifest.json",
+            "ablation_informed_revision_subject_manifest",
+        ),
+        "ablation_informed_revision_work_order": (
+            "ablation_informed_revision_work_order.json",
+            "ablation_informed_revision_work_order",
+        ),
+        "cycle2_patch_proposal": (
+            "cycle2_patch_proposal.json",
+            "cycle2_patch_proposal",
+        ),
+        "cycle2_applied_patch_ledger": (
+            "cycle2_applied_patch_ledger.json",
+            "cycle2_applied_patch_ledger",
+        ),
+        "cycle2_revised_candidate_text": (
+            "cycle2_revised_candidate_text.json",
+            "cycle2_revised_candidate_text",
+        ),
+        "cycle2_revision_diff_report": (
+            "cycle2_revision_diff_report.json",
+            "cycle2_revision_diff_report",
+        ),
+        "cycle2_gate_report": ("cycle2_gate_report.json", "cycle2_gate_report"),
+    }
+    optional = {
+        "cycle2_preliminary_old_new_rival_comparison": (
+            "cycle2_preliminary_old_new_rival_comparison.json",
+            "cycle2_preliminary_old_new_rival_comparison",
+        ),
+        "ablation_evidence_summary": (
+            "ablation_evidence_summary.json",
+            "ablation_evidence_summary",
+        ),
+        "selected_next_failure_or_handle": (
+            "selected_next_failure_or_handle.json",
+            "selected_next_failure_or_handle",
+        ),
+    }
+    revision_artifacts: dict[str, ArtifactRecord] = {}
+    revision_payloads: dict[str, dict[str, Any]] = {}
+    cycle2_packet_artifact = _artifact_by_path(
+        connection,
+        run_id=str(revision_packet_envelope["run_id"]),
+        artifact_path=revision_packet_dir / "cycle2_packet.json",
+    )
+    if cycle2_packet_artifact is not None:
+        revision_artifacts["cycle2_packet"] = cycle2_packet_artifact
+        revision_payloads["cycle2_packet"] = revision_packet
+    for artifact_type, (filename, expected_type) in required.items():
+        _read_source_revision_payload_file(
+            revision_packet_dir,
+            filename,
+            expected_type,
+        )
+        artifact = _artifact_from_packet(connection, revision_artifact_ids, artifact_type)
+        revision_artifacts[artifact_type] = artifact
+        revision_payloads[artifact_type] = _artifact_payload(artifact)
+    for artifact_type, (filename, expected_type) in optional.items():
+        if not (revision_packet_dir / filename).exists():
+            continue
+        _read_source_revision_payload_file(
+            revision_packet_dir,
+            filename,
+            expected_type,
+        )
+        artifact = _artifact_from_packet(connection, revision_artifact_ids, artifact_type)
+        revision_artifacts[artifact_type] = artifact
+        revision_payloads[artifact_type] = _artifact_payload(artifact)
+
+    _validate_ablation_informed_source_readiness(revision_payloads)
+    _alias_revision_artifact(
+        revision_artifacts,
+        revision_payloads,
+        alias="revised_candidate_text",
+        source="cycle2_revised_candidate_text",
+    )
+    _alias_revision_artifact(
+        revision_artifacts,
+        revision_payloads,
+        alias="revision_diff_report",
+        source="cycle2_revision_diff_report",
+    )
+    _alias_revision_artifact(
+        revision_artifacts,
+        revision_payloads,
+        alias="autonomous_revision_work_order",
+        source="ablation_informed_revision_work_order",
+    )
+    _alias_revision_artifact(
+        revision_artifacts,
+        revision_payloads,
+        alias="revision_patch_proposal",
+        source="cycle2_patch_proposal",
+    )
+    _alias_revision_artifact(
+        revision_artifacts,
+        revision_payloads,
+        alias="selected_failure_diagnosis",
+        source="selected_next_failure_or_handle",
+    )
+    if "cycle2_preliminary_old_new_rival_comparison" in revision_artifacts:
+        _alias_revision_artifact(
+            revision_artifacts,
+            revision_payloads,
+            alias="old_new_rival_comparison",
+            source="cycle2_preliminary_old_new_rival_comparison",
+        )
+
+    subject_manifest = revision_payloads["ablation_informed_revision_subject_manifest"]
+    revision_packet = dict(revision_packet)
+    revision_packet["source_packet_id"] = subject_manifest["source_packet_id"]
+    source_packet_dir = Path(str(subject_manifest["source_packet_dir"])).resolve()
+    reader_lab_packet_dir = Path(
+        str(subject_manifest["source_reader_lab_packet_dir"])
+    ).resolve()
+    return (
+        revision_packet,
+        str(revision_packet["packet_id"]),
+        revision_artifacts,
+        revision_payloads,
+        source_packet_dir,
+        reader_lab_packet_dir,
+        str(subject_manifest["source_reader_lab_packet_id"]),
+    )
+
+
+def _read_source_revision_payload_file(
+    packet_dir: Path,
+    filename: str,
+    expected_artifact_type: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    path = packet_dir / filename
+    if not path.exists():
+        raise ValueError(f"ablation_informed_revision source is missing {filename}")
+    envelope = read_json_file(path)
+    if envelope.get("artifact_type") != expected_artifact_type:
+        raise ValueError(
+            f"{filename} must have artifact_type {expected_artifact_type}"
+        )
+    payload = envelope.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError(f"{filename} payload is not an object")
+    return envelope, payload
+
+
+def _validate_ablation_informed_source_readiness(
+    revision_payloads: dict[str, dict[str, Any]],
+) -> None:
+    revised = revision_payloads["cycle2_revised_candidate_text"]
+    diff = revision_payloads["cycle2_revision_diff_report"]
+    ledger = revision_payloads["cycle2_applied_patch_ledger"]
+    gate = revision_payloads["cycle2_gate_report"]
+    integrity = gate.get("integrity")
+    if not isinstance(integrity, dict):
+        raise ValueError("cycle2_gate_report integrity block is missing")
+    for field_name in (
+        "text_diff_consistency_passed",
+        "comparison_uses_actual_revised_text",
+    ):
+        if integrity.get(field_name) is not True:
+            raise ValueError(f"cycle2_gate_report integrity.{field_name} must be true")
+    if revised.get("no_phase_shift_claim") is not True or gate.get("no_phase_shift_claim") is not True:
+        raise ValueError("ablation_informed_revision source must not make a phase-shift claim")
+    if (
+        revised.get("not_finalization_eligible") is not True
+        or gate.get("not_finalization_eligible") is not True
+        or gate.get("finalization_eligible") is not False
+    ):
+        raise ValueError(
+            "ablation_informed_revision source must remain not finalization eligible"
+        )
+    if diff.get("text_matches_diff") is not True:
+        raise ValueError("cycle2_revision_diff_report text_matches_diff must be true")
+    if ledger.get("all_applied_patches_reflected_in_text") is not True:
+        raise ValueError(
+            "cycle2_applied_patch_ledger all_applied_patches_reflected_in_text must be true"
+        )
+
+
+def _alias_revision_artifact(
+    revision_artifacts: dict[str, ArtifactRecord],
+    revision_payloads: dict[str, dict[str, Any]],
+    *,
+    alias: str,
+    source: str,
+) -> None:
+    if source not in revision_artifacts:
+        return
+    revision_artifacts[alias] = revision_artifacts[source]
+    revision_payloads[alias] = revision_payloads[source]
 
 
 def _artifact_from_packet(
@@ -2153,7 +2538,7 @@ def _load_source_texts(source_packet_dir: Path) -> list[SourceText]:
     return texts
 
 
-def _compose_cycle2_base_from_evidence(original: str, packet_0030: str) -> str:
+def _compose_cycle2_base_from_evidence(original: str, source_revision_text: str) -> str:
     text = original.replace(" as if nothing happened", "", 1)
     text = text.replace("The legs are plain.", "The legs are steady.", 1)
     text = text.replace("A spoon lies beside", "A spoon lies on its side beside", 1)
@@ -2163,7 +2548,7 @@ def _compose_cycle2_base_from_evidence(original: str, packet_0030: str) -> str:
         1,
     )
     if not _patchable_spans(text):
-        text = packet_0030.replace(" as if nothing happened", "", 1)
+        text = source_revision_text.replace(" as if nothing happened", "", 1)
     return text
 
 
@@ -2251,18 +2636,18 @@ def _base_option(choice: str, text: str, basis: str) -> dict[str, Any]:
 
 def _base_options(subject: AblationInformedSubject) -> list[dict[str, Any]]:
     original = subject.original_candidate.text
-    packet_0030 = subject.packet_0030_revised_text
+    source_revision = subject.source_revised_candidate_text
     embodiment = _variant_text_by_operation_id(
         subject,
         "operation_embodiment_preserving_repair",
-        fallback=packet_0030,
+        fallback=source_revision,
     )
     record = _variant_text_by_operation_id(
         subject,
         "operation_record_label_compression",
-        fallback=packet_0030,
+        fallback=source_revision,
     )
-    controller_composed = _compose_cycle2_base_from_evidence(original, packet_0030)
+    controller_composed = _compose_cycle2_base_from_evidence(original, source_revision)
     return [
         _base_option(
             BASE_CHOICE_ORIGINAL,
@@ -2271,8 +2656,11 @@ def _base_options(subject: AblationInformedSubject) -> list[dict[str, Any]]:
         ),
         _base_option(
             BASE_CHOICE_PACKET_0030,
-            packet_0030,
-            "prior autonomous revision packet; not treated as proven",
+            source_revision,
+            (
+                "prior source revision packet; not treated as proven "
+                f"({subject.source_revision_packet_kind})"
+            ),
         ),
         _base_option(
             BASE_CHOICE_EMBODIMENT,
@@ -2296,23 +2684,23 @@ def _base_text_for_choice(subject: AblationInformedSubject, choice: str) -> str:
     if choice == BASE_CHOICE_ORIGINAL:
         return subject.original_candidate.text
     if choice == BASE_CHOICE_PACKET_0030:
-        return subject.packet_0030_revised_text
+        return subject.source_revised_candidate_text
     if choice == BASE_CHOICE_EMBODIMENT:
         return _variant_text_by_operation_id(
             subject,
             "operation_embodiment_preserving_repair",
-            fallback=subject.packet_0030_revised_text,
+            fallback=subject.source_revised_candidate_text,
         )
     if choice == BASE_CHOICE_RECORD:
         return _variant_text_by_operation_id(
             subject,
             "operation_record_label_compression",
-            fallback=subject.packet_0030_revised_text,
+            fallback=subject.source_revised_candidate_text,
         )
     if choice == BASE_CHOICE_CONTROLLER_COMPOSED:
         return _compose_cycle2_base_from_evidence(
             subject.original_candidate.text,
-            subject.packet_0030_revised_text,
+            subject.source_revised_candidate_text,
         )
     raise ModelValidationError(
         "selected_base_candidate_id must be one of controller-owned base options"
@@ -2329,6 +2717,38 @@ def _variant_text_by_operation_id(
     if variant is None:
         return fallback
     return str(variant.get("text", fallback))
+
+
+def _evidence_interpretation(
+    causal: dict[str, Any],
+    old_new: dict[str, Any],
+) -> str:
+    status = str(causal["selected_repair_causal_status"])
+    support = bool(old_new["repair_has_causal_support"])
+    record = bool(old_new["record_compression_improves_discovery"])
+    rival_blocking = bool(causal["strongest_rival_pressure_remains_blocking"])
+    next_action = str(causal["recommended_next_action"])
+    return (
+        "Executed ablation reports selected_repair_causal_status="
+        f"{status}, repair_has_causal_support={support}, "
+        f"record_compression_improves_discovery={record}, and "
+        f"strongest_rival_pressure_remains_blocking={rival_blocking}. "
+        f"Recommended next action: {next_action}. The next bounded revision "
+        "may use this diagnostic evidence, but it remains non-final and must "
+        "not treat the source revision as final proof."
+    )
+
+
+def _source_revision_preservation_notes(
+    subject: AblationInformedSubject,
+) -> tuple[str, ...]:
+    if subject.source_revision_packet_kind == SOURCE_REVISION_KIND_ABLATION_INFORMED:
+        ledger = subject.revision_payloads.get("cycle2_applied_patch_ledger", {})
+        return tuple(
+            f"source patch {patch_id} may be preserved if supported"
+            for patch_id in ledger.get("applied_patch_ids", [])
+        )
+    return ("removed 'as if nothing happened' from the opening embodiment field",)
 
 
 def _score_text(text: str) -> dict[str, int]:
@@ -2385,6 +2805,23 @@ def _text_ref(text: SourceText | None) -> dict[str, object] | None:
     }
 
 
+def _source_patch_ledger_reference(
+    subject: AblationInformedSubject,
+) -> dict[str, object] | None:
+    if "cycle2_applied_patch_ledger" not in subject.revision_artifacts:
+        return None
+    ledger = subject.revision_payloads["cycle2_applied_patch_ledger"]
+    return {
+        "artifact_id": subject.revision_artifacts["cycle2_applied_patch_ledger"].id,
+        "applied_patch_ids": list(ledger.get("applied_patch_ids", [])),
+        "applied_patch_span_ids": list(ledger.get("applied_patch_span_ids", [])),
+        "rejected_patch_ids": list(ledger.get("rejected_patch_ids", [])),
+        "all_applied_patches_reflected_in_text": ledger.get(
+            "all_applied_patches_reflected_in_text"
+        ),
+    }
+
+
 def _subject_parent_ids(subject: AblationInformedSubject) -> list[str]:
     parent_ids = [artifact.id for artifact in subject.artifacts.values()]
     parent_ids.extend(artifact.id for artifact in subject.revision_artifacts.values())
@@ -2428,6 +2865,8 @@ def _summary_payload(
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
         "executed_ablation_packet_dir": str(subject.packet_dir),
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
         "artifact_ids": {
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
         },

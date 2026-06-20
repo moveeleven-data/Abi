@@ -336,7 +336,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     autonomous_revise_from_ablation_parser = autonomous_subparsers.add_parser(
         "revise-from-ablation",
-        help="Run one ablation-informed bounded revision cycle",
+        help=(
+            "Run one ablation-informed bounded revision cycle from executed "
+            "ablation evidence"
+        ),
     )
     autonomous_revise_from_ablation_parser.add_argument(
         "--client",
@@ -348,7 +351,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--executed-ablation-packet",
         type=Path,
         required=True,
-        help="Executed ablation packet directory to revise from.",
+        help=(
+            "Executed ablation packet directory to revise from; its source "
+            "revision may be autonomous_revision or ablation_informed_revision."
+        ),
     )
     autonomous_revise_from_ablation_parser.add_argument(
         "--allow-live-model",
