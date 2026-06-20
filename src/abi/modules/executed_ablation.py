@@ -73,6 +73,17 @@ EXECUTED_ABLATION_PROVENANCE_TOKENS = (
     "local_law_case_note",
 )
 
+REVISION_PACKET_KIND_AUTONOMOUS = "autonomous_revision"
+REVISION_PACKET_KIND_ABLATION_INFORMED = "ablation_informed_revision"
+
+ABLATION_INFORMED_REQUIRED_FILES = (
+    "cycle2_packet.json",
+    "cycle2_revised_candidate_text.json",
+    "cycle2_revision_diff_report.json",
+    "cycle2_applied_patch_ledger.json",
+    "cycle2_gate_report.json",
+)
+
 
 @dataclass(frozen=True)
 class ExecutedAblationResult:
@@ -93,11 +104,15 @@ class SourceText:
 @dataclass(frozen=True)
 class ExecutedAblationSubject:
     run_id: str
+    revision_packet_kind: str
     revision_packet_dir: Path
     revision_packet_id: str
     revision_packet_artifact_id: str | None
     source_packet_dir: Path
     source_packet_id: str
+    source_reader_lab_packet_id: str | None
+    source_executed_ablation_packet_id: str | None
+    ready_for_executed_ablation: bool | None
     revision_artifacts: dict[str, ArtifactRecord]
     revision_payloads: dict[str, dict[str, Any]]
     source_texts: tuple[SourceText, ...]
@@ -468,7 +483,11 @@ def _run_packet(
             parent_ids=[
                 artifacts["actual_ablation_variant_set"].id,
                 artifacts["ablation_internal_reader_comparison"].id,
-                subject.revision_artifacts["old_new_rival_comparison"].id,
+                *(
+                    [subject.revision_artifacts["old_new_rival_comparison"].id]
+                    if "old_new_rival_comparison" in subject.revision_artifacts
+                    else []
+                ),
             ],
         )
 
@@ -689,15 +708,41 @@ def _build_subject_manifest(
     return {
         "worker": "executed_ablation_subject_manifest_v1",
         "run_id": subject.run_id,
+        "revision_packet_kind": subject.revision_packet_kind,
         "revision_packet_id": subject.revision_packet_id,
         "revision_packet_dir": str(subject.revision_packet_dir),
         "revision_packet_artifact_id": subject.revision_packet_artifact_id,
+        "source_reader_lab_packet_id": subject.source_reader_lab_packet_id,
+        "source_executed_ablation_packet_id": subject.source_executed_ablation_packet_id,
+        "ready_for_executed_ablation": subject.ready_for_executed_ablation,
         "source_packet_id": subject.source_packet_id,
         "source_packet_dir": str(subject.source_packet_dir),
         "revision_artifact_ids": {
             artifact_type: artifact.id
             for artifact_type, artifact in subject.revision_artifacts.items()
         },
+        "revision_diff_report": {
+            "artifact_id": subject.revision_artifacts["revision_diff_report"].id,
+            "source_patch_ids": list(
+                subject.revision_payloads["revision_diff_report"].get(
+                    "source_patch_ids",
+                    [],
+                )
+            ),
+            "source_patch_span_ids": list(
+                subject.revision_payloads["revision_diff_report"].get(
+                    "source_patch_span_ids",
+                    [],
+                )
+            ),
+            "changed_span_count": len(
+                subject.revision_payloads["revision_diff_report"].get(
+                    "changed_spans",
+                    [],
+                )
+            ),
+        },
+        "patch_ledger": _patch_ledger_reference(subject),
         "original_candidate": _text_ref(subject.original_candidate),
         "revised_candidate": {
             "artifact_id": subject.revision_artifacts["revised_candidate_text"].id,
@@ -718,6 +763,8 @@ def _build_subject_manifest(
 
 
 def _build_work_order(subject: ExecutedAblationSubject, *, fixture_only: bool) -> dict[str, Any]:
+    if subject.revision_packet_kind == REVISION_PACKET_KIND_ABLATION_INFORMED:
+        return _build_ablation_informed_work_order(subject, fixture_only=fixture_only)
     work_order = subject.revision_payloads["autonomous_revision_work_order"]
     diff = subject.revision_payloads["revision_diff_report"]
     patch_proposal = subject.revision_payloads["revision_patch_proposal"]
@@ -726,6 +773,9 @@ def _build_work_order(subject: ExecutedAblationSubject, *, fixture_only: bool) -
     return {
         "worker": "executed_ablation_work_order_v1_controller",
         "controller_owned": True,
+        "source_revision_packet_kind": subject.revision_packet_kind,
+        "source_revision_packet_dir": str(subject.revision_packet_dir),
+        "source_revision_packet_id": subject.revision_packet_id,
         "source_autonomous_revision_packet_dir": str(subject.revision_packet_dir),
         "source_autonomous_revision_packet_id": subject.revision_packet_id,
         "source_revision_artifact_ids": {
@@ -784,12 +834,115 @@ def _build_work_order(subject: ExecutedAblationSubject, *, fixture_only: bool) -
     }
 
 
+def _build_ablation_informed_work_order(
+    subject: ExecutedAblationSubject,
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    work_order = subject.revision_payloads["ablation_informed_revision_work_order"]
+    diff = subject.revision_payloads["revision_diff_report"]
+    patch_proposal = subject.revision_payloads["revision_patch_proposal"]
+    ledger = subject.revision_payloads["cycle2_applied_patch_ledger"]
+    source_spans = _source_spans_from_revised_text(subject.revised_text)
+    changed_span_ids = [str(span["changed_span_id"]) for span in diff["changed_spans"]]
+    source_patch_ids = list(ledger.get("applied_patch_ids", []))
+    source_patch_span_ids = list(ledger.get("applied_patch_span_ids", []))
+    return {
+        "worker": "executed_ablation_work_order_v1_controller",
+        "controller_owned": True,
+        "source_revision_packet_kind": subject.revision_packet_kind,
+        "source_revision_packet_dir": str(subject.revision_packet_dir),
+        "source_revision_packet_id": subject.revision_packet_id,
+        "source_ablation_informed_revision_packet_dir": str(subject.revision_packet_dir),
+        "source_ablation_informed_revision_packet_id": subject.revision_packet_id,
+        "source_revision_artifact_ids": {
+            artifact_type: artifact.id
+            for artifact_type, artifact in subject.revision_artifacts.items()
+        },
+        "original_candidate_reference": _text_ref(subject.original_candidate),
+        "revised_candidate_reference": {
+            "artifact_id": subject.revision_artifacts["revised_candidate_text"].id,
+            "text_sha256": sha256_text(subject.revised_text),
+        },
+        "selected_failure_reference": {
+            "artifact_id": subject.revision_artifacts[
+                "selected_next_failure_or_handle"
+            ].id,
+            "selected_next_handle": subject.revision_payloads[
+                "selected_next_failure_or_handle"
+            ].get("selected_next_handle"),
+            "previous_repair_causal_status": subject.revision_payloads[
+                "selected_next_failure_or_handle"
+            ].get("previous_repair_causal_status"),
+        },
+        "revision_work_order_reference": {
+            "artifact_id": subject.revision_artifacts[
+                "ablation_informed_revision_work_order"
+            ].id,
+            "allowed_patch_target_ids": list(work_order.get("allowed_patch_target_ids", [])),
+            "source_executed_ablation_packet_id": work_order.get(
+                "source_executed_ablation_packet_id"
+            ),
+        },
+        "revision_patch_proposal_reference": {
+            "artifact_id": subject.revision_artifacts["revision_patch_proposal"].id,
+            "patch_ids": [str(patch["patch_id"]) for patch in patch_proposal.get("patches", [])],
+        },
+        "applied_patch_ledger_reference": {
+            "artifact_id": subject.revision_artifacts["cycle2_applied_patch_ledger"].id,
+            "applied_patch_ids": source_patch_ids,
+            "applied_patch_span_ids": source_patch_span_ids,
+            "rejected_patch_ids": list(ledger.get("rejected_patch_ids", [])),
+        },
+        "revision_diff_report_reference": {
+            "artifact_id": subject.revision_artifacts["revision_diff_report"].id,
+            "changed_span_ids": changed_span_ids,
+            "source_patch_ids": list(diff.get("source_patch_ids", [])),
+            "source_patch_span_ids": list(diff.get("source_patch_span_ids", [])),
+        },
+        "old_new_rival_comparison_reference": (
+            {
+                "artifact_id": subject.revision_artifacts[
+                    "old_new_rival_comparison"
+                ].id,
+            }
+            if "old_new_rival_comparison" in subject.revision_artifacts
+            else None
+        ),
+        "local_law_case_note_reference": None,
+        "strongest_rival_reference": (
+            _text_ref(subject.strongest_rival) if subject.strongest_rival is not None else None
+        ),
+        "allowed_operation_ids": list(EXECUTED_ABLATION_ALLOWED_OPERATION_IDS),
+        "allowed_variant_ids": list(EXECUTED_ABLATION_ALLOWED_VARIANT_IDS),
+        "allowed_source_spans": source_spans,
+        "allowed_changed_span_ids": changed_span_ids,
+        "allowed_source_patch_ids": source_patch_ids,
+        "allowed_source_patch_span_ids": source_patch_span_ids,
+        "allowed_comparison_provenance_tokens": list(EXECUTED_ABLATION_PROVENANCE_TOKENS),
+        "protected_effects": list(work_order.get("protected_effects", [])),
+        "forbidden_changes": list(work_order.get("forbidden_changes", [])),
+        "ready_for_executed_ablation": subject.ready_for_executed_ablation,
+        "does_not_create_main_candidate": True,
+        "non_final": True,
+        "not_human_data": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
 def _build_actual_variant_set(
     subject: ExecutedAblationSubject,
     work_order: dict[str, Any],
     *,
     fixture_only: bool,
 ) -> dict[str, Any]:
+    if subject.revision_packet_kind == REVISION_PACKET_KIND_ABLATION_INFORMED:
+        return _build_ablation_informed_variant_set(
+            subject,
+            work_order,
+            fixture_only=fixture_only,
+        )
     revised = subject.revised_text
     diff = subject.revision_payloads["revision_diff_report"]
     changed_span = diff["changed_spans"][0] if diff.get("changed_spans") else {}
@@ -918,6 +1071,207 @@ def _build_actual_variant_set(
         "no_phase_shift_claim": True,
         "fixture_only": fixture_only,
     }
+
+
+def _build_ablation_informed_variant_set(
+    subject: ExecutedAblationSubject,
+    work_order: dict[str, Any],
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    revised = subject.revised_text
+    ledger = subject.revision_payloads["cycle2_applied_patch_ledger"]
+    diff = subject.revision_payloads["revision_diff_report"]
+    applied_entries = [
+        entry
+        for entry in ledger.get("ledger_entries", [])
+        if entry.get("application_status") == "applied"
+    ]
+    if not applied_entries:
+        raise ExecutedAblationError(
+            "ablation_informed_revision packet has no applied cycle2 patches"
+        )
+    source_patch_ids = [str(entry["patch_id"]) for entry in applied_entries]
+    source_patch_span_ids = [str(entry["patch_span_id"]) for entry in applied_entries]
+    changed_span_ids = [
+        str(span["changed_span_id"]) for span in diff.get("changed_spans", [])
+    ]
+    first_entry = applied_entries[0]
+    first_changed_span_id = changed_span_ids[0] if changed_span_ids else "cycle2_change_001"
+    variants = [
+        _variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[0],
+            operation_id="operation_revert_applied_patch",
+            operation_type="revert_all_cycle2_applied_patches",
+            source_span_id=first_changed_span_id,
+            source_span_ids=changed_span_ids or [first_changed_span_id],
+            source_patch_span_id=source_patch_span_ids[0],
+            source_patch_span_ids=source_patch_span_ids,
+            base_text=revised,
+            variant_text=_apply_cycle2_reverts(revised, applied_entries),
+            before_text="\n\n".join(str(entry["after_text"]) for entry in applied_entries),
+            after_text="\n\n".join(str(entry["before_text"]) for entry in applied_entries),
+            rationale=(
+                "Revert every controller-applied cycle2 patch to test whether the patch "
+                "set carries causal value."
+            ),
+            expected_reader_state_effect=(
+                "If cycle2 matters, reverting the patch set should weaken discovery or "
+                "restore overexplicit record/law/proof pressure."
+            ),
+        ),
+        _variant(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[1],
+            operation_id="operation_embodiment_preserving_repair",
+            operation_type="isolate_single_cycle2_patch_revert",
+            source_span_id=first_changed_span_id,
+            source_patch_span_id=str(first_entry["patch_span_id"]),
+            source_patch_span_ids=[str(first_entry["patch_span_id"])],
+            base_text=revised,
+            before_text=str(first_entry["after_text"]),
+            after_text=str(first_entry["before_text"]),
+            rationale=(
+                "Preserve the rest of the embodied revision while restoring one targeted "
+                "conceptual phrase."
+            ),
+            expected_reader_state_effect=(
+                "Should reveal whether the first cycle2 compression patch is helping or "
+                "merely changing surface phrasing."
+            ),
+        ),
+        _variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[2],
+            operation_id="operation_record_label_compression",
+            operation_type="cycle2_record_law_proof_answer_compression_probe",
+            source_span_id=first_changed_span_id,
+            source_span_ids=changed_span_ids or [first_changed_span_id],
+            source_patch_span_id=source_patch_span_ids[0],
+            source_patch_span_ids=source_patch_span_ids,
+            base_text=revised,
+            variant_text=_apply_cycle2_compression_probe(revised, applied_entries),
+            before_text="\n\n".join(str(entry["after_text"]) for entry in applied_entries),
+            after_text="cycle2 record/law/proof/answer language compressed further",
+            rationale=(
+                "Isolate the record/law/proof/answer handle by making a bounded "
+                "compression probe over the same patch spans."
+            ),
+            expected_reader_state_effect=(
+                "Should improve discovery only if the cycle2 handle is the live causal "
+                "pressure rather than decorative wording."
+            ),
+        ),
+        _variant(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[3],
+            operation_id="operation_no_op_control",
+            operation_type="no_op_control",
+            source_span_id="source_span_opening_sentence",
+            source_patch_span_id=None,
+            source_patch_span_ids=[],
+            base_text=revised,
+            before_text="The table is still there in the morning.",
+            after_text="The table is still there in the morning.",
+            rationale="Diagnostic no-op control; it must not count as evidence of repair.",
+            expected_reader_state_effect="No reader-state change should be inferred.",
+            planned_only=False,
+            explicit_diagnostic_no_op=True,
+        ),
+        _variant(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[4],
+            operation_id="operation_mismatch_control",
+            operation_type="operation_mismatch_control",
+            source_span_id=first_changed_span_id,
+            source_patch_span_id=source_patch_span_ids[0],
+            source_patch_span_ids=[source_patch_span_ids[0]],
+            base_text=revised,
+            before_text="almost weather",
+            after_text="almost weather at the edge",
+            rationale=(
+                "Intentional mismatch control: changed text does not match the claimed "
+                "cycle2 record/law/proof operation, so it is not countable evidence."
+            ),
+            expected_reader_state_effect="Unreliable diagnostic; must not count.",
+            operation_matches_actual_change=False,
+        ),
+        _variant(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[5],
+            operation_id="operation_planned_probe_only",
+            operation_type="planned_only_probe",
+            source_span_id=first_changed_span_id,
+            source_patch_span_id=None,
+            source_patch_span_ids=source_patch_span_ids,
+            base_text=revised,
+            before_text="cycle2 patch set",
+            after_text="planned future cycle2 probe",
+            rationale="Planned-only cycle2 probe retained for ledger distinction.",
+            expected_reader_state_effect="Speculative only; not executed evidence.",
+            planned_only=True,
+            controller_applied=False,
+        ),
+    ]
+    validated = [_validate_variant_operation(variant) for variant in variants]
+    return {
+        "worker": "actual_ablation_variant_set_v1_controller",
+        "controller_owned": True,
+        "source_revision_packet_kind": subject.revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
+        "source_revised_candidate_artifact_id": subject.revision_artifacts[
+            "revised_candidate_text"
+        ].id,
+        "source_cycle2_patch_ids": source_patch_ids,
+        "source_cycle2_patch_span_ids": source_patch_span_ids,
+        "variants": validated,
+        "actual_variant_count": sum(
+            1 for variant in validated if not variant["planned_only"]
+        ),
+        "countable_evidence_variant_count": sum(
+            1 for variant in validated if variant["evidence_countable"]
+        ),
+        "planned_only_variant_count": sum(
+            1 for variant in validated if variant["planned_only"]
+        ),
+        "no_op_variant_count": sum(1 for variant in validated if variant["no_op"]),
+        "operation_mismatch_variant_count": sum(
+            1 for variant in validated if not variant["operation_matches_actual_change"]
+        ),
+        "does_not_select_winner": True,
+        "does_not_create_main_candidate": True,
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
+def _apply_cycle2_reverts(
+    revised: str,
+    applied_entries: list[dict[str, Any]],
+) -> str:
+    transformed = revised
+    for entry in reversed(applied_entries):
+        after = str(entry["after_text"])
+        before = str(entry["before_text"])
+        if after in transformed:
+            transformed = transformed.replace(after, before, 1)
+    return transformed
+
+
+def _apply_cycle2_compression_probe(
+    revised: str,
+    applied_entries: list[dict[str, Any]],
+) -> str:
+    transformed = revised
+    replacements = [
+        "together they leave a local pattern in the table light, noticed before it is explained.",
+        "It keeps staying and change together.",
+        "If proof comes, it has to appear inside the line it joins.",
+        "No answer has entered this local story yet.",
+    ]
+    for entry, replacement in zip(applied_entries, replacements, strict=False):
+        after = str(entry["after_text"])
+        if after in transformed:
+            transformed = transformed.replace(after, replacement, 1)
+    return transformed
 
 
 def _record_compression_variant(
@@ -1485,6 +1839,7 @@ def _build_packet_summary(
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
+        "source_revision_packet_kind": subject.revision_packet_kind,
         "source_revision_packet_id": subject.revision_packet_id,
         "source_revision_packet_dir": str(subject.revision_packet_dir),
         "client": client_name,
@@ -1523,6 +1878,24 @@ def _build_packet_summary(
 
 
 def _load_subject(connection, revision_packet_dir: Path) -> ExecutedAblationSubject:
+    if (revision_packet_dir / "autonomous_closed_loop_packet.json").exists():
+        return _load_autonomous_revision_subject(connection, revision_packet_dir)
+    if (revision_packet_dir / "cycle2_packet.json").exists():
+        return _load_ablation_informed_revision_subject(connection, revision_packet_dir)
+    if any((revision_packet_dir / filename).exists() for filename in ABLATION_INFORMED_REQUIRED_FILES[1:]):
+        raise ValueError(
+            "ablation_informed_revision packet is missing cycle2_packet.json"
+        )
+    raise ValueError(
+        "revision packet must contain autonomous_closed_loop_packet.json "
+        "or cycle2_packet.json"
+    )
+
+
+def _load_autonomous_revision_subject(
+    connection,
+    revision_packet_dir: Path,
+) -> ExecutedAblationSubject:
     packet_envelope = read_json_file(revision_packet_dir / "autonomous_closed_loop_packet.json")
     if packet_envelope.get("artifact_type") != "autonomous_closed_loop_packet":
         raise ValueError(
@@ -1570,15 +1943,241 @@ def _load_subject(connection, revision_packet_dir: Path) -> ExecutedAblationSubj
         raise ValueError("source packet does not include an Abi candidate text")
     return ExecutedAblationSubject(
         run_id=run_id,
+        revision_packet_kind=REVISION_PACKET_KIND_AUTONOMOUS,
         revision_packet_dir=revision_packet_dir,
         revision_packet_id=revision_packet_id,
         revision_packet_artifact_id=packet_artifact.id if packet_artifact is not None else None,
         source_packet_dir=source_packet_dir,
         source_packet_id=source_packet_id,
+        source_reader_lab_packet_id=str(packet_payload.get("reader_lab_packet_id", "")) or None,
+        source_executed_ablation_packet_id=None,
+        ready_for_executed_ablation=None,
         revision_artifacts=artifacts,
         revision_payloads=payloads,
         source_texts=tuple(source_texts),
     )
+
+
+def _load_ablation_informed_revision_subject(
+    connection,
+    revision_packet_dir: Path,
+) -> ExecutedAblationSubject:
+    packet_envelope, packet_payload = _read_packet_payload_file(
+        revision_packet_dir,
+        "cycle2_packet.json",
+        "cycle2_packet",
+    )
+    run_id = str(packet_envelope["run_id"])
+    revision_packet_id = str(packet_payload.get("packet_id", revision_packet_dir.name))
+    artifact_ids = dict(packet_payload["artifact_ids"])
+
+    file_map = {
+        "ablation_informed_revision_subject_manifest": (
+            "ablation_informed_revision_subject_manifest.json",
+            "ablation_informed_revision_subject_manifest",
+        ),
+        "ablation_informed_revision_work_order": (
+            "ablation_informed_revision_work_order.json",
+            "ablation_informed_revision_work_order",
+        ),
+        "cycle2_patch_proposal": (
+            "cycle2_patch_proposal.json",
+            "cycle2_patch_proposal",
+        ),
+        "cycle2_applied_patch_ledger": (
+            "cycle2_applied_patch_ledger.json",
+            "cycle2_applied_patch_ledger",
+        ),
+        "cycle2_revised_candidate_text": (
+            "cycle2_revised_candidate_text.json",
+            "cycle2_revised_candidate_text",
+        ),
+        "cycle2_revision_diff_report": (
+            "cycle2_revision_diff_report.json",
+            "cycle2_revision_diff_report",
+        ),
+        "cycle2_gate_report": (
+            "cycle2_gate_report.json",
+            "cycle2_gate_report",
+        ),
+        "selected_next_failure_or_handle": (
+            "selected_next_failure_or_handle.json",
+            "selected_next_failure_or_handle",
+        ),
+    }
+    optional_file_map = {
+        "cycle2_preliminary_old_new_rival_comparison": (
+            "cycle2_preliminary_old_new_rival_comparison.json",
+            "cycle2_preliminary_old_new_rival_comparison",
+        ),
+    }
+
+    artifacts: dict[str, ArtifactRecord] = {}
+    payloads: dict[str, dict[str, Any]] = {}
+    for artifact_type, (filename, expected_type) in file_map.items():
+        _, payload = _read_packet_payload_file(
+            revision_packet_dir,
+            filename,
+            expected_type,
+        )
+        artifact = _artifact_from_packet(connection, artifact_ids, artifact_type)
+        artifacts[artifact_type] = artifact
+        payloads[artifact_type] = payload
+    for artifact_type, (filename, expected_type) in optional_file_map.items():
+        if not (revision_packet_dir / filename).exists():
+            continue
+        _, payload = _read_packet_payload_file(
+            revision_packet_dir,
+            filename,
+            expected_type,
+        )
+        artifact = _artifact_from_packet(connection, artifact_ids, artifact_type)
+        artifacts[artifact_type] = artifact
+        payloads[artifact_type] = payload
+
+    packet_artifact = _artifact_by_path(
+        connection,
+        run_id=run_id,
+        artifact_path=revision_packet_dir / "cycle2_packet.json",
+    )
+    if packet_artifact is not None:
+        artifacts["cycle2_packet"] = packet_artifact
+        payloads["cycle2_packet"] = packet_payload
+
+    _validate_ablation_informed_readiness(payloads)
+
+    subject_manifest = payloads["ablation_informed_revision_subject_manifest"]
+    source_packet_dir = Path(str(subject_manifest["source_packet_dir"])).resolve()
+    source_packet_id = str(subject_manifest["source_packet_id"])
+    source_texts = _load_source_texts(source_packet_dir)
+    if not any(text.source_class == "abi_candidate" for text in source_texts):
+        raise ValueError("source packet does not include an Abi candidate text")
+
+    _alias_artifact(
+        artifacts,
+        payloads,
+        alias="autonomous_revision_work_order",
+        source="ablation_informed_revision_work_order",
+    )
+    _alias_artifact(
+        artifacts,
+        payloads,
+        alias="revision_patch_proposal",
+        source="cycle2_patch_proposal",
+    )
+    _alias_artifact(
+        artifacts,
+        payloads,
+        alias="revised_candidate_text",
+        source="cycle2_revised_candidate_text",
+    )
+    _alias_artifact(
+        artifacts,
+        payloads,
+        alias="revision_diff_report",
+        source="cycle2_revision_diff_report",
+    )
+    _alias_artifact(
+        artifacts,
+        payloads,
+        alias="autonomous_closed_loop_gate_report",
+        source="cycle2_gate_report",
+    )
+    if "cycle2_preliminary_old_new_rival_comparison" in artifacts:
+        _alias_artifact(
+            artifacts,
+            payloads,
+            alias="old_new_rival_comparison",
+            source="cycle2_preliminary_old_new_rival_comparison",
+        )
+
+    return ExecutedAblationSubject(
+        run_id=run_id,
+        revision_packet_kind=REVISION_PACKET_KIND_ABLATION_INFORMED,
+        revision_packet_dir=revision_packet_dir,
+        revision_packet_id=revision_packet_id,
+        revision_packet_artifact_id=packet_artifact.id if packet_artifact is not None else None,
+        source_packet_dir=source_packet_dir,
+        source_packet_id=source_packet_id,
+        source_reader_lab_packet_id=str(subject_manifest.get("source_reader_lab_packet_id", "")) or None,
+        source_executed_ablation_packet_id=str(
+            subject_manifest.get("executed_ablation_packet_id", "")
+        )
+        or str(packet_payload.get("source_executed_ablation_packet_id", ""))
+        or None,
+        ready_for_executed_ablation=True,
+        revision_artifacts=artifacts,
+        revision_payloads=payloads,
+        source_texts=tuple(source_texts),
+    )
+
+
+def _read_packet_payload_file(
+    packet_dir: Path,
+    filename: str,
+    expected_artifact_type: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    path = packet_dir / filename
+    if not path.exists():
+        raise ValueError(f"ablation_informed_revision packet is missing {filename}")
+    envelope = read_json_file(path)
+    if envelope.get("artifact_type") != expected_artifact_type:
+        raise ValueError(
+            f"{filename} must have artifact_type {expected_artifact_type}"
+        )
+    payload = envelope.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError(f"{filename} payload is not an object")
+    return envelope, payload
+
+
+def _validate_ablation_informed_readiness(
+    payloads: dict[str, dict[str, Any]],
+) -> None:
+    revised = payloads["cycle2_revised_candidate_text"]
+    diff = payloads["cycle2_revision_diff_report"]
+    ledger = payloads["cycle2_applied_patch_ledger"]
+    gate = payloads["cycle2_gate_report"]
+    integrity = gate.get("integrity")
+    if not isinstance(integrity, dict):
+        raise ValueError("cycle2_gate_report integrity block is missing")
+    required_true = {
+        "text_diff_consistency_passed": integrity.get("text_diff_consistency_passed"),
+        "comparison_uses_actual_revised_text": integrity.get(
+            "comparison_uses_actual_revised_text"
+        ),
+        "ready_for_executed_ablation": integrity.get("ready_for_executed_ablation"),
+    }
+    for field_name, value in required_true.items():
+        if value is not True:
+            raise ValueError(f"cycle2_gate_report integrity.{field_name} must be true")
+    if revised.get("no_phase_shift_claim") is not True or gate.get("no_phase_shift_claim") is not True:
+        raise ValueError("ablation_informed_revision packet must not make a phase-shift claim")
+    if (
+        revised.get("not_finalization_eligible") is not True
+        or gate.get("not_finalization_eligible") is not True
+        or gate.get("finalization_eligible") is not False
+    ):
+        raise ValueError(
+            "ablation_informed_revision packet must remain not finalization eligible"
+        )
+    if diff.get("text_matches_diff") is not True:
+        raise ValueError("cycle2_revision_diff_report text_matches_diff must be true")
+    if ledger.get("all_applied_patches_reflected_in_text") is not True:
+        raise ValueError(
+            "cycle2_applied_patch_ledger all_applied_patches_reflected_in_text must be true"
+        )
+
+
+def _alias_artifact(
+    artifacts: dict[str, ArtifactRecord],
+    payloads: dict[str, dict[str, Any]],
+    *,
+    alias: str,
+    source: str,
+) -> None:
+    artifacts[alias] = artifacts[source]
+    payloads[alias] = payloads[source]
 
 
 def _artifact_from_packet(
@@ -1781,6 +2380,21 @@ def _text_ref(text: SourceText | None) -> dict[str, object] | None:
     }
 
 
+def _patch_ledger_reference(subject: ExecutedAblationSubject) -> dict[str, object] | None:
+    if "cycle2_applied_patch_ledger" not in subject.revision_artifacts:
+        return None
+    ledger = subject.revision_payloads["cycle2_applied_patch_ledger"]
+    return {
+        "artifact_id": subject.revision_artifacts["cycle2_applied_patch_ledger"].id,
+        "applied_patch_ids": list(ledger.get("applied_patch_ids", [])),
+        "applied_patch_span_ids": list(ledger.get("applied_patch_span_ids", [])),
+        "rejected_patch_ids": list(ledger.get("rejected_patch_ids", [])),
+        "all_applied_patches_reflected_in_text": ledger.get(
+            "all_applied_patches_reflected_in_text"
+        ),
+    }
+
+
 def _subject_parent_ids(subject: ExecutedAblationSubject) -> list[str]:
     ids = [artifact.id for artifact in subject.revision_artifacts.values()]
     return sorted(set(ids))
@@ -1821,6 +2435,7 @@ def _summary_payload(
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
+        "revision_packet_kind": subject.revision_packet_kind,
         "revision_packet_dir": str(subject.revision_packet_dir),
         "artifact_ids": {
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()

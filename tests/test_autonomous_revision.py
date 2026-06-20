@@ -210,6 +210,18 @@ def build_fake_executed_ablation_packet(tmp_path: Path):
     return config, ablation.payload
 
 
+def build_fake_ablation_informed_revision_packet(tmp_path: Path):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    revision = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+    assert revision.exit_code == 0
+    assert revision.payload["accepted"] is True
+    return config, revision.payload
+
+
 def revision_stub_factory(
     clients: list[FakeAutonomousRevisionModelClient],
     *,
@@ -2532,6 +2544,159 @@ def test_executed_ablation_refuses_missing_revision_packet(tmp_path):
     assert result.payload["refused"] is True
     assert "not found" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_executed_ablation_accepts_ablation_informed_revision_packet(tmp_path):
+    config, revision_payload = build_fake_ablation_informed_revision_packet(tmp_path)
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=revision_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["revision_packet_kind"] == "ablation_informed_revision"
+    subject = read_payload(result.payload["artifact_paths"]["executed_ablation_subject_manifest"])
+    assert subject["revision_packet_kind"] == "ablation_informed_revision"
+    assert subject["ready_for_executed_ablation"] is True
+    assert subject["patch_ledger"]["applied_patch_ids"]
+    assert subject["patch_ledger"]["applied_patch_span_ids"]
+
+    work_order = read_payload(result.payload["artifact_paths"]["executed_ablation_work_order"])
+    assert work_order["source_revision_packet_kind"] == "ablation_informed_revision"
+    assert work_order["allowed_source_patch_ids"]
+    assert work_order["allowed_source_patch_span_ids"]
+    assert work_order["ready_for_executed_ablation"] is True
+
+    variants = read_payload(result.payload["artifact_paths"]["actual_ablation_variant_set"])
+    assert variants["source_revision_packet_kind"] == "ablation_informed_revision"
+    assert variants["source_cycle2_patch_ids"] == work_order["allowed_source_patch_ids"]
+    assert variants["source_cycle2_patch_span_ids"] == work_order[
+        "allowed_source_patch_span_ids"
+    ]
+    assert any(
+        variant["operation_type"] == "revert_all_cycle2_applied_patches"
+        for variant in variants["variants"]
+    )
+    assert all(
+        variant["source_patch_span_ids"]
+        for variant in variants["variants"]
+        if variant["operation_id"]
+        in {
+            "operation_revert_applied_patch",
+            "operation_record_label_compression",
+        }
+    )
+
+    gate = read_payload(result.payload["artifact_paths"]["executed_ablation_gate_report"])
+    assert gate["eligible"] is False
+    assert gate["final_gates_marked_passed"] == []
+    assert gate["phase_shift_claim"] is False
+    assert gate["not_human_validated"] is True
+
+
+def test_executed_ablation_refuses_ablation_informed_packet_missing_cycle2_packet(tmp_path):
+    config, revision_payload = build_fake_ablation_informed_revision_packet(tmp_path)
+    Path(revision_payload["packet_dir"], "cycle2_packet.json").unlink()
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=revision_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "missing cycle2_packet.json" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("cycle2_revised_candidate_text.json", "cycle2_revised_candidate_text.json"),
+        ("cycle2_revision_diff_report.json", "cycle2_revision_diff_report.json"),
+        ("cycle2_applied_patch_ledger.json", "cycle2_applied_patch_ledger.json"),
+        ("cycle2_gate_report.json", "cycle2_gate_report.json"),
+    ],
+)
+def test_executed_ablation_refuses_ablation_informed_packet_missing_required_file(
+    tmp_path,
+    filename,
+    expected,
+):
+    config, revision_payload = build_fake_ablation_informed_revision_packet(tmp_path)
+    Path(revision_payload["packet_dir"], filename).unlink()
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=revision_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert expected in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_executed_ablation_refuses_ablation_informed_packet_bad_integrity(tmp_path):
+    config, revision_payload = build_fake_ablation_informed_revision_packet(tmp_path)
+    gate_path = Path(revision_payload["packet_dir"], "cycle2_gate_report.json")
+    envelope = json.loads(gate_path.read_text(encoding="utf-8"))
+    envelope["payload"]["integrity"]["text_diff_consistency_passed"] = False
+    gate_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=revision_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "text_diff_consistency_passed" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_executed_ablation_refuses_ablation_informed_packet_not_ready(tmp_path):
+    config, revision_payload = build_fake_ablation_informed_revision_packet(tmp_path)
+    gate_path = Path(revision_payload["packet_dir"], "cycle2_gate_report.json")
+    envelope = json.loads(gate_path.read_text(encoding="utf-8"))
+    envelope["payload"]["integrity"]["ready_for_executed_ablation"] = False
+    gate_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=revision_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "ready_for_executed_ablation" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_executed_ablation_openai_guard_refuses_ablation_informed_packet(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    config, revision_payload = build_fake_ablation_informed_revision_packet(tmp_path)
+    clients = []
+
+    result = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=revision_payload["packet_dir"],
+        client_factory=executed_ablation_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "--allow-live-model" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert clients == []
 
 
 def test_executed_ablation_consistency_report_flags_contradictions():

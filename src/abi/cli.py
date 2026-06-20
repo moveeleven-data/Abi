@@ -303,7 +303,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     autonomous_ablate_parser = autonomous_subparsers.add_parser(
         "ablate",
-        help="Run executed counterfactual ablation over an autonomous revision packet",
+        help=(
+            "Run executed counterfactual ablation over an autonomous or "
+            "ablation-informed revision packet"
+        ),
     )
     autonomous_ablate_parser.add_argument(
         "--client",
@@ -315,7 +318,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--revision-packet",
         type=Path,
         required=True,
-        help="Autonomous closed-loop revision packet directory to ablate.",
+        help=(
+            "Revision packet directory to ablate; accepts autonomous_revision "
+            "or ablation_informed_revision packets."
+        ),
     )
     autonomous_ablate_parser.add_argument(
         "--allow-live-model",
