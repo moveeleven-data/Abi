@@ -13,6 +13,9 @@ from abi.controller.state import AUTONOMOUS_CLOSED_LOOP_REVISION_ACTIVE_PHASE, g
 from abi.db import connect
 from abi.model_calls import MODEL_CALL_SUCCESS, MODEL_CALL_VALIDATION_FAILED, list_model_calls
 from abi.model_schemas import (
+    ABLATION_INFORMED_BASE_SELECTION_SCHEMA,
+    ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA,
+    ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA,
     AUTONOMOUS_REVISION_ABLATION_REREAD_COMPARISON_SCHEMA,
     AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
@@ -615,6 +618,106 @@ class StubExecutedAblationClient:
 def executed_ablation_stub_factory(clients, *, mode: str = "valid"):
     def _factory(model: str) -> StubExecutedAblationClient:
         client = StubExecutedAblationClient(model=model, mode=mode)
+        clients.append(client)
+        return client
+
+    return _factory
+
+
+class StubAblationInformedRevisionClient:
+    provider = "openai"
+
+    def __init__(self, *, model: str, mode: str = "valid") -> None:
+        self.model = model
+        self.mode = mode
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        if self.mode == "invalid_json":
+            return "{not valid json"
+        if request.schema == ABLATION_INFORMED_BASE_SELECTION_SCHEMA:
+            selected = (
+                "invented_base_candidate"
+                if self.mode == "invented_base"
+                else BASE_CHOICE_CONTROLLER_COMPOSED
+            )
+            return dump_json(
+                {
+                    "selected_base_candidate_id": selected,
+                    "why_packet_0030_not_proven": (
+                        "The executed ablation packet records the prior repair as "
+                        "weak or noncausal, so it is not proof."
+                    ),
+                    "prior_repair_causal_status": "noncausal_or_cosmetic",
+                    "evidence_rationale": (
+                        "Select the controller-composed base because it preserves "
+                        "supported embodiment without stacking the unproven repair."
+                    ),
+                    "embodiment_preserving_insight": (
+                        "The opening needs concrete table, spoon, and room pressure."
+                    ),
+                    "record_law_proof_answer_insight": (
+                        "Record/law/proof language should be compressed later."
+                    ),
+                    "uncertainty": "medium",
+                    "not_human_data": True,
+                }
+            )
+        if request.schema == ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA:
+            return dump_json(
+                {
+                    "selected_next_handle": "record_law_proof_answer_compression",
+                    "why_previous_repair_weak_or_cosmetic": (
+                        "The prior opening repair was not causally proven by ablation."
+                    ),
+                    "evidence_summary": (
+                        "Record compression has stronger diagnostic support than "
+                        "repeating the opening patch."
+                    ),
+                    "why_handle_better_than_opening_patch": (
+                        "It targets a countable evidence handle while preserving "
+                        "strongest-rival pressure."
+                    ),
+                    "local_law_explanation": (
+                        "Let objects hold the pattern before the text names it."
+                    ),
+                    "uncertainty": "medium",
+                    "strongest_rival_pressure_remains_blocking": True,
+                    "not_human_data": True,
+                }
+            )
+        if request.schema == ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA:
+            prompt = json.loads(request.input_text)
+            span_id = prompt["patchable_span_ids"][0]
+            return dump_json(
+                {
+                    "patches": [
+                        {
+                            "patch_span_id": span_id,
+                            "replacement_text": "It held the night in the grain",
+                            "rationale": (
+                                "Compress explanation into a local object action."
+                            ),
+                            "local_law_explanation": (
+                                "The grain can carry the pressure without naming proof."
+                            ),
+                            "uncertainty": "medium",
+                        }
+                    ],
+                    "preserves_necessary_philosophical_pressure": (
+                        "The replacement keeps the night's pressure in the object-world."
+                    ),
+                    "avoids_full_rewrite": True,
+                    "not_human_data": True,
+                }
+            )
+        raise AssertionError(f"unexpected schema: {request.schema.name}")
+
+
+def ablation_informed_stub_factory(clients, *, mode: str = "valid"):
+    def _factory(model: str) -> StubAblationInformedRevisionClient:
+        client = StubAblationInformedRevisionClient(model=model, mode=mode)
         clients.append(client)
         return client
 
@@ -2682,6 +2785,194 @@ def test_ablation_informed_revision_openai_guard_refuses_before_model_call(
     assert result.payload["refused"] is True
     assert "--allow-live-model" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_ablation_informed_revision_openai_refuses_without_api_key(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        client_factory=ablation_informed_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "OPENAI_API_KEY" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert clients == []
+
+
+def test_ablation_informed_revision_stubbed_openai_success_is_controller_bounded(
+    tmp_path,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert set(result.payload["artifact_ids"]) == set(
+        ABLATION_INFORMED_REVISION_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["model_calls"] == 3
+    assert len(clients) == 1
+    assert [request.schema for request in clients[0].requests] == [
+        ABLATION_INFORMED_BASE_SELECTION_SCHEMA,
+        ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA,
+        ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA,
+    ]
+    assert all(
+        call["provider"] == "openai" and call["model"] == "stub-ablation-informed-model"
+        for call in result.payload["model_calls"]
+    )
+    assert all(call["status"] == MODEL_CALL_SUCCESS for call in result.payload["model_calls"])
+
+    base = read_payload(result.payload["artifact_paths"]["cycle2_base_candidate_selection"])
+    handle = read_payload(result.payload["artifact_paths"]["selected_next_failure_or_handle"])
+    patch = read_payload(result.payload["artifact_paths"]["cycle2_patch_proposal"])
+    work_order = read_payload(
+        result.payload["artifact_paths"]["ablation_informed_revision_work_order"]
+    )
+    revised = read_payload(result.payload["artifact_paths"]["cycle2_revised_candidate_text"])
+    diff = read_payload(result.payload["artifact_paths"]["cycle2_revision_diff_report"])
+    comparison = read_payload(
+        result.payload["artifact_paths"]["cycle2_preliminary_old_new_rival_comparison"]
+    )
+    gate = read_payload(result.payload["artifact_paths"]["cycle2_gate_report"])
+
+    for artifact_type, call in zip(
+        (
+            "cycle2_base_candidate_selection",
+            "selected_next_failure_or_handle",
+            "cycle2_patch_proposal",
+        ),
+        result.payload["model_calls"],
+        strict=True,
+    ):
+        envelope = json.loads(
+            Path(result.payload["artifact_paths"][artifact_type]).read_text(
+                encoding="utf-8"
+            )
+        )
+        assert envelope["model_call_id"] == call["id"]
+        assert envelope["fixture_only"] is False
+        assert read_payload(result.payload["artifact_paths"][artifact_type])[
+            "model_call_id"
+        ] == call["id"]
+        assert call["parsed_output_artifact_id"] == result.payload["artifact_ids"][
+            artifact_type
+        ]
+
+    option_ids = {option["base_candidate_id"] for option in base["base_candidate_options"]}
+    assert base["selected_base_candidate_id"] in option_ids
+    assert base["selected_base_choice"] == BASE_CHOICE_CONTROLLER_COMPOSED
+    assert base["previous_repair_treated_as_proven"] is False
+    assert "proof" in base["model_record_law_proof_answer_insight"]
+
+    assert handle["selected_next_handle"] == "record_law_proof_answer_compression"
+    assert handle["strongest_rival_pressure_preserved"] is True
+    assert handle["controller_owned_evidence_selection"] is True
+
+    assert work_order["controller_owned"] is True
+    assert work_order["patchable_spans"]
+    assert patch["bounded_patch_set"] is True
+    assert patch["full_rewrite"] is False
+    assert patch["patches"][0]["patch_span_id"] in work_order["patchable_span_ids"]
+    assert patch["patches"][0]["before_text_owned_by_controller"]
+
+    assert revised["assembled_by_controller"] is True
+    assert revised["full_rewrite"] is False
+    assert revised["source_patch_ids"]
+    assert diff["controller_owned"] is True
+    assert diff["changed_spans"][0]["before_text"]
+    assert comparison["preliminary_not_proof"] is True
+    assert comparison["does_not_count_as_executed_ablation_evidence"] is True
+    assert gate["eligible"] is False
+    assert gate["passed"] is False
+    assert gate["human_validation_required"] is False
+    assert gate["paper_validation_required"] is False
+    assert gate["phase_shift_claim"] is False
+    assert gate["final_gates_marked_passed"] == []
+
+    with connect(config.db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+    assert "paper" not in final_report.message.lower()
+
+
+def test_ablation_informed_revision_stubbed_openai_invented_base_fails_closed(
+    tmp_path,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(clients, mode="invented_base"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == ABLATION_INFORMED_BASE_SELECTION_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "cycle2_base_candidate_selection" not in result.payload["artifact_ids"]
+    assert "cycle2_packet" not in result.payload["artifact_ids"]
+
+
+def test_ablation_informed_revision_stubbed_openai_malformed_output_fails_closed(
+    tmp_path,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(clients, mode="invalid_json"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == ABLATION_INFORMED_BASE_SELECTION_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "cycle2_base_candidate_selection" not in result.payload["artifact_ids"]
+    assert "cycle2_packet" not in result.payload["artifact_ids"]
 
 
 def test_stubbed_openai_autonomous_revision_invalid_output_fails_closed(tmp_path):

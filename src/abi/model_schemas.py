@@ -62,6 +62,9 @@ class WorkerRole(str, Enum):
     )
     AUTONOMOUS_REVISION_LOCAL_LAW_REPORTER = "autonomous_revision_local_law_reporter"
     EXECUTED_ABLATION_INTERNAL_COMPARATOR = "executed_ablation_internal_comparator"
+    ABLATION_INFORMED_BASE_SELECTOR = "ablation_informed_base_selector"
+    ABLATION_INFORMED_HANDLE_SELECTOR = "ablation_informed_handle_selector"
+    ABLATION_INFORMED_PATCH_PROPOSER = "ablation_informed_patch_proposer"
 
 
 @dataclass(frozen=True)
@@ -434,6 +437,30 @@ EXECUTED_ABLATION_MODEL_SCHEMAS = (
     EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA,
 )
 
+ABLATION_INFORMED_BASE_SELECTION_SCHEMA = WorkerSchema(
+    name="AblationInformedBaseSelectionOutput",
+    version="1",
+    artifact_type="cycle2_base_candidate_selection",
+)
+
+ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA = WorkerSchema(
+    name="AblationInformedHandleSelectionOutput",
+    version="1",
+    artifact_type="selected_next_failure_or_handle",
+)
+
+ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA = WorkerSchema(
+    name="AblationInformedPatchProposalOutput",
+    version="1",
+    artifact_type="cycle2_patch_proposal",
+)
+
+ABLATION_INFORMED_REVISION_MODEL_SCHEMAS = (
+    ABLATION_INFORMED_BASE_SELECTION_SCHEMA,
+    ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA,
+    ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA,
+)
+
 LIVE_MODEL_WORKER_SCHEMAS = (
     LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
     + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
@@ -442,6 +469,7 @@ LIVE_MODEL_WORKER_SCHEMAS = (
     + INTERNAL_READER_LAB_MODEL_SCHEMAS
     + AUTONOMOUS_REVISION_MODEL_SCHEMAS
     + EXECUTED_ABLATION_MODEL_SCHEMAS
+    + ABLATION_INFORMED_REVISION_MODEL_SCHEMAS
 )
 
 
@@ -1998,6 +2026,91 @@ def executed_ablation_internal_comparison_json_schema() -> dict[str, Any]:
     )
 
 
+def ablation_informed_base_selection_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "selected_base_candidate_id": {"type": "string"},
+            "why_packet_0030_not_proven": {"type": "string"},
+            "prior_repair_causal_status": {"type": "string"},
+            "evidence_rationale": {"type": "string"},
+            "embodiment_preserving_insight": {"type": "string"},
+            "record_law_proof_answer_insight": {"type": "string"},
+            "uncertainty": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "selected_base_candidate_id",
+            "why_packet_0030_not_proven",
+            "prior_repair_causal_status",
+            "evidence_rationale",
+            "embodiment_preserving_insight",
+            "record_law_proof_answer_insight",
+            "uncertainty",
+            "not_human_data",
+        ],
+    )
+
+
+def ablation_informed_handle_selection_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "selected_next_handle": {"type": "string"},
+            "why_previous_repair_weak_or_cosmetic": {"type": "string"},
+            "evidence_summary": {"type": "string"},
+            "why_handle_better_than_opening_patch": {"type": "string"},
+            "local_law_explanation": {"type": "string"},
+            "uncertainty": {"type": "string"},
+            "strongest_rival_pressure_remains_blocking": {"type": "boolean"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "selected_next_handle",
+            "why_previous_repair_weak_or_cosmetic",
+            "evidence_summary",
+            "why_handle_better_than_opening_patch",
+            "local_law_explanation",
+            "uncertainty",
+            "strongest_rival_pressure_remains_blocking",
+            "not_human_data",
+        ],
+    )
+
+
+def ablation_informed_patch_proposal_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "patches": {
+                "type": "array",
+                "items": _object_schema(
+                    {
+                        "patch_span_id": {"type": "string"},
+                        "replacement_text": {"type": "string"},
+                        "rationale": {"type": "string"},
+                        "local_law_explanation": {"type": "string"},
+                        "uncertainty": {"type": "string"},
+                    },
+                    [
+                        "patch_span_id",
+                        "replacement_text",
+                        "rationale",
+                        "local_law_explanation",
+                        "uncertainty",
+                    ],
+                ),
+            },
+            "preserves_necessary_philosophical_pressure": {"type": "string"},
+            "avoids_full_rewrite": {"type": "boolean"},
+            "not_human_data": {"type": "boolean"},
+        },
+        [
+            "patches",
+            "preserves_necessary_philosophical_pressure",
+            "avoids_full_rewrite",
+            "not_human_data",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -2085,6 +2198,12 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return autonomous_revision_local_law_case_note_json_schema()
     if schema == EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA:
         return executed_ablation_internal_comparison_json_schema()
+    if schema == ABLATION_INFORMED_BASE_SELECTION_SCHEMA:
+        return ablation_informed_base_selection_json_schema()
+    if schema == ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA:
+        return ablation_informed_handle_selection_json_schema()
+    if schema == ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA:
+        return ablation_informed_patch_proposal_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -2182,6 +2301,12 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_autonomous_revision_local_law_case_note(payload)
     if schema == EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA:
         return _validate_executed_ablation_internal_comparison(payload)
+    if schema == ABLATION_INFORMED_BASE_SELECTION_SCHEMA:
+        return _validate_ablation_informed_base_selection(payload)
+    if schema == ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA:
+        return _validate_ablation_informed_handle_selection(payload)
+    if schema == ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA:
+        return _validate_ablation_informed_patch_proposal(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -3365,6 +3490,94 @@ def _validate_executed_ablation_internal_comparison(
     return {
         "comparison_rows": rows,
         "summary": payload["summary"],
+        "not_human_data": True,
+    }
+
+
+def _validate_ablation_informed_base_selection(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "selected_base_candidate_id",
+        "why_packet_0030_not_proven",
+        "prior_repair_causal_status",
+        "evidence_rationale",
+        "embodiment_preserving_insight",
+        "record_law_proof_answer_insight",
+        "uncertainty",
+    ):
+        _require_type(payload, key, str)
+    _require_true(payload, "not_human_data")
+    return {
+        "selected_base_candidate_id": payload["selected_base_candidate_id"],
+        "why_packet_0030_not_proven": payload["why_packet_0030_not_proven"],
+        "prior_repair_causal_status": payload["prior_repair_causal_status"],
+        "evidence_rationale": payload["evidence_rationale"],
+        "embodiment_preserving_insight": payload["embodiment_preserving_insight"],
+        "record_law_proof_answer_insight": payload[
+            "record_law_proof_answer_insight"
+        ],
+        "uncertainty": payload["uncertainty"],
+        "not_human_data": True,
+    }
+
+
+def _validate_ablation_informed_handle_selection(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "selected_next_handle",
+        "why_previous_repair_weak_or_cosmetic",
+        "evidence_summary",
+        "why_handle_better_than_opening_patch",
+        "local_law_explanation",
+        "uncertainty",
+    ):
+        _require_type(payload, key, str)
+    _require_type(payload, "strongest_rival_pressure_remains_blocking", bool)
+    _require_true(payload, "not_human_data")
+    return {
+        "selected_next_handle": payload["selected_next_handle"],
+        "why_previous_repair_weak_or_cosmetic": payload[
+            "why_previous_repair_weak_or_cosmetic"
+        ],
+        "evidence_summary": payload["evidence_summary"],
+        "why_handle_better_than_opening_patch": payload[
+            "why_handle_better_than_opening_patch"
+        ],
+        "local_law_explanation": payload["local_law_explanation"],
+        "uncertainty": payload["uncertainty"],
+        "strongest_rival_pressure_remains_blocking": payload[
+            "strongest_rival_pressure_remains_blocking"
+        ],
+        "not_human_data": True,
+    }
+
+
+def _validate_ablation_informed_patch_proposal(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_object_list(payload, "patches")
+    patches = []
+    for index, patch in enumerate(payload["patches"]):
+        patches.append(
+            _validate_object(
+                patch,
+                f"patches[{index}]",
+                (
+                    "patch_span_id",
+                    "replacement_text",
+                    "rationale",
+                    "local_law_explanation",
+                    "uncertainty",
+                ),
+            )
+        )
+    if not patches:
+        raise ModelValidationError("patches must not be empty")
+    _require_type(payload, "preserves_necessary_philosophical_pressure", str)
+    _require_true(payload, "avoids_full_rewrite")
+    _require_true(payload, "not_human_data")
+    return {
+        "patches": patches,
+        "preserves_necessary_philosophical_pressure": payload[
+            "preserves_necessary_philosophical_pressure"
+        ],
+        "avoids_full_rewrite": True,
         "not_human_data": True,
     }
 

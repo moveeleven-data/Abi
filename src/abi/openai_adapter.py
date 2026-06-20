@@ -11,6 +11,7 @@ from abi.model_driver import ModelClientError, WorkerRequest
 from abi.model_schemas import (
     ABI_EAR_FIELD_MODEL_SCHEMA,
     ABI_EAR_GERM_ANALYSIS_SCHEMA,
+    ABLATION_INFORMED_REVISION_MODEL_SCHEMAS,
     AUTONOMOUS_REVISION_MODEL_SCHEMAS,
     LIVE_MODEL_WORKER_SCHEMAS,
     PILOT_ABI_CANDIDATE_SCHEMA,
@@ -98,6 +99,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_pilot_reader_artifact_prompt
     if schema in AUTONOMOUS_REVISION_MODEL_SCHEMAS:
         return _build_autonomous_revision_prompt
+    if schema in ABLATION_INFORMED_REVISION_MODEL_SCHEMAS:
+        return _build_ablation_informed_revision_prompt
     return _build_live_packet_prompt
 
 
@@ -185,6 +188,21 @@ def _build_autonomous_revision_prompt(input_text: str) -> str:
         "executed rows must use exact allowed executed_variant_id values; non-executed "
         "probes must be planned_only with planned_probe_id. Do not claim finality, "
         "validation, phase shift, human evidence, or paper readiness. Prompt packet:\n"
+        f"{input_text}"
+    )
+
+
+def _build_ablation_informed_revision_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema for one ablation-informed revision "
+        "worker. Use only the controller-owned options, target IDs, span IDs, packet "
+        "references, and evidence fields supplied in the prompt. Do not invent base "
+        "candidate IDs, patch target IDs, or patch span IDs. The model may choose one "
+        "allowed base option, explain the next causal handle, and propose bounded "
+        "replacement text for listed spans. The controller owns before text, full "
+        "revised text assembly, diff reports, gates, finalization, evidence counts, "
+        "and rival-defeated truth. Do not claim finality, validation, phase shift, "
+        "human evidence, or paper readiness. Prompt packet:\n"
         f"{input_text}"
     )
 

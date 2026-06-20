@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import os
@@ -15,6 +16,15 @@ from abi.controller.state import get_run, set_active_phase
 from abi.db import connect, initialize_database
 from abi.hashing import sha256_text
 from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
+from abi.model_calls import link_model_call_parsed_artifact
+from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
+from abi.model_schemas import (
+    ABLATION_INFORMED_BASE_SELECTION_SCHEMA,
+    ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA,
+    ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA,
+    ModelValidationError,
+    WorkerRole,
+)
 from abi.packets import PacketWriter, create_packet_dir, read_json_file
 
 
@@ -27,6 +37,7 @@ ABLATION_INFORMED_REVISION_CLIENTS = (
     ABLATION_INFORMED_REVISION_CLIENT_OPENAI,
 )
 ABLATION_INFORMED_REVISION_MAX_MODEL_CALLS_DEFAULT = 8
+ABLATION_INFORMED_REVISION_REQUIRED_MODEL_CALLS = 3
 
 ABLATION_INFORMED_REVISION_ARTIFACT_TYPES = (
     "ablation_informed_revision_subject_manifest",
@@ -54,6 +65,7 @@ class AblationInformedRevisionResult:
     exit_code: int
     payload: dict[str, object]
     gate_records: tuple[GateRecord, ...] = ()
+    model_results: tuple[ModelDriverResult, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,6 +132,7 @@ def run_ablation_informed_revision(
     max_model_calls: int = ABLATION_INFORMED_REVISION_MAX_MODEL_CALLS_DEFAULT,
     api_key: str | None = None,
     model: str | None = None,
+    client_factory: Callable[[str], ModelClient] | None = None,
 ) -> AblationInformedRevisionResult:
     if client_name not in ABLATION_INFORMED_REVISION_CLIENTS:
         return _refusal(
@@ -161,14 +174,18 @@ def run_ablation_informed_revision(
             executed_ablation_packet=executed_ablation_packet,
             message=f"Ablation-informed revision refused; {OPENAI_API_KEY_ENV} is not set.",
         )
-    if client_name == ABLATION_INFORMED_REVISION_CLIENT_OPENAI:
+    if (
+        client_name == ABLATION_INFORMED_REVISION_CLIENT_OPENAI
+        and max_model_calls < ABLATION_INFORMED_REVISION_REQUIRED_MODEL_CALLS
+    ):
         return _refusal(
             client_name=client_name,
             model=configured_model,
             executed_ablation_packet=executed_ablation_packet,
             message=(
-                "Ablation-informed revision OpenAI worker is not implemented in this "
-                "manual cycle; use --client fake for deterministic local revision."
+                "Ablation-informed revision refused; max-model-calls "
+                f"{max_model_calls} is below required budget "
+                f"{ABLATION_INFORMED_REVISION_REQUIRED_MODEL_CALLS}."
             ),
         )
 
@@ -217,17 +234,42 @@ def run_ablation_informed_revision(
             ),
         )
 
-    return _run_fake_packet(config=config, subject=subject, output_dir=output_dir)
+    if client_name == ABLATION_INFORMED_REVISION_CLIENT_OPENAI:
+        factory = client_factory or _default_openai_client_factory
+        return _run_packet(
+            config=config,
+            subject=subject,
+            output_dir=output_dir,
+            client_name=client_name,
+            fixture_only=False,
+            model=configured_model,
+            model_client=factory(configured_model),
+        )
+
+    return _run_packet(
+        config=config,
+        subject=subject,
+        output_dir=output_dir,
+        client_name=client_name,
+        fixture_only=True,
+        model=None,
+        model_client=None,
+    )
 
 
-def _run_fake_packet(
+def _run_packet(
     *,
     config: AbiConfig,
     subject: AblationInformedSubject,
     output_dir: Path,
+    client_name: str,
+    fixture_only: bool,
+    model: str | None,
+    model_client: ModelClient | None,
 ) -> AblationInformedRevisionResult:
     artifacts: dict[str, ArtifactRecord] = {}
     payloads: dict[str, dict[str, Any]] = {}
+    model_results: list[ModelDriverResult] = []
 
     with connect(config.db_path) as connection:
         writer = PacketWriter(
@@ -236,12 +278,13 @@ def _run_fake_packet(
             packet_dir=output_dir,
             lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
             created_by="ablation_informed_revision_cycle_v1_controller",
-            fixture_only=True,
+            fixture_only=fixture_only,
             model_call_id=None,
         )
 
         payloads["ablation_informed_revision_subject_manifest"] = _build_subject_manifest(
-            subject
+            subject,
+            fixture_only=fixture_only,
         )
         artifacts["ablation_informed_revision_subject_manifest"] = writer.write_artifact(
             "ablation_informed_revision_subject_manifest",
@@ -249,7 +292,10 @@ def _run_fake_packet(
             parent_ids=_subject_parent_ids(subject),
         )
 
-        payloads["ablation_evidence_summary"] = _build_evidence_summary(subject)
+        payloads["ablation_evidence_summary"] = _build_evidence_summary(
+            subject,
+            fixture_only=fixture_only,
+        )
         artifacts["ablation_evidence_summary"] = writer.write_artifact(
             "ablation_evidence_summary",
             payloads["ablation_evidence_summary"],
@@ -261,34 +307,149 @@ def _run_fake_packet(
             ],
         )
 
+    if model_client is not None:
+        base_parent_ids = [
+            artifacts["ablation_evidence_summary"].id,
+            subject.revision_artifacts["revised_candidate_text"].id,
+            subject.artifacts["actual_ablation_variant_set"].id,
+        ]
+        result = _run_base_selection_model(
+            config=config,
+            subject=subject,
+            output_dir=output_dir,
+            model_client=model_client,
+            evidence_summary=payloads["ablation_evidence_summary"],
+            parent_ids=base_parent_ids,
+        )
+        model_results.append(result)
+        if not result.accepted or result.parsed_payload is None:
+            return _failure_result(
+                client_name=client_name,
+                model=model,
+                subject=subject,
+                packet_dir=output_dir,
+                artifacts=artifacts,
+                payloads=payloads,
+                model_results=model_results,
+                message=_model_failure_message("base selection", result),
+            )
         payloads["cycle2_base_candidate_selection"] = _build_base_selection(
             subject,
             payloads["ablation_evidence_summary"],
+            model_payload=result.parsed_payload,
+            model_call_id=result.model_call.id,
+            fixture_only=fixture_only,
         )
-        artifacts["cycle2_base_candidate_selection"] = writer.write_artifact(
-            "cycle2_base_candidate_selection",
-            payloads["cycle2_base_candidate_selection"],
-            parent_ids=[
-                artifacts["ablation_evidence_summary"].id,
-                subject.revision_artifacts["revised_candidate_text"].id,
-                subject.artifacts["actual_ablation_variant_set"].id,
-            ],
+        artifacts["cycle2_base_candidate_selection"], model_results[-1] = (
+            _write_model_produced_artifact(
+                config=config,
+                result=result,
+                run_id=subject.run_id,
+                packet_dir=output_dir,
+                artifact_type="cycle2_base_candidate_selection",
+                payload=payloads["cycle2_base_candidate_selection"],
+                parent_ids=base_parent_ids,
+                fixture_only=fixture_only,
+            )
         )
 
+        handle_parent_ids = [
+            artifacts["ablation_evidence_summary"].id,
+            artifacts["cycle2_base_candidate_selection"].id,
+            subject.revision_artifacts["selected_failure_diagnosis"].id,
+            subject.artifacts["ablation_causal_effect_report"].id,
+        ]
+        result = _run_handle_selection_model(
+            config=config,
+            subject=subject,
+            output_dir=output_dir,
+            model_client=model_client,
+            evidence_summary=payloads["ablation_evidence_summary"],
+            base_selection=payloads["cycle2_base_candidate_selection"],
+            parent_ids=handle_parent_ids,
+        )
+        model_results.append(result)
+        if not result.accepted or result.parsed_payload is None:
+            return _failure_result(
+                client_name=client_name,
+                model=model,
+                subject=subject,
+                packet_dir=output_dir,
+                artifacts=artifacts,
+                payloads=payloads,
+                model_results=model_results,
+                message=_model_failure_message("next handle", result),
+            )
         payloads["selected_next_failure_or_handle"] = _build_next_handle(
             subject,
             payloads["ablation_evidence_summary"],
+            model_payload=result.parsed_payload,
+            model_call_id=result.model_call.id,
+            fixture_only=fixture_only,
         )
-        artifacts["selected_next_failure_or_handle"] = writer.write_artifact(
-            "selected_next_failure_or_handle",
-            payloads["selected_next_failure_or_handle"],
-            parent_ids=[
-                artifacts["ablation_evidence_summary"].id,
-                subject.revision_artifacts["selected_failure_diagnosis"].id,
-                subject.artifacts["ablation_causal_effect_report"].id,
-            ],
+        artifacts["selected_next_failure_or_handle"], model_results[-1] = (
+            _write_model_produced_artifact(
+                config=config,
+                result=result,
+                run_id=subject.run_id,
+                packet_dir=output_dir,
+                artifact_type="selected_next_failure_or_handle",
+                payload=payloads["selected_next_failure_or_handle"],
+                parent_ids=handle_parent_ids,
+                fixture_only=fixture_only,
+            )
         )
+    else:
+        with connect(config.db_path) as connection:
+            writer = PacketWriter(
+                connection=connection,
+                run_id=subject.run_id,
+                packet_dir=output_dir,
+                lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+                created_by="ablation_informed_revision_cycle_v1_controller",
+                fixture_only=fixture_only,
+                model_call_id=None,
+            )
+            payloads["cycle2_base_candidate_selection"] = _build_base_selection(
+                subject,
+                payloads["ablation_evidence_summary"],
+                fixture_only=fixture_only,
+            )
+            artifacts["cycle2_base_candidate_selection"] = writer.write_artifact(
+                "cycle2_base_candidate_selection",
+                payloads["cycle2_base_candidate_selection"],
+                parent_ids=[
+                    artifacts["ablation_evidence_summary"].id,
+                    subject.revision_artifacts["revised_candidate_text"].id,
+                    subject.artifacts["actual_ablation_variant_set"].id,
+                ],
+            )
 
+            payloads["selected_next_failure_or_handle"] = _build_next_handle(
+                subject,
+                payloads["ablation_evidence_summary"],
+                fixture_only=fixture_only,
+            )
+            artifacts["selected_next_failure_or_handle"] = writer.write_artifact(
+                "selected_next_failure_or_handle",
+                payloads["selected_next_failure_or_handle"],
+                parent_ids=[
+                    artifacts["ablation_evidence_summary"].id,
+                    subject.revision_artifacts["selected_failure_diagnosis"].id,
+                    subject.artifacts["ablation_causal_effect_report"].id,
+                ],
+            )
+
+    with connect(config.db_path) as connection:
+        writer = PacketWriter(
+            connection=connection,
+            run_id=subject.run_id,
+            packet_dir=output_dir,
+            lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+            created_by="ablation_informed_revision_cycle_v1_controller",
+            fixture_only=fixture_only,
+            model_call_id=None,
+        )
         payloads["ablation_informed_revision_work_order"] = _build_work_order(
             subject=subject,
             base_selection=payloads["cycle2_base_candidate_selection"],
@@ -304,18 +465,82 @@ def _run_fake_packet(
             ],
         )
 
+    patch_parent_ids = [artifacts["ablation_informed_revision_work_order"].id]
+    if model_client is not None:
+        result = _run_patch_proposal_model(
+            config=config,
+            subject=subject,
+            output_dir=output_dir,
+            model_client=model_client,
+            work_order=payloads["ablation_informed_revision_work_order"],
+            next_handle=payloads["selected_next_failure_or_handle"],
+            parent_ids=patch_parent_ids,
+        )
+        model_results.append(result)
+        if not result.accepted or result.parsed_payload is None:
+            return _failure_result(
+                client_name=client_name,
+                model=model,
+                subject=subject,
+                packet_dir=output_dir,
+                artifacts=artifacts,
+                payloads=payloads,
+                model_results=model_results,
+                message=_model_failure_message("patch proposal", result),
+            )
         payloads["cycle2_patch_proposal"] = _build_patch_proposal(
-            payloads["ablation_informed_revision_work_order"]
+            payloads["ablation_informed_revision_work_order"],
+            model_payload=result.parsed_payload,
+            model_call_id=result.model_call.id,
+            fixture_only=fixture_only,
         )
-        artifacts["cycle2_patch_proposal"] = writer.write_artifact(
-            "cycle2_patch_proposal",
-            payloads["cycle2_patch_proposal"],
-            parent_ids=[artifacts["ablation_informed_revision_work_order"].id],
+        artifacts["cycle2_patch_proposal"], model_results[-1] = (
+            _write_model_produced_artifact(
+                config=config,
+                result=result,
+                run_id=subject.run_id,
+                packet_dir=output_dir,
+                artifact_type="cycle2_patch_proposal",
+                payload=payloads["cycle2_patch_proposal"],
+                parent_ids=patch_parent_ids,
+                fixture_only=fixture_only,
+            )
         )
+    else:
+        with connect(config.db_path) as connection:
+            writer = PacketWriter(
+                connection=connection,
+                run_id=subject.run_id,
+                packet_dir=output_dir,
+                lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+                created_by="ablation_informed_revision_cycle_v1_controller",
+                fixture_only=fixture_only,
+                model_call_id=None,
+            )
+            payloads["cycle2_patch_proposal"] = _build_patch_proposal(
+                payloads["ablation_informed_revision_work_order"],
+                fixture_only=fixture_only,
+            )
+            artifacts["cycle2_patch_proposal"] = writer.write_artifact(
+                "cycle2_patch_proposal",
+                payloads["cycle2_patch_proposal"],
+                parent_ids=patch_parent_ids,
+            )
 
+    with connect(config.db_path) as connection:
+        writer = PacketWriter(
+            connection=connection,
+            run_id=subject.run_id,
+            packet_dir=output_dir,
+            lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+            created_by="ablation_informed_revision_cycle_v1_controller",
+            fixture_only=fixture_only,
+            model_call_id=None,
+        )
         payloads["cycle2_revised_candidate_text"] = _build_revised_candidate(
             base_selection=payloads["cycle2_base_candidate_selection"],
             patch_proposal=payloads["cycle2_patch_proposal"],
+            fixture_only=fixture_only,
         )
         artifacts["cycle2_revised_candidate_text"] = writer.write_artifact(
             "cycle2_revised_candidate_text",
@@ -331,6 +556,7 @@ def _run_fake_packet(
             work_order=payloads["ablation_informed_revision_work_order"],
             patch_proposal=payloads["cycle2_patch_proposal"],
             revised_candidate=payloads["cycle2_revised_candidate_text"],
+            fixture_only=fixture_only,
         )
         artifacts["cycle2_revision_diff_report"] = writer.write_artifact(
             "cycle2_revision_diff_report",
@@ -347,6 +573,7 @@ def _run_fake_packet(
                 subject=subject,
                 base_selection=payloads["cycle2_base_candidate_selection"],
                 revised_candidate=payloads["cycle2_revised_candidate_text"],
+                fixture_only=fixture_only,
             )
         )
         artifacts["cycle2_preliminary_old_new_rival_comparison"] = writer.write_artifact(
@@ -366,6 +593,7 @@ def _run_fake_packet(
             preliminary_comparison=payloads[
                 "cycle2_preliminary_old_new_rival_comparison"
             ],
+            fixture_only=fixture_only,
         )
         artifacts["cycle2_gate_report"] = writer.write_artifact(
             "cycle2_gate_report",
@@ -381,6 +609,9 @@ def _run_fake_packet(
             packet_dir=output_dir,
             artifacts=artifacts,
             payloads=payloads,
+            model=model,
+            model_results=model_results,
+            fixture_only=fixture_only,
         )
         artifacts["cycle2_packet"] = writer.write_artifact(
             "cycle2_packet",
@@ -396,17 +627,335 @@ def _run_fake_packet(
         payload=_summary_payload(
             subject=subject,
             packet_dir=output_dir,
-            client_name=ABLATION_INFORMED_REVISION_CLIENT_FAKE,
+            client_name=client_name,
             artifacts=artifacts,
             payloads=payloads,
             accepted=True,
             message=None,
-            model=None,
+            model=model,
+            model_results=model_results,
         ),
+        model_results=tuple(model_results),
     )
 
 
-def _build_subject_manifest(subject: AblationInformedSubject) -> dict[str, Any]:
+def _run_base_selection_model(
+    *,
+    config: AbiConfig,
+    subject: AblationInformedSubject,
+    output_dir: Path,
+    model_client: ModelClient,
+    evidence_summary: dict[str, Any],
+    parent_ids: list[str],
+) -> ModelDriverResult:
+    driver = ModelDriver(config=config, client=model_client)
+    return driver.run(
+        WorkerRequest(
+            run_id=subject.run_id,
+            worker_role=WorkerRole.ABLATION_INFORMED_BASE_SELECTOR,
+            prompt_contract_id="autonomous.ablation_informed_revision.base_selection.v1",
+            schema=ABLATION_INFORMED_BASE_SELECTION_SCHEMA,
+            input_text=_prompt_for_base_selection(subject, evidence_summary),
+            input_artifact_ids=list(parent_ids),
+            input_packet_path=str(subject.packet_dir),
+            lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+            parent_ids=list(parent_ids),
+            fixture_only=False,
+            output_dir=str(output_dir),
+            register_parsed_artifact=False,
+            parsed_payload_validator=lambda payload: _validate_model_base_selection(
+                subject,
+                payload,
+            ),
+        )
+    )
+
+
+def _run_handle_selection_model(
+    *,
+    config: AbiConfig,
+    subject: AblationInformedSubject,
+    output_dir: Path,
+    model_client: ModelClient,
+    evidence_summary: dict[str, Any],
+    base_selection: dict[str, Any],
+    parent_ids: list[str],
+) -> ModelDriverResult:
+    driver = ModelDriver(config=config, client=model_client)
+    return driver.run(
+        WorkerRequest(
+            run_id=subject.run_id,
+            worker_role=WorkerRole.ABLATION_INFORMED_HANDLE_SELECTOR,
+            prompt_contract_id="autonomous.ablation_informed_revision.handle_selection.v1",
+            schema=ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA,
+            input_text=_prompt_for_handle_selection(
+                subject,
+                evidence_summary,
+                base_selection,
+            ),
+            input_artifact_ids=list(parent_ids),
+            input_packet_path=str(subject.packet_dir),
+            lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+            parent_ids=list(parent_ids),
+            fixture_only=False,
+            output_dir=str(output_dir),
+            register_parsed_artifact=False,
+            parsed_payload_validator=lambda payload: _validate_model_handle_selection(
+                evidence_summary,
+                payload,
+            ),
+        )
+    )
+
+
+def _run_patch_proposal_model(
+    *,
+    config: AbiConfig,
+    subject: AblationInformedSubject,
+    output_dir: Path,
+    model_client: ModelClient,
+    work_order: dict[str, Any],
+    next_handle: dict[str, Any],
+    parent_ids: list[str],
+) -> ModelDriverResult:
+    driver = ModelDriver(config=config, client=model_client)
+    return driver.run(
+        WorkerRequest(
+            run_id=subject.run_id,
+            worker_role=WorkerRole.ABLATION_INFORMED_PATCH_PROPOSER,
+            prompt_contract_id="autonomous.ablation_informed_revision.patch_proposal.v1",
+            schema=ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA,
+            input_text=_prompt_for_patch_proposal(work_order, next_handle),
+            input_artifact_ids=list(parent_ids),
+            input_packet_path=str(subject.packet_dir),
+            lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+            parent_ids=list(parent_ids),
+            fixture_only=False,
+            output_dir=str(output_dir),
+            register_parsed_artifact=False,
+            parsed_payload_validator=lambda payload: _validate_model_patch_proposal(
+                work_order,
+                payload,
+            ),
+        )
+    )
+
+
+def _prompt_for_base_selection(
+    subject: AblationInformedSubject,
+    evidence_summary: dict[str, Any],
+) -> str:
+    return _canonical_json(
+        {
+            "task": "Select exactly one controller-owned base candidate option.",
+            "model_may_own": [
+                "selected_base_candidate_id",
+                "evidence rationale",
+                "uncertainty",
+            ],
+            "model_must_not_own": [
+                "base candidate text",
+                "base candidate IDs",
+                "evidence counts",
+                "finalization",
+                "phase-shift claims",
+            ],
+            "base_candidate_options": _base_options(subject),
+            "evidence_summary": evidence_summary,
+        }
+    )
+
+
+def _prompt_for_handle_selection(
+    subject: AblationInformedSubject,
+    evidence_summary: dict[str, Any],
+    base_selection: dict[str, Any],
+) -> str:
+    return _canonical_json(
+        {
+            "task": (
+                "Select the next bounded causal handle from executed ablation evidence "
+                "without treating the prior repair as proven."
+            ),
+            "previous_selected_failure": subject.revision_payloads[
+                "selected_failure_diagnosis"
+            ].get("selected_failure_type"),
+            "base_selection": {
+                "selected_base_candidate_id": base_selection[
+                    "selected_base_candidate_id"
+                ],
+                "selected_base_text_sha256": base_selection[
+                    "selected_base_text_sha256"
+                ],
+            },
+            "evidence_summary": evidence_summary,
+            "required_pressure": {
+                "previous_repair_treated_as_proven": False,
+                "strongest_rival_pressure_remains_blocking": evidence_summary[
+                    "strongest_rival_pressure_remains_blocking"
+                ],
+            },
+        }
+    )
+
+
+def _prompt_for_patch_proposal(
+    work_order: dict[str, Any],
+    next_handle: dict[str, Any],
+) -> str:
+    return _canonical_json(
+        {
+            "task": (
+                "Propose bounded replacement text only for listed patch_span_ids. "
+                "Do not provide before text or a full revised candidate."
+            ),
+            "selected_next_handle": next_handle["selected_next_handle"],
+            "allowed_patch_target_ids": work_order["allowed_patch_target_ids"],
+            "patchable_span_ids": work_order["patchable_span_ids"],
+            "patchable_spans": work_order["patchable_spans"],
+            "protected_effects": work_order["protected_effects"],
+            "forbidden_changes": work_order["forbidden_changes"],
+        }
+    )
+
+
+def _validate_model_base_selection(
+    subject: AblationInformedSubject,
+    payload: dict[str, object],
+) -> None:
+    allowed_ids = {option["base_candidate_id"] for option in _base_options(subject)}
+    selected = str(payload.get("selected_base_candidate_id", ""))
+    if selected not in allowed_ids:
+        raise ModelValidationError(
+            "selected_base_candidate_id must be one of controller-owned base options"
+        )
+    prior_status = str(payload.get("prior_repair_causal_status", "")).strip()
+    if not prior_status:
+        raise ModelValidationError("prior_repair_causal_status must not be empty")
+
+
+def _validate_model_handle_selection(
+    evidence_summary: dict[str, Any],
+    payload: dict[str, object],
+) -> None:
+    selected = str(payload.get("selected_next_handle", "")).strip()
+    if not selected:
+        raise ModelValidationError("selected_next_handle must not be empty")
+    if (
+        evidence_summary["strongest_rival_pressure_remains_blocking"]
+        and payload.get("strongest_rival_pressure_remains_blocking") is not True
+    ):
+        raise ModelValidationError(
+            "strongest_rival_pressure_remains_blocking must preserve controller evidence"
+        )
+
+
+def _validate_model_patch_proposal(
+    work_order: dict[str, Any],
+    payload: dict[str, object],
+) -> None:
+    allowed_ids = {str(value) for value in work_order["patchable_span_ids"]}
+    seen: set[str] = set()
+    for patch in payload.get("patches", []):
+        if not isinstance(patch, dict):
+            raise ModelValidationError("patches must contain objects")
+        patch_span_id = str(patch.get("patch_span_id", ""))
+        if patch_span_id not in allowed_ids:
+            raise ModelValidationError(
+                "patch_span_id must be one of controller-owned patchable spans"
+            )
+        if patch_span_id in seen:
+            raise ModelValidationError("duplicate patch_span_id in patch proposal")
+        seen.add(patch_span_id)
+        replacement = str(patch.get("replacement_text", "")).strip()
+        if not replacement:
+            raise ModelValidationError("replacement_text must not be empty")
+        if len(_words(replacement)) > 80:
+            raise ModelValidationError("replacement_text must remain bounded")
+    if not seen:
+        raise ModelValidationError("patch proposal must include at least one patch")
+
+
+def _write_model_produced_artifact(
+    *,
+    config: AbiConfig,
+    result: ModelDriverResult,
+    run_id: str,
+    packet_dir: Path,
+    artifact_type: str,
+    payload: dict[str, Any],
+    parent_ids: list[str],
+    fixture_only: bool,
+) -> tuple[ArtifactRecord, ModelDriverResult]:
+    with connect(config.db_path) as connection:
+        writer = PacketWriter(
+            connection=connection,
+            run_id=run_id,
+            packet_dir=packet_dir,
+            lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
+            created_by=(
+                f"model_driver:{result.model_call.provider}:{result.model_call.model}"
+            ),
+            fixture_only=fixture_only,
+            model_call_id=result.model_call.id,
+        )
+        artifact = writer.write_artifact(artifact_type, payload, parent_ids=parent_ids)
+        linked_call = link_model_call_parsed_artifact(
+            connection,
+            model_call_id=result.model_call.id,
+            parsed_output_artifact_id=artifact.id,
+        )
+    return artifact, ModelDriverResult(
+        model_call=linked_call,
+        parsed_payload=result.parsed_payload,
+        parsed_artifact=artifact,
+    )
+
+
+def _failure_result(
+    *,
+    client_name: str,
+    model: str | None,
+    subject: AblationInformedSubject,
+    packet_dir: Path,
+    artifacts: dict[str, ArtifactRecord],
+    payloads: dict[str, dict[str, Any]],
+    model_results: list[ModelDriverResult],
+    message: str,
+) -> AblationInformedRevisionResult:
+    return AblationInformedRevisionResult(
+        exit_code=1,
+        payload=_summary_payload(
+            subject=subject,
+            packet_dir=packet_dir,
+            client_name=client_name,
+            artifacts=artifacts,
+            payloads=payloads,
+            accepted=False,
+            message=message,
+            model=model,
+            model_results=model_results,
+        ),
+        model_results=tuple(model_results),
+    )
+
+
+def _model_failure_message(step: str, result: ModelDriverResult) -> str:
+    detail = result.model_call.error_message or result.model_call.status
+    return f"Ablation-informed revision refused during {step}: {detail}"
+
+
+def _default_openai_client_factory(model: str) -> ModelClient:
+    from abi.openai_adapter import OpenAIResponsesClient
+
+    return OpenAIResponsesClient(model=model)
+
+
+def _build_subject_manifest(
+    subject: AblationInformedSubject,
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
     return {
         "worker": "ablation_informed_revision_subject_manifest_v1",
         "run_id": subject.run_id,
@@ -437,11 +986,15 @@ def _build_subject_manifest(subject: AblationInformedSubject) -> dict[str, Any]:
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
     }
 
 
-def _build_evidence_summary(subject: AblationInformedSubject) -> dict[str, Any]:
+def _build_evidence_summary(
+    subject: AblationInformedSubject,
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
     causal = subject.payloads["ablation_causal_effect_report"]
     old_new = subject.payloads["ablation_old_new_rival_comparison"]
     execution = subject.payloads["ablation_execution_report"]
@@ -494,57 +1047,32 @@ def _build_evidence_summary(subject: AblationInformedSubject) -> dict[str, Any]:
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
     }
 
 
 def _build_base_selection(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
+    *,
+    model_payload: dict[str, Any] | None = None,
+    model_call_id: str | None = None,
+    fixture_only: bool,
 ) -> dict[str, Any]:
-    original = subject.original_candidate.text
-    packet_0030 = subject.packet_0030_revised_text
-    embodiment_variant = subject.variant_by_operation_id(
-        "operation_embodiment_preserving_repair"
+    choices = _base_options(subject)
+    selected_choice = (
+        str(model_payload["selected_base_candidate_id"])
+        if model_payload is not None
+        else BASE_CHOICE_CONTROLLER_COMPOSED
     )
-    record_variant = subject.variant_by_operation_id("operation_record_label_compression")
-    controller_base = _compose_cycle2_base_from_evidence(
-        original,
-        subject.packet_0030_revised_text,
-    )
-    choices = [
-        _base_option(BASE_CHOICE_ORIGINAL, original, "source Text A before packet_0030"),
-        _base_option(
-            BASE_CHOICE_PACKET_0030,
-            packet_0030,
-            "packet_0030 revised candidate, not assumed proven",
-        ),
-    ]
-    if embodiment_variant is not None:
-        choices.append(
-            _base_option(
-                BASE_CHOICE_EMBODIMENT,
-                str(embodiment_variant["text"]),
-                "executed embodiment-preserving ablation variant",
-            )
-        )
-    if record_variant is not None:
-        choices.append(
-            _base_option(
-                BASE_CHOICE_RECORD,
-                str(record_variant["text"]),
-                "executed record-label compression ablation variant",
-            )
-        )
-    choices.append(
-        _base_option(
-            BASE_CHOICE_CONTROLLER_COMPOSED,
-            controller_base,
-            "controller-composed base from evidence-supported opening changes",
-        )
-    )
+    selected_text = _base_text_for_choice(subject, selected_choice)
+    model_selection = model_payload or {}
     return {
-        "worker": "cycle2_base_candidate_selection_v1_controller",
+        "worker": (
+            "cycle2_base_candidate_selection_v1_model_driver"
+            if model_payload is not None
+            else "cycle2_base_candidate_selection_v1_controller"
+        ),
         "controller_owned": True,
         "allowed_choices": [
             BASE_CHOICE_ORIGINAL,
@@ -554,17 +1082,49 @@ def _build_base_selection(
             BASE_CHOICE_CONTROLLER_COMPOSED,
         ],
         "base_candidate_options": choices,
-        "selected_base_choice": BASE_CHOICE_CONTROLLER_COMPOSED,
-        "selected_base_text": controller_base,
-        "selected_base_text_sha256": sha256_text(controller_base),
-        "selected_base_word_count": len(_words(controller_base)),
+        "selected_base_candidate_id": selected_choice,
+        "selected_base_choice": selected_choice,
+        "selected_base_text": selected_text,
+        "selected_base_text_sha256": sha256_text(selected_text),
+        "selected_base_word_count": len(_words(selected_text)),
         "selection_rationale": (
-            "Use a controller-composed base: preserve the supported removal of 'as if "
-            "nothing happened' while restoring concrete embodiment from the original/"
-            "embodiment-preserving evidence. Packet_0030 is not treated as proven."
+            str(model_selection["evidence_rationale"])
+            if model_payload is not None
+            else (
+                "Use a controller-composed base: preserve the supported removal of 'as if "
+                "nothing happened' while restoring concrete embodiment from the original/"
+                "embodiment-preserving evidence. Packet_0030 is not treated as proven."
+            )
+        ),
+        "why_packet_0030_not_treated_as_proven": (
+            str(model_selection["why_packet_0030_not_proven"])
+            if model_payload is not None
+            else (
+                "Executed ablation marked the prior repair weak/noncausal, so packet_0030 "
+                "is evidence to inspect rather than proof to stack onto."
+            )
         ),
         "previous_repair_causal_status": evidence_summary["previous_repair_causal_status"],
         "previous_repair_treated_as_proven": False,
+        "model_reported_prior_repair_causal_status": (
+            model_selection.get("prior_repair_causal_status")
+            if model_payload is not None
+            else None
+        ),
+        "model_embodiment_preserving_insight": (
+            model_selection.get("embodiment_preserving_insight")
+            if model_payload is not None
+            else None
+        ),
+        "model_record_law_proof_answer_insight": (
+            model_selection.get("record_law_proof_answer_insight")
+            if model_payload is not None
+            else None
+        ),
+        "model_uncertainty": (
+            model_selection.get("uncertainty") if model_payload is not None else None
+        ),
+        "model_call_id": model_call_id,
         "packet_0030_changes_superseded": [
             "flattened legs/plain wording",
             "flattened spoon placement",
@@ -579,25 +1139,38 @@ def _build_base_selection(
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
     }
 
 
 def _build_next_handle(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
+    *,
+    model_payload: dict[str, Any] | None = None,
+    model_call_id: str | None = None,
+    fixture_only: bool,
 ) -> dict[str, Any]:
     selected_failure = subject.revision_payloads["selected_failure_diagnosis"]
+    model_selection = model_payload or {}
     return {
-        "worker": "selected_next_failure_or_handle_v1_controller",
+        "worker": (
+            "selected_next_failure_or_handle_v1_model_driver"
+            if model_payload is not None
+            else "selected_next_failure_or_handle_v1_controller"
+        ),
         "previous_selected_failure": selected_failure.get("selected_failure_type"),
         "previous_repair_causal_status": evidence_summary[
             "previous_repair_causal_status"
         ],
         "why_previous_repair_was_weak_or_cosmetic": (
-            "Executed ablation reported revert performs same or better and repair "
-            "has no strong causal support, so the packet_0030 opening patch cannot "
-            "be reused as proof of improvement."
+            str(model_selection["why_previous_repair_weak_or_cosmetic"])
+            if model_payload is not None
+            else (
+                "Executed ablation reported revert performs same or better and repair "
+                "has no strong causal support, so the packet_0030 opening patch cannot "
+                "be reused as proof of improvement."
+            )
         ),
         "executed_ablation_evidence": {
             "revert_performs_same_or_better": evidence_summary[
@@ -613,11 +1186,19 @@ def _build_next_handle(
                 "strongest_rival_pressure_remains_blocking"
             ],
         },
-        "selected_next_handle": "record_law_proof_answer_compression",
+        "selected_next_handle": (
+            str(model_selection["selected_next_handle"])
+            if model_payload is not None
+            else "record_law_proof_answer_compression"
+        ),
         "why_better_supported_than_repeating_opening_patch": (
-            "Record-label compression was countable executed evidence and improved "
-            "discovery in the ablation comparison, while repeating packet_0030's "
-            "opening patch would preserve an unproven repair."
+            str(model_selection["why_handle_better_than_opening_patch"])
+            if model_payload is not None
+            else (
+                "Record-label compression was countable executed evidence and improved "
+                "discovery in the ablation comparison, while repeating packet_0030's "
+                "opening patch would preserve an unproven repair."
+            )
         ),
         "revision_goal": [
             "preserve or restore concrete opening embodiment",
@@ -626,6 +1207,18 @@ def _build_next_handle(
             "preserve philosophical pressure without turning descriptive only",
         ],
         "strongest_rival_pressure_preserved": True,
+        "model_evidence_summary": (
+            model_selection.get("evidence_summary") if model_payload is not None else None
+        ),
+        "model_local_law_explanation": (
+            model_selection.get("local_law_explanation")
+            if model_payload is not None
+            else None
+        ),
+        "model_uncertainty": (
+            model_selection.get("uncertainty") if model_payload is not None else None
+        ),
+        "model_call_id": model_call_id,
         "controller_owned_evidence_selection": True,
         "model_owned_fields_allowed_if_live": [
             "replacement_text",
@@ -646,7 +1239,7 @@ def _build_next_handle(
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
     }
 
 
@@ -717,42 +1310,95 @@ def _build_work_order(
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": base_selection["fixture_only"],
     }
 
 
-def _build_patch_proposal(work_order: dict[str, Any]) -> dict[str, Any]:
+def _build_patch_proposal(
+    work_order: dict[str, Any],
+    *,
+    model_payload: dict[str, Any] | None = None,
+    model_call_id: str | None = None,
+    fixture_only: bool,
+) -> dict[str, Any]:
     patches = []
     replacements = _cycle2_replacements()
-    for index, span in enumerate(work_order["patchable_spans"], start=1):
-        before = str(span["exact_text"])
-        after = replacements.get(before)
-        if after is None:
-            continue
+    spans_by_id = {str(span["patch_span_id"]): span for span in work_order["patchable_spans"]}
+    if model_payload is not None:
+        proposed_by_span = {
+            str(patch["patch_span_id"]): patch for patch in model_payload["patches"]
+        }
+        span_items = [
+            (
+                index,
+                span,
+                str(proposed_by_span[str(span["patch_span_id"])]["replacement_text"]),
+            )
+            for index, span in enumerate(work_order["patchable_spans"], start=1)
+            if str(span["patch_span_id"]) in proposed_by_span
+        ]
+    else:
+        span_items = []
+        for index, span in enumerate(work_order["patchable_spans"], start=1):
+            before = str(span["exact_text"])
+            after = replacements.get(before)
+            if after is not None:
+                span_items.append((index, span, after))
+    for index, span, after in span_items:
+        patch_span_id = str(span["patch_span_id"])
+        model_patch = (
+            {str(patch["patch_span_id"]): patch for patch in model_payload["patches"]}[
+                patch_span_id
+            ]
+            if model_payload is not None
+            else None
+        )
         patches.append(
             {
                 "patch_id": f"cycle2_patch_{index:03d}",
                 "patch_target_id": "cycle2_target_record_law_proof_answer_compression",
-                "patch_span_id": span["patch_span_id"],
-                "replacement_text": after,
+                "patch_span_id": patch_span_id,
+                "replacement_text": str(after),
                 "rationale": (
-                    "Compress early interpretive labels so objects carry significance "
-                    "longer before the text names the pattern."
+                    str(model_patch["rationale"])
+                    if model_patch is not None
+                    else (
+                        "Compress early interpretive labels so objects carry significance "
+                        "longer before the text names the pattern."
+                    )
                 ),
+                "local_law_explanation": (
+                    model_patch.get("local_law_explanation") if model_patch else None
+                ),
+                "uncertainty": model_patch.get("uncertainty") if model_patch else None,
                 "evidence_source": "ablation_old_new_rival_comparison.record_compression_improves_discovery",
                 "preserves_or_supersedes_packet_0030_prior_patch": "supersedes",
                 "bounded_patch": True,
+                "before_text_owned_by_controller": str(spans_by_id[patch_span_id]["exact_text"]),
             }
         )
     return {
-        "worker": "cycle2_patch_proposal_v1_deterministic",
+        "worker": (
+            "cycle2_patch_proposal_v1_model_driver"
+            if model_payload is not None
+            else "cycle2_patch_proposal_v1_deterministic"
+        ),
         "controller_validated": True,
         "full_rewrite": False,
         "bounded_patch_set": True,
         "selected_next_handle": work_order["selected_next_handle"],
         "patches": patches,
-        "model_call_id": None,
-        "model_owned_fields": [],
+        "model_call_id": model_call_id,
+        "model_owned_fields": (
+            [
+                "replacement_text",
+                "rationale",
+                "local_law_explanation",
+                "uncertainty",
+            ]
+            if model_payload is not None
+            else []
+        ),
         "controller_owned_fields": [
             "patch_id",
             "patch_target_id",
@@ -764,7 +1410,7 @@ def _build_patch_proposal(work_order: dict[str, Any]) -> dict[str, Any]:
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
     }
 
 
@@ -772,6 +1418,7 @@ def _build_revised_candidate(
     *,
     base_selection: dict[str, Any],
     patch_proposal: dict[str, Any],
+    fixture_only: bool,
 ) -> dict[str, Any]:
     text = str(base_selection["selected_base_text"])
     source_patch_ids = []
@@ -802,7 +1449,7 @@ def _build_revised_candidate(
         "not_finalization_eligible": True,
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
     }
 
 
@@ -812,6 +1459,7 @@ def _build_diff_report(
     work_order: dict[str, Any],
     patch_proposal: dict[str, Any],
     revised_candidate: dict[str, Any],
+    fixture_only: bool,
 ) -> dict[str, Any]:
     spans_by_id = {
         str(span["patch_span_id"]): span for span in work_order["patchable_spans"]
@@ -857,7 +1505,7 @@ def _build_diff_report(
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
     }
 
 
@@ -866,6 +1514,7 @@ def _build_preliminary_comparison(
     subject: AblationInformedSubject,
     base_selection: dict[str, Any],
     revised_candidate: dict[str, Any],
+    fixture_only: bool,
 ) -> dict[str, Any]:
     original_score = _score_text(subject.original_candidate.text)
     packet_0030_score = _score_text(subject.packet_0030_revised_text)
@@ -922,7 +1571,7 @@ def _build_preliminary_comparison(
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
     }
 
 
@@ -932,13 +1581,15 @@ def _build_gate_report(
     evidence_summary: dict[str, Any],
     revised_candidate: dict[str, Any],
     preliminary_comparison: dict[str, Any],
+    fixture_only: bool,
 ) -> dict[str, Any]:
     unresolved = [
         "cycle2 requires executed ablation before any improvement claim",
         "strongest-rival pressure remains blocking",
         "internal operator approval is absent",
-        "fake ablation-informed revision mode is fixture-only",
     ]
+    if fixture_only:
+        unresolved.append("fake ablation-informed revision mode is fixture-only")
     gate_results = [
         _gate_result("ablation_informed_revision_packet_exists", True),
         _gate_result(
@@ -990,7 +1641,7 @@ def _build_gate_report(
         "paper_validation_required": False,
         "phase_shift_claim": False,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
         "not_human_data": True,
         "summary_verdict": (
             "Cycle2 produced a bounded ablation-informed revision, but it remains "
@@ -1007,6 +1658,9 @@ def _build_packet_summary(
     packet_dir: Path,
     artifacts: dict[str, ArtifactRecord],
     payloads: dict[str, dict[str, Any]],
+    model: str | None,
+    model_results: list[ModelDriverResult],
+    fixture_only: bool,
 ) -> dict[str, Any]:
     return {
         "worker": "cycle2_packet_v1",
@@ -1026,8 +1680,10 @@ def _build_packet_summary(
             "required_ablation_informed_revision_artifacts": len(
                 ABLATION_INFORMED_REVISION_ARTIFACT_TYPES
             ),
-            "model_calls": 0,
+            "model_calls": len(model_results),
         },
+        "model": model,
+        "model_call_ids": [result.model_call.id for result in model_results],
         "selected_base_choice": payloads["cycle2_base_candidate_selection"][
             "selected_base_choice"
         ],
@@ -1039,13 +1695,12 @@ def _build_packet_summary(
         ],
         "previous_repair_treated_as_proven": False,
         "gate_report": payloads["cycle2_gate_report"],
-        "model_call_ids": [],
         "non_final": True,
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
-        "fixture_only": True,
+        "fixture_only": fixture_only,
         "not_human_data": True,
     }
 
@@ -1282,11 +1937,94 @@ def _span_before_from_patch_id(
 
 def _base_option(choice: str, text: str, basis: str) -> dict[str, Any]:
     return {
+        "base_candidate_id": choice,
         "choice": choice,
         "basis": basis,
         "text_sha256": sha256_text(text),
         "word_count": len(_words(text)),
     }
+
+
+def _base_options(subject: AblationInformedSubject) -> list[dict[str, Any]]:
+    original = subject.original_candidate.text
+    packet_0030 = subject.packet_0030_revised_text
+    embodiment = _variant_text_by_operation_id(
+        subject,
+        "operation_embodiment_preserving_repair",
+        fallback=packet_0030,
+    )
+    record = _variant_text_by_operation_id(
+        subject,
+        "operation_record_label_compression",
+        fallback=packet_0030,
+    )
+    controller_composed = _compose_cycle2_base_from_evidence(original, packet_0030)
+    return [
+        _base_option(
+            BASE_CHOICE_ORIGINAL,
+            original,
+            "original reader-facing candidate from the pilot packet",
+        ),
+        _base_option(
+            BASE_CHOICE_PACKET_0030,
+            packet_0030,
+            "prior autonomous revision packet; not treated as proven",
+        ),
+        _base_option(
+            BASE_CHOICE_EMBODIMENT,
+            embodiment,
+            "executed ablation embodiment-preserving variant",
+        ),
+        _base_option(
+            BASE_CHOICE_RECORD,
+            record,
+            "executed ablation record-label compression variant",
+        ),
+        _base_option(
+            BASE_CHOICE_CONTROLLER_COMPOSED,
+            controller_composed,
+            "controller-composed base from evidence-supported changes",
+        ),
+    ]
+
+
+def _base_text_for_choice(subject: AblationInformedSubject, choice: str) -> str:
+    if choice == BASE_CHOICE_ORIGINAL:
+        return subject.original_candidate.text
+    if choice == BASE_CHOICE_PACKET_0030:
+        return subject.packet_0030_revised_text
+    if choice == BASE_CHOICE_EMBODIMENT:
+        return _variant_text_by_operation_id(
+            subject,
+            "operation_embodiment_preserving_repair",
+            fallback=subject.packet_0030_revised_text,
+        )
+    if choice == BASE_CHOICE_RECORD:
+        return _variant_text_by_operation_id(
+            subject,
+            "operation_record_label_compression",
+            fallback=subject.packet_0030_revised_text,
+        )
+    if choice == BASE_CHOICE_CONTROLLER_COMPOSED:
+        return _compose_cycle2_base_from_evidence(
+            subject.original_candidate.text,
+            subject.packet_0030_revised_text,
+        )
+    raise ModelValidationError(
+        "selected_base_candidate_id must be one of controller-owned base options"
+    )
+
+
+def _variant_text_by_operation_id(
+    subject: AblationInformedSubject,
+    operation_id: str,
+    *,
+    fallback: str,
+) -> str:
+    variant = subject.variant_by_operation_id(operation_id)
+    if variant is None:
+        return fallback
+    return str(variant.get("text", fallback))
 
 
 def _score_text(text: str) -> dict[str, int]:
@@ -1375,6 +2113,7 @@ def _summary_payload(
     accepted: bool,
     message: str | None,
     model: str | None,
+    model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
     return {
         "accepted": accepted,
@@ -1397,9 +2136,9 @@ def _summary_payload(
             "required_ablation_informed_revision_artifacts": len(
                 ABLATION_INFORMED_REVISION_ARTIFACT_TYPES
             ),
-            "model_calls": 0,
+            "model_calls": len(model_results),
         },
-        "model_calls": [],
+        "model_calls": [result.model_call_to_dict() for result in model_results],
         "gate_report": payloads.get("cycle2_gate_report"),
         "message": message,
     }
@@ -1437,3 +2176,7 @@ def _resolve_path(config: AbiConfig, value: Path | str) -> Path:
 
 def _words(text: str) -> list[str]:
     return [word.strip(".,;:!?()[]{}\"'").lower() for word in text.split() if word.strip()]
+
+
+def _canonical_json(payload: object) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
