@@ -46,6 +46,10 @@ from abi.modules.autonomous_evidence_synthesis import (
     AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES,
     run_autonomous_evidence_synthesis,
 )
+from abi.modules.bounded_macro_recomposition import (
+    BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES,
+    run_bounded_macro_recomposition,
+)
 from abi.modules.ablation_informed_revision import (
     ABLATION_INFORMED_REVISION_ARTIFACT_TYPES,
     BASE_CHOICE_CONTROLLER_COMPOSED,
@@ -4299,3 +4303,148 @@ def test_autonomous_evidence_synthesis_refuses_missing_critical_packets(tmp_path
     assert "missing critical source packet kinds" in result.payload["message"]
     assert "internal_reader_lab" in result.payload["missing_critical_source_kinds"]
     assert result.payload["finalization_eligible"] is False
+
+
+def test_bounded_macro_recomposition_fake_creates_fail_closed_packet(tmp_path):
+    config, _failed_ablation, pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+        before_calls = list_model_calls(connection)
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+
+    result = run_bounded_macro_recomposition(
+        config,
+        client_name="fake",
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    assert set(result.payload["artifact_ids"]) == set(BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES)
+    assert result.payload["base_candidate_packet_id"] != pivot_revision["packet_id"]
+    assert result.payload["target_movement"] == "middle_and_return_movement"
+    assert result.payload["bounded_macro_recomposition"] is True
+    assert result.payload["full_rewrite"] is False
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(packet_dir / "macro_recomposition_subject_manifest.json")
+    assert manifest["base_from_synthesis_selected_best_candidate"] is True
+    assert manifest["failed_pivot_packet_used_as_base"] is False
+    assert manifest["packet_0030_used_as_base"] is False
+
+    protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
+    assert "table/dust/spoon/saucer local field" in protected["protected_effects"]
+    assert "rewriting the whole artifact" in protected["forbidden_changes"]
+    assert "naming pressure more often instead of embodying pressure" in protected[
+        "forbidden_changes"
+    ]
+
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["base_candidate_packet_id"] == result.payload["base_candidate_packet_id"]
+    assert candidate["target_movement"] == "middle_and_return_movement"
+    assert candidate["bounded_macro_recomposition"] is True
+    assert candidate["full_rewrite"] is False
+    assert candidate["finalization_eligible"] is False
+    assert candidate["no_phase_shift_claim"] is True
+
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    assert diff["opening_scene_preserved"] is True
+    assert diff["bounded_macro_recomposition"] is True
+    assert diff["full_rewrite"] is False
+    assert diff["unchanged_prefix_paragraph_count"] >= 1
+    assert diff["changed_spans"]
+
+    rival = read_payload(packet_dir / "macro_rival_pressure_check.json")
+    assert rival["strongest_rival_pressure_preserved"] is True
+    assert rival["strongest_rival_still_blocks"] is True
+    assert rival["strongest_rival_comparison_passed"] is False
+
+    gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert "macro_recomposition_executed_ablation_completed" in gate["failed_gates"]
+    assert "no_unresolved_internal_blockers" in gate["failed_gates"]
+    assert "internal_operator_approval" in gate["failed_gates"]
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_bounded_macro_recomposition_refuses_invalid_synthesis_packet_missing_brief(
+    tmp_path,
+):
+    config, _failed_ablation, _pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    invalid_packet = tmp_path / "invalid_synthesis_packet"
+    shutil.copytree(Path(str(synthesis.payload["packet_dir"])), invalid_packet)
+    (invalid_packet / "macro_recomposition_brief.json").unlink()
+
+    result = run_bounded_macro_recomposition(
+        config,
+        client_name="fake",
+        synthesis_packet=invalid_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "macro_recomposition_brief.json" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_bounded_macro_recomposition_openai_guards_refuse_before_model_calls(
+    tmp_path,
+    monkeypatch,
+):
+    config, _failed_ablation, _pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+        before_calls = list_model_calls(connection)
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    synthesis_packet = Path(str(synthesis.payload["packet_dir"]))
+
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    missing_allow = run_bounded_macro_recomposition(
+        config,
+        client_name="openai",
+        synthesis_packet=synthesis_packet,
+    )
+    assert missing_allow.exit_code == 1
+    assert missing_allow.payload["accepted"] is False
+    assert "--allow-live-model" in missing_allow.payload["message"]
+    assert missing_allow.payload["counts"]["model_calls"] == 0
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    missing_key = run_bounded_macro_recomposition(
+        config,
+        client_name="openai",
+        synthesis_packet=synthesis_packet,
+        allow_live_model=True,
+    )
+    assert missing_key.exit_code == 1
+    assert missing_key.payload["accepted"] is False
+    assert "OPENAI_API_KEY" in missing_key.payload["message"]
+    assert missing_key.payload["counts"]["model_calls"] == 0
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+    assert len(after_calls) == len(before_calls)

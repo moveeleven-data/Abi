@@ -39,6 +39,11 @@ from abi.modules.executed_ablation import (
     run_executed_ablation,
 )
 from abi.modules.autonomous_evidence_synthesis import run_autonomous_evidence_synthesis
+from abi.modules.bounded_macro_recomposition import (
+    BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
+    BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
+    run_bounded_macro_recomposition,
+)
 from abi.modules.internal_reader_lab import (
     INTERNAL_READER_LAB_CLIENTS,
     INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
@@ -377,6 +382,33 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Run ID whose autonomous evidence chain should be synthesized.",
     )
+    autonomous_macro_recompose_parser = autonomous_subparsers.add_parser(
+        "macro-recompose",
+        help="Run bounded macro recomposition from an evidence synthesis packet",
+    )
+    autonomous_macro_recompose_parser.add_argument(
+        "--client",
+        choices=BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
+        required=True,
+        help="Bounded macro recomposition client path to use.",
+    )
+    autonomous_macro_recompose_parser.add_argument(
+        "--synthesis-packet",
+        type=Path,
+        required=True,
+        help="Autonomous evidence synthesis packet directory to consume.",
+    )
+    autonomous_macro_recompose_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_macro_recompose_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for bounded macro recomposition.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -535,6 +567,14 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_synthesize_evidence(
             config,
             run_id=args.run_id,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "macro-recompose":
+        return _cmd_autonomous_macro_recompose(
+            config,
+            client_name=args.client,
+            synthesis_packet=args.synthesis_packet,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
         )
     if args.command == "controller" and args.controller_command == "status":
         return _cmd_controller_status(config)
@@ -838,6 +878,25 @@ def _cmd_autonomous_synthesize_evidence(
     run_id: str,
 ) -> int:
     result = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_macro_recompose(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    synthesis_packet: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_bounded_macro_recomposition(
+        config,
+        client_name=client_name,
+        synthesis_packet=synthesis_packet,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
 

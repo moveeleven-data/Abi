@@ -6,6 +6,7 @@ from abi.modules.ablation_informed_revision import (
     ABLATION_INFORMED_REVISION_ARTIFACT_TYPES,
 )
 from abi.modules.autonomous_revision import AUTONOMOUS_REVISION_ARTIFACT_TYPES
+from abi.modules.bounded_macro_recomposition import BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES
 from abi.modules.executed_ablation import EXECUTED_ABLATION_ARTIFACT_TYPES
 
 
@@ -259,6 +260,112 @@ def test_autonomous_revise_from_ablation_cli_fake_and_openai_guard(
             "openai",
             "--executed-ablation-packet",
             ablate_payload["packet_dir"],
+        ]
+    )
+    openai_payload = json.loads(capsys.readouterr().out)
+
+    assert openai_exit == 1
+    assert openai_payload["refused"] is True
+    assert "--allow-live-model" in openai_payload["message"]
+    assert openai_payload["counts"]["model_calls"] == 0
+
+
+def test_autonomous_macro_recompose_cli_fake_and_openai_guard(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    lab_payload = build_reader_lab_packet(tmp_path, capsys)
+    revise_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "revise",
+            "--client",
+            "fake",
+            "--reader-lab-packet",
+            lab_payload["packet_dir"],
+        ]
+    )
+    revise_payload = json.loads(capsys.readouterr().out)
+    assert revise_exit == 0
+
+    ablate_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "ablate",
+            "--client",
+            "fake",
+            "--revision-packet",
+            revise_payload["packet_dir"],
+        ]
+    )
+    ablate_payload = json.loads(capsys.readouterr().out)
+    assert ablate_exit == 0
+
+    cycle2_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "revise-from-ablation",
+            "--client",
+            "fake",
+            "--executed-ablation-packet",
+            ablate_payload["packet_dir"],
+        ]
+    )
+    cycle2_payload = json.loads(capsys.readouterr().out)
+    assert cycle2_exit == 0
+
+    synthesize_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "synthesize-evidence",
+            "--run-id",
+            cycle2_payload["run_id"],
+        ]
+    )
+    synthesize_payload = json.loads(capsys.readouterr().out)
+    assert synthesize_exit == 0
+
+    macro_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "macro-recompose",
+            "--client",
+            "fake",
+            "--synthesis-packet",
+            synthesize_payload["packet_dir"],
+        ]
+    )
+    macro_payload = json.loads(capsys.readouterr().out)
+
+    assert macro_exit == 0
+    assert macro_payload["accepted"] is True
+    assert set(macro_payload["artifact_ids"]) == set(BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES)
+    assert macro_payload["target_movement"] == "middle_and_return_movement"
+    assert macro_payload["full_rewrite"] is False
+    assert macro_payload["gate_report"]["passed"] is False
+
+    openai_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "macro-recompose",
+            "--client",
+            "openai",
+            "--synthesis-packet",
+            synthesize_payload["packet_dir"],
         ]
     )
     openai_payload = json.loads(capsys.readouterr().out)
