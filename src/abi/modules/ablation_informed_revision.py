@@ -42,6 +42,7 @@ ABLATION_INFORMED_REVISION_REQUIRED_MODEL_CALLS = 3
 ABLATION_INFORMED_REVISION_ARTIFACT_TYPES = (
     "ablation_informed_revision_subject_manifest",
     "ablation_evidence_summary",
+    "ablation_evidence_dominance_report",
     "cycle2_base_candidate_selection",
     "selected_next_failure_or_handle",
     "ablation_informed_revision_work_order",
@@ -59,6 +60,7 @@ BASE_CHOICE_PACKET_0030 = "packet_0030_revised_candidate"
 BASE_CHOICE_EMBODIMENT = "embodiment_preserving_ablation_variant"
 BASE_CHOICE_RECORD = "record_label_compression_ablation_variant"
 BASE_CHOICE_CONTROLLER_COMPOSED = "controller_composed_base_from_evidence_supported_changes"
+BASE_CHOICE_DOMINANT_VARIANT = "dominant_countable_ablation_variant"
 
 SOURCE_REVISION_KIND_AUTONOMOUS = "autonomous_revision"
 SOURCE_REVISION_KIND_ABLATION_INFORMED = "ablation_informed_revision"
@@ -336,10 +338,26 @@ def _run_packet(
                 subject.artifacts["actual_ablation_variant_set"].id,
             ],
         )
+        payloads["ablation_evidence_dominance_report"] = _build_dominance_report(
+            subject,
+            evidence_summary=payloads["ablation_evidence_summary"],
+            fixture_only=fixture_only,
+        )
+        artifacts["ablation_evidence_dominance_report"] = writer.write_artifact(
+            "ablation_evidence_dominance_report",
+            payloads["ablation_evidence_dominance_report"],
+            parent_ids=[
+                artifacts["ablation_evidence_summary"].id,
+                subject.artifacts["actual_ablation_variant_set"].id,
+                subject.artifacts["ablation_old_new_rival_comparison"].id,
+                subject.artifacts["comparison_consistency_report"].id,
+            ],
+        )
 
     if model_client is not None:
         base_parent_ids = [
             artifacts["ablation_evidence_summary"].id,
+            artifacts["ablation_evidence_dominance_report"].id,
             subject.revision_artifacts["revised_candidate_text"].id,
             subject.artifacts["actual_ablation_variant_set"].id,
         ]
@@ -349,6 +367,7 @@ def _run_packet(
             output_dir=output_dir,
             model_client=model_client,
             evidence_summary=payloads["ablation_evidence_summary"],
+            dominance_report=payloads["ablation_evidence_dominance_report"],
             parent_ids=base_parent_ids,
         )
         model_results.append(result)
@@ -366,6 +385,7 @@ def _run_packet(
         payloads["cycle2_base_candidate_selection"] = _build_base_selection(
             subject,
             payloads["ablation_evidence_summary"],
+            payloads["ablation_evidence_dominance_report"],
             model_payload=result.parsed_payload,
             model_call_id=result.model_call.id,
             fixture_only=fixture_only,
@@ -446,6 +466,7 @@ def _run_packet(
             payloads["cycle2_base_candidate_selection"] = _build_base_selection(
                 subject,
                 payloads["ablation_evidence_summary"],
+                payloads["ablation_evidence_dominance_report"],
                 fixture_only=fixture_only,
             )
             artifacts["cycle2_base_candidate_selection"] = writer.write_artifact(
@@ -453,6 +474,7 @@ def _run_packet(
                 payloads["cycle2_base_candidate_selection"],
                 parent_ids=[
                     artifacts["ablation_evidence_summary"].id,
+                    artifacts["ablation_evidence_dominance_report"].id,
                     subject.revision_artifacts["revised_candidate_text"].id,
                     subject.artifacts["actual_ablation_variant_set"].id,
                 ],
@@ -491,6 +513,7 @@ def _run_packet(
             subject=subject,
             base_selection=payloads["cycle2_base_candidate_selection"],
             next_handle=payloads["selected_next_failure_or_handle"],
+            dominance_report=payloads["ablation_evidence_dominance_report"],
         )
         artifacts["ablation_informed_revision_work_order"] = writer.write_artifact(
             "ablation_informed_revision_work_order",
@@ -615,6 +638,7 @@ def _run_packet(
             work_order=payloads["ablation_informed_revision_work_order"],
             applied_patch_ledger=payloads["cycle2_applied_patch_ledger"],
             revised_candidate=payloads["cycle2_revised_candidate_text"],
+            dominance_report=payloads["ablation_evidence_dominance_report"],
             fixture_only=fixture_only,
         )
         try:
@@ -659,6 +683,7 @@ def _run_packet(
                 subject=subject,
                 base_selection=payloads["cycle2_base_candidate_selection"],
                 revised_candidate=payloads["cycle2_revised_candidate_text"],
+                dominance_report=payloads["ablation_evidence_dominance_report"],
                 fixture_only=fixture_only,
             )
         )
@@ -675,6 +700,7 @@ def _run_packet(
         payloads["cycle2_gate_report"] = _build_gate_report(
             subject=subject,
             evidence_summary=payloads["ablation_evidence_summary"],
+            dominance_report=payloads["ablation_evidence_dominance_report"],
             applied_patch_ledger=payloads["cycle2_applied_patch_ledger"],
             revised_candidate=payloads["cycle2_revised_candidate_text"],
             diff_report=payloads["cycle2_revision_diff_report"],
@@ -687,6 +713,7 @@ def _run_packet(
             "cycle2_gate_report",
             payloads["cycle2_gate_report"],
             parent_ids=[
+                artifacts["ablation_evidence_dominance_report"].id,
                 artifacts["cycle2_revised_candidate_text"].id,
                 artifacts["cycle2_preliminary_old_new_rival_comparison"].id,
             ],
@@ -734,6 +761,7 @@ def _run_base_selection_model(
     output_dir: Path,
     model_client: ModelClient,
     evidence_summary: dict[str, Any],
+    dominance_report: dict[str, Any],
     parent_ids: list[str],
 ) -> ModelDriverResult:
     driver = ModelDriver(config=config, client=model_client)
@@ -743,7 +771,11 @@ def _run_base_selection_model(
             worker_role=WorkerRole.ABLATION_INFORMED_BASE_SELECTOR,
             prompt_contract_id="autonomous.ablation_informed_revision.base_selection.v1",
             schema=ABLATION_INFORMED_BASE_SELECTION_SCHEMA,
-            input_text=_prompt_for_base_selection(subject, evidence_summary),
+            input_text=_prompt_for_base_selection(
+                subject,
+                evidence_summary,
+                dominance_report,
+            ),
             input_artifact_ids=list(parent_ids),
             input_packet_path=str(subject.packet_dir),
             lineage_id=ABLATION_INFORMED_REVISION_LINEAGE_ID,
@@ -754,6 +786,7 @@ def _run_base_selection_model(
             parsed_payload_validator=lambda payload: _validate_model_base_selection(
                 subject,
                 payload,
+                dominance_report,
             ),
         )
     )
@@ -832,6 +865,7 @@ def _run_patch_proposal_model(
 def _prompt_for_base_selection(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
+    dominance_report: dict[str, Any],
 ) -> str:
     return _canonical_json(
         {
@@ -848,8 +882,17 @@ def _prompt_for_base_selection(
                 "finalization",
                 "phase-shift claims",
             ],
-            "base_candidate_options": _base_options(subject),
+            "base_candidate_options": _base_options(subject, dominance_report),
             "evidence_summary": evidence_summary,
+            "ablation_evidence_dominance_report": dominance_report,
+            "dominance_policy": {
+                "if_dominance_detected": (
+                    "Select the recommended dominant base candidate, or provide "
+                    "explicit_dominance_rejection_reason plus protected-effect or "
+                    "forbidden-change evidence."
+                ),
+                "model_may_not_silently_choose_weaker_base": True,
+            },
         }
     )
 
@@ -902,6 +945,7 @@ def _prompt_for_patch_proposal(
             "patchable_spans": work_order["patchable_spans"],
             "protected_effects": work_order["protected_effects"],
             "forbidden_changes": work_order["forbidden_changes"],
+            "dominance_policy": work_order["dominance_policy"],
         }
     )
 
@@ -909,8 +953,11 @@ def _prompt_for_patch_proposal(
 def _validate_model_base_selection(
     subject: AblationInformedSubject,
     payload: dict[str, object],
+    dominance_report: dict[str, Any],
 ) -> None:
-    allowed_ids = {option["base_candidate_id"] for option in _base_options(subject)}
+    allowed_ids = {
+        option["base_candidate_id"] for option in _base_options(subject, dominance_report)
+    }
     selected = str(payload.get("selected_base_candidate_id", ""))
     if selected not in allowed_ids:
         raise ModelValidationError(
@@ -919,6 +966,30 @@ def _validate_model_base_selection(
     prior_status = str(payload.get("prior_repair_causal_status", "")).strip()
     if not prior_status:
         raise ModelValidationError("prior_repair_causal_status must not be empty")
+    if bool(dominance_report.get("dominance_detected")):
+        recommended = str(dominance_report["recommended_base_candidate_id"])
+        if selected != recommended:
+            reason = str(payload.get("explicit_dominance_rejection_reason", "")).strip()
+            evidence = str(
+                payload.get(
+                    "dominance_rejection_protected_effect_or_forbidden_change_evidence",
+                    "",
+                )
+            ).strip()
+            evidence_lower = evidence.lower()
+            if not reason:
+                raise ModelValidationError(
+                    "explicit_dominance_rejection_reason is required when "
+                    "selecting a weaker base than the dominant variant"
+                )
+            if not evidence or not any(
+                marker in evidence_lower
+                for marker in ("protected", "embodiment", "forbidden")
+            ):
+                raise ModelValidationError(
+                    "dominance rejection must cite protected-effect damage or "
+                    "a forbidden-change risk"
+                )
 
 
 def _validate_model_handle_selection(
@@ -959,8 +1030,14 @@ def _validate_model_patch_proposal(
             raise ModelValidationError("replacement_text must not be empty")
         if len(_words(replacement)) > 80:
             raise ModelValidationError("replacement_text must remain bounded")
-    if not seen:
+    if not seen and not _dominant_variant_directly_selected(work_order):
         raise ModelValidationError("patch proposal must include at least one patch")
+
+
+def _dominant_variant_directly_selected(work_order: dict[str, Any]) -> bool:
+    return bool(
+        work_order.get("dominance_policy", {}).get("dominant_variant_directly_selected")
+    )
 
 
 def _write_model_produced_artifact(
@@ -1175,22 +1252,220 @@ def _build_evidence_summary(
     }
 
 
+def _build_dominance_report(
+    subject: AblationInformedSubject,
+    *,
+    evidence_summary: dict[str, Any],
+    fixture_only: bool,
+) -> dict[str, Any]:
+    old_new = subject.payloads["ablation_old_new_rival_comparison"]
+    consistency = subject.payloads["comparison_consistency_report"]
+    variant_set = subject.payloads["actual_ablation_variant_set"]
+    source_scores = dict(old_new["revised_score"])
+    variant_scores_by_id = {
+        str(variant_id): dict(scores)
+        for variant_id, scores in old_new.get("variant_scores", {}).items()
+    }
+    comparison_consistency_passed = bool(
+        consistency["comparison_internal_consistency"]
+    )
+    analyses: list[dict[str, Any]] = []
+    for variant in variant_set["variants"]:
+        variant_id = str(variant["variant_id"])
+        scores = variant_scores_by_id.get(variant_id) or _score_text(
+            str(variant.get("text", ""))
+        )
+        improves_discovery = (
+            int(scores["discovery_score"]) >= int(source_scores["discovery_score"])
+        )
+        reduces_overexplanation = (
+            int(scores["overexplanation_score"])
+            < int(source_scores["overexplanation_score"])
+        )
+        preserves_embodiment = (
+            int(scores["local_embodiment_score"])
+            >= int(source_scores["local_embodiment_score"])
+        )
+        disqualifiers = []
+        if not bool(variant["evidence_countable"]):
+            disqualifiers.append("not_evidence_countable")
+        if not comparison_consistency_passed:
+            disqualifiers.append("comparison_consistency_failed")
+        if bool(variant["no_op"]):
+            disqualifiers.append("no_op")
+        if bool(variant["planned_only"]):
+            disqualifiers.append("planned_only")
+        if not bool(variant["operation_matches_actual_change"]):
+            disqualifiers.append("operation_mismatch")
+        if not improves_discovery:
+            disqualifiers.append("does_not_improve_discovery")
+        if not reduces_overexplanation:
+            disqualifiers.append("does_not_reduce_overexplanation")
+        if not preserves_embodiment:
+            disqualifiers.append("protected_embodiment_loss")
+        analyses.append(
+            {
+                "variant_id": variant_id,
+                "operation_id": variant["operation_id"],
+                "operation_type": variant["operation_type"],
+                "text_sha256": variant["text_sha256"],
+                "scores": scores,
+                "evidence_countable": bool(variant["evidence_countable"]),
+                "no_op": bool(variant["no_op"]),
+                "planned_only": bool(variant["planned_only"]),
+                "operation_matches_actual_change": bool(
+                    variant["operation_matches_actual_change"]
+                ),
+                "improves_discovery": improves_discovery,
+                "reduces_overexplanation": reduces_overexplanation,
+                "preserves_or_improves_embodiment": preserves_embodiment,
+                "dominates_source_revision": not disqualifiers,
+                "disqualifiers": disqualifiers,
+            }
+        )
+
+    countable = [item for item in analyses if item["evidence_countable"]]
+    dominant = [item for item in countable if item["dominates_source_revision"]]
+    best_pool = dominant or countable
+    best = max(best_pool, key=_dominance_sort_key) if best_pool else None
+    dominance_detected = bool(best and best["dominates_source_revision"])
+    recommended_base = (
+        BASE_CHOICE_DOMINANT_VARIANT
+        if dominance_detected
+        else BASE_CHOICE_CONTROLLER_COMPOSED
+    )
+    best_variant_id = str(best["variant_id"]) if best else None
+    best_variant = (
+        _variant_by_id(subject, best_variant_id) if best_variant_id is not None else None
+    )
+    protected_preserved = bool(
+        best and best["preserves_or_improves_embodiment"] and dominance_detected
+    )
+    basis = [
+        "controller-owned dominance thresholds",
+        "evidence_countable must be true",
+        "comparison consistency must pass",
+        "discovery_score must be at least source revision discovery_score",
+        "overexplanation_score must be below source revision overexplanation_score",
+        "local_embodiment_score must be at least source revision local_embodiment_score",
+        "no no-op, operation-mismatch, or planned-only variants may dominate",
+    ]
+    return {
+        "worker": "ablation_evidence_dominance_report_v1_controller",
+        "controller_owned": True,
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
+        "executed_ablation_packet_id": subject.packet_id,
+        "comparison_consistency_passed": comparison_consistency_passed,
+        "source_revision_scores": source_scores,
+        "source_scores": source_scores,
+        "countable_variant_scores": {
+            item["variant_id"]: item["scores"] for item in countable
+        },
+        "variant_analysis": analyses,
+        "best_countable_variant_id": best_variant_id,
+        "best_countable_variant_text_sha256": (
+            str(best["text_sha256"]) if best else None
+        ),
+        "best_countable_variant_operation": (
+            str(best["operation_id"]) if best else None
+        ),
+        "best_countable_variant_operation_type": (
+            str(best["operation_type"]) if best else None
+        ),
+        "best_countable_variant_scores": dict(best["scores"]) if best else None,
+        "best_countable_variant_text": (
+            str(best_variant["text"]) if best_variant is not None else None
+        ),
+        "best_variant_improves_discovery": (
+            bool(best["improves_discovery"]) if best else False
+        ),
+        "best_variant_reduces_overexplanation": (
+            bool(best["reduces_overexplanation"]) if best else False
+        ),
+        "best_variant_preserves_or_improves_embodiment": (
+            bool(best["preserves_or_improves_embodiment"]) if best else False
+        ),
+        "protected_effects_preserved": protected_preserved,
+        "dominance_detected": dominance_detected,
+        "dominance_basis": basis,
+        "dominance_thresholds": {
+            "discovery_score": "variant >= source_revision",
+            "overexplanation_score": "variant < source_revision",
+            "local_embodiment_score": "variant >= source_revision unless explicitly rejected",
+            "comparison_consistency": "must pass",
+            "evidence_status": "must be evidence_countable",
+        },
+        "recommended_base_candidate_id": recommended_base,
+        "recommended_patch_strategy": (
+            "select_dominant_variant_as_base_without_softening"
+            if dominance_detected
+            else "use_controller_composed_base_or_bounded_patch"
+        ),
+        "strongest_rival_pressure_remains_blocking": evidence_summary[
+            "strongest_rival_pressure_remains_blocking"
+        ],
+        "dominance_rejection_requires_explicit_evidence": dominance_detected,
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
+def _dominance_sort_key(item: dict[str, Any]) -> tuple[int, int, int, int]:
+    scores = item["scores"]
+    return (
+        int(scores["discovery_score"]),
+        -int(scores["overexplanation_score"]),
+        int(scores["local_embodiment_score"]),
+        -int(scores["word_count"]),
+    )
+
+
 def _build_base_selection(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
+    dominance_report: dict[str, Any],
     *,
     model_payload: dict[str, Any] | None = None,
     model_call_id: str | None = None,
     fixture_only: bool,
 ) -> dict[str, Any]:
-    choices = _base_options(subject)
+    choices = _base_options(subject, dominance_report)
     selected_choice = (
         str(model_payload["selected_base_candidate_id"])
         if model_payload is not None
-        else BASE_CHOICE_CONTROLLER_COMPOSED
+        else str(dominance_report["recommended_base_candidate_id"])
     )
-    selected_text = _base_text_for_choice(subject, selected_choice)
+    selected_text = _base_text_for_choice(subject, selected_choice, dominance_report)
     model_selection = model_payload or {}
+    dominance_detected = bool(dominance_report["dominance_detected"])
+    dominant_rejection_reason = (
+        str(model_selection.get("explicit_dominance_rejection_reason", ""))
+        if model_payload is not None
+        else ""
+    )
+    dominant_rejection_evidence = (
+        str(
+            model_selection.get(
+                "dominance_rejection_protected_effect_or_forbidden_change_evidence",
+                "",
+            )
+        )
+        if model_payload is not None
+        else ""
+    )
+    selected_is_recommended = (
+        selected_choice == dominance_report["recommended_base_candidate_id"]
+    )
+    weaker_with_rejection = (
+        dominance_detected
+        and not selected_is_recommended
+        and bool(dominant_rejection_reason.strip())
+        and bool(dominant_rejection_evidence.strip())
+    )
     return {
         "worker": (
             "cycle2_base_candidate_selection_v1_model_driver"
@@ -1206,6 +1481,11 @@ def _build_base_selection(
             BASE_CHOICE_EMBODIMENT,
             BASE_CHOICE_RECORD,
             BASE_CHOICE_CONTROLLER_COMPOSED,
+            *(
+                [BASE_CHOICE_DOMINANT_VARIANT]
+                if dominance_report.get("best_countable_variant_id")
+                else []
+            ),
         ],
         "base_candidate_options": choices,
         "selected_base_candidate_id": selected_choice,
@@ -1240,6 +1520,29 @@ def _build_base_selection(
         ),
         "previous_repair_causal_status": evidence_summary["previous_repair_causal_status"],
         "previous_repair_treated_as_proven": False,
+        "ablation_evidence_dominance": {
+            "dominance_detected": dominance_detected,
+            "best_countable_variant_id": dominance_report[
+                "best_countable_variant_id"
+            ],
+            "best_countable_variant_text_sha256": dominance_report[
+                "best_countable_variant_text_sha256"
+            ],
+            "recommended_base_candidate_id": dominance_report[
+                "recommended_base_candidate_id"
+            ],
+            "selected_recommended_base": selected_is_recommended,
+            "selected_base_dominated_by_available_variant": (
+                dominance_detected and not selected_is_recommended
+            ),
+            "dominant_variant_promoted_or_justified": (
+                not dominance_detected or selected_is_recommended or weaker_with_rejection
+            ),
+            "explicit_dominance_rejection_reason": dominant_rejection_reason,
+            "dominance_rejection_protected_effect_or_forbidden_change_evidence": (
+                dominant_rejection_evidence
+            ),
+        },
         "model_reported_prior_repair_causal_status": (
             model_selection.get("prior_repair_causal_status")
             if model_payload is not None
@@ -1389,6 +1692,7 @@ def _build_work_order(
     subject: AblationInformedSubject,
     base_selection: dict[str, Any],
     next_handle: dict[str, Any],
+    dominance_report: dict[str, Any],
 ) -> dict[str, Any]:
     base_text = str(base_selection["selected_base_text"])
     patchable_spans = _patchable_spans(base_text)
@@ -1414,6 +1718,35 @@ def _build_work_order(
         "source_reader_lab_packet_id": subject.reader_lab_packet_id,
         "selected_base_candidate": base_selection["selected_base_choice"],
         "base_candidate_text_sha256": base_selection["selected_base_text_sha256"],
+        "dominance_policy": {
+            "dominance_detected": dominance_report["dominance_detected"],
+            "best_countable_variant_id": dominance_report[
+                "best_countable_variant_id"
+            ],
+            "best_countable_variant_text_sha256": dominance_report[
+                "best_countable_variant_text_sha256"
+            ],
+            "recommended_base_candidate_id": dominance_report[
+                "recommended_base_candidate_id"
+            ],
+            "selected_base_candidate_id": base_selection[
+                "selected_base_candidate_id"
+            ],
+            "dominant_variant_directly_selected": (
+                bool(dominance_report["dominance_detected"])
+                and base_selection["selected_base_candidate_id"]
+                == dominance_report["recommended_base_candidate_id"]
+            ),
+            "selected_base_dominated_by_available_variant": base_selection[
+                "ablation_evidence_dominance"
+            ]["selected_base_dominated_by_available_variant"],
+            "dominant_variant_promoted_or_justified": base_selection[
+                "ablation_evidence_dominance"
+            ]["dominant_variant_promoted_or_justified"],
+            "recommended_patch_strategy": dominance_report[
+                "recommended_patch_strategy"
+            ],
+        },
         "candidate_span_inventory": _candidate_span_inventory(base_text),
         "allowed_patch_targets": [allowed_target],
         "allowed_patch_target_ids": [allowed_target["patch_target_id"]],
@@ -1446,6 +1779,9 @@ def _build_work_order(
             "ablation_old_new_rival_comparison": subject.artifacts[
                 "ablation_old_new_rival_comparison"
             ].id,
+            "ablation_evidence_dominance_report": base_selection[
+                "ablation_evidence_dominance"
+            ],
         },
         "selected_next_handle": next_handle["selected_next_handle"],
         "previous_repair_treated_as_proven": False,
@@ -1531,6 +1867,7 @@ def _build_patch_proposal(
         "full_rewrite": False,
         "bounded_patch_set": True,
         "selected_next_handle": work_order["selected_next_handle"],
+        "dominance_policy": work_order["dominance_policy"],
         "patches": patches,
         "model_call_id": model_call_id,
         "model_owned_fields": (
@@ -1632,6 +1969,7 @@ def _build_applied_patch_ledger(
         "controller_owned": True,
         "base_candidate_choice": base_selection["selected_base_choice"],
         "base_text_sha256": base_selection["selected_base_text_sha256"],
+        "dominance_policy": work_order["dominance_policy"],
         "revised_text": text,
         "revised_text_sha256": sha256_text(text),
         "ledger_entries": ledger_entries,
@@ -1642,6 +1980,9 @@ def _build_applied_patch_ledger(
         "rejected_patch_ids": [str(entry["patch_id"]) for entry in rejected],
         "applied_patch_span_ids": [str(entry["patch_span_id"]) for entry in applied],
         "rejected_patch_span_ids": [str(entry["patch_span_id"]) for entry in rejected],
+        "dominant_variant_directly_selected": bool(
+            work_order["dominance_policy"]["dominant_variant_directly_selected"]
+        ),
         "all_proposed_patches_accounted_for": (
             len(applied) + len(rejected) == len(ledger_entries)
         ),
@@ -1709,6 +2050,7 @@ def _build_revised_candidate(
         "assembled_by_controller": True,
         "base_candidate_choice": base_selection["selected_base_choice"],
         "base_candidate_text_sha256": base_selection["selected_base_text_sha256"],
+        "dominance_policy": applied_patch_ledger["dominance_policy"],
         "source_patch_ids": applied_patch_ids,
         "source_patch_span_ids": applied_patch_span_ids,
         "applied_patch_ids": applied_patch_ids,
@@ -1716,6 +2058,9 @@ def _build_revised_candidate(
         "applied_patch_count": int(applied_patch_ledger["applied_patch_count"]),
         "rejected_patch_count": int(applied_patch_ledger["rejected_patch_count"]),
         "proposed_patch_count": int(applied_patch_ledger["proposed_patch_count"]),
+        "dominant_variant_directly_selected": bool(
+            applied_patch_ledger["dominant_variant_directly_selected"]
+        ),
         "applied_patch_ledger": {
             "artifact_id": applied_patch_ledger_artifact_id,
             "applied_patch_count": int(applied_patch_ledger["applied_patch_count"]),
@@ -1744,6 +2089,7 @@ def _build_diff_report(
     work_order: dict[str, Any],
     applied_patch_ledger: dict[str, Any],
     revised_candidate: dict[str, Any],
+    dominance_report: dict[str, Any],
     fixture_only: bool,
 ) -> dict[str, Any]:
     changed_spans = []
@@ -1786,6 +2132,15 @@ def _build_diff_report(
         "base_candidate_choice": base_selection["selected_base_choice"],
         "base_text_sha256": base_selection["selected_base_text_sha256"],
         "revised_text_sha256": revised_candidate["text_sha256"],
+        "dominance_policy": {
+            "dominance_detected": dominance_report["dominance_detected"],
+            "best_countable_variant_id": dominance_report[
+                "best_countable_variant_id"
+            ],
+            "dominant_variant_directly_selected": revised_candidate[
+                "dominant_variant_directly_selected"
+            ],
+        },
         "source_patch_ids": list(revised_candidate["source_patch_ids"]),
         "source_patch_span_ids": list(revised_candidate["source_patch_span_ids"]),
         "changed_spans": changed_spans,
@@ -1874,6 +2229,7 @@ def _build_preliminary_comparison(
     subject: AblationInformedSubject,
     base_selection: dict[str, Any],
     revised_candidate: dict[str, Any],
+    dominance_report: dict[str, Any],
     fixture_only: bool,
 ) -> dict[str, Any]:
     original_score = _score_text(subject.original_candidate.text)
@@ -1886,6 +2242,11 @@ def _build_preliminary_comparison(
     )
     old_new = subject.payloads["ablation_old_new_rival_comparison"]
     cycle2_text = str(revised_candidate["text"])
+    dominance_regression = _dominance_regression_report(
+        dominance_report=dominance_report,
+        cycle2_score=cycle2_score,
+        revised_candidate=revised_candidate,
+    )
     return {
         "worker": "cycle2_preliminary_old_new_rival_comparison_v1",
         "comparison_basis": "deterministic ablation-informed preliminary comparison; not proof",
@@ -1930,10 +2291,34 @@ def _build_preliminary_comparison(
         "record_law_proof_compression_improved_discovery": bool(
             old_new["record_compression_improves_discovery"]
         ),
+        "ablation_evidence_dominance": {
+            "dominance_detected": dominance_report["dominance_detected"],
+            "best_countable_variant_id": dominance_report[
+                "best_countable_variant_id"
+            ],
+            "best_countable_variant_scores": dominance_report[
+                "best_countable_variant_scores"
+            ],
+            "recommended_base_candidate_id": dominance_report[
+                "recommended_base_candidate_id"
+            ],
+            "selected_base_candidate_id": base_selection[
+                "selected_base_candidate_id"
+            ],
+            "selected_base_dominated_by_available_variant": base_selection[
+                "ablation_evidence_dominance"
+            ]["selected_base_dominated_by_available_variant"],
+            "dominant_variant_promoted_or_justified": base_selection[
+                "ablation_evidence_dominance"
+            ]["dominant_variant_promoted_or_justified"],
+            **dominance_regression,
+        },
         "strongest_rival_remains_stronger": bool(
             old_new["strongest_rival_still_beats_candidate"]
         ),
-        "cycle2_should_proceed_to_executed_ablation_next": True,
+        "cycle2_should_proceed_to_executed_ablation_next": not bool(
+            dominance_regression["patch_regresses_from_dominant_variant"]
+        ),
         "rationale": (
             "Cycle2 combines the supported opening-detail preservation with the "
             "record/law/proof compression handle. This is preliminary and must be "
@@ -1947,10 +2332,54 @@ def _build_preliminary_comparison(
     }
 
 
+def _dominance_regression_report(
+    *,
+    dominance_report: dict[str, Any],
+    cycle2_score: dict[str, int],
+    revised_candidate: dict[str, Any],
+) -> dict[str, Any]:
+    if not dominance_report.get("dominance_detected"):
+        return {
+            "patch_regresses_from_dominant_variant": False,
+            "dominance_regression_reasons": [],
+            "dominant_variant_text_sha256": None,
+            "cycle2_matches_dominant_variant_text": False,
+        }
+    best_scores = dominance_report["best_countable_variant_scores"]
+    dominant_sha = dominance_report["best_countable_variant_text_sha256"]
+    if revised_candidate["text_sha256"] == dominant_sha:
+        return {
+            "patch_regresses_from_dominant_variant": False,
+            "dominance_regression_reasons": [],
+            "dominant_variant_text_sha256": dominant_sha,
+            "cycle2_matches_dominant_variant_text": True,
+        }
+    reasons = []
+    if int(cycle2_score["discovery_score"]) < int(best_scores["discovery_score"]):
+        reasons.append("cycle2_discovery_score_below_dominant_variant")
+    if int(cycle2_score["overexplanation_score"]) > int(
+        best_scores["overexplanation_score"]
+    ):
+        reasons.append("cycle2_overexplanation_score_above_dominant_variant")
+    if int(cycle2_score["local_embodiment_score"]) < int(
+        best_scores["local_embodiment_score"]
+    ):
+        reasons.append("cycle2_local_embodiment_score_below_dominant_variant")
+    return {
+        "patch_regresses_from_dominant_variant": bool(reasons),
+        "dominance_regression_reasons": reasons,
+        "dominant_variant_text_sha256": dominant_sha,
+        "cycle2_matches_dominant_variant_text": (
+            revised_candidate["text_sha256"] == dominant_sha
+        ),
+    }
+
+
 def _build_gate_report(
     *,
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
+    dominance_report: dict[str, Any],
     applied_patch_ledger: dict[str, Any],
     revised_candidate: dict[str, Any],
     diff_report: dict[str, Any],
@@ -1964,6 +2393,29 @@ def _build_gate_report(
     ]
     if fixture_only:
         unresolved.append("fake ablation-informed revision mode is fixture-only")
+    dominance_gate = preliminary_comparison["ablation_evidence_dominance"]
+    evidence_dominance_checked = True
+    dominant_variant_promoted_or_justified = bool(
+        dominance_gate["dominant_variant_promoted_or_justified"]
+    )
+    selected_base_dominated = bool(
+        dominance_gate["selected_base_dominated_by_available_variant"]
+    )
+    patch_regresses = bool(dominance_gate["patch_regresses_from_dominant_variant"])
+    strategic_ready_for_ablation = (
+        evidence_dominance_checked
+        and dominant_variant_promoted_or_justified
+        and not selected_base_dominated
+        and not patch_regresses
+    )
+    if selected_base_dominated:
+        unresolved.append(
+            "dominant executed-ablation variant was not promoted as base"
+        )
+    if patch_regresses:
+        unresolved.append(
+            "cycle2 candidate regresses below dominant executed-ablation variant"
+        )
     text_diff_consistency = bool(
         diff_report["text_matches_diff"]
         and diff_report["all_applied_patches_reflected_in_text"]
@@ -1976,8 +2428,33 @@ def _build_gate_report(
         and preliminary_comparison["actual_revised_text_sha256"]
         == revised_candidate["text_sha256"]
     )
+    mechanical_ready_for_ablation = bool(text_diff_consistency and comparison_uses_actual)
     gate_results = [
         _gate_result("ablation_informed_revision_packet_exists", True),
+        _gate_result("evidence_dominance_checked", evidence_dominance_checked),
+        _gate_result(
+            "dominant_variant_promoted_or_justified",
+            dominant_variant_promoted_or_justified,
+            (
+                []
+                if dominant_variant_promoted_or_justified
+                else ["dominant variant was available but not promoted or justified"]
+            ),
+        ),
+        _gate_result(
+            "selected_base_dominated_by_available_variant",
+            not selected_base_dominated,
+            (
+                []
+                if not selected_base_dominated
+                else ["selected base is weaker than a dominant countable variant"]
+            ),
+        ),
+        _gate_result(
+            "cycle2_not_regressed_from_dominant_variant",
+            not patch_regresses,
+            list(dominance_gate["dominance_regression_reasons"]),
+        ),
         _gate_result(
             "previous_repair_causal_status_recorded",
             evidence_summary["previous_repair_causal_status"]
@@ -2019,8 +2496,42 @@ def _build_gate_report(
             "rejected_patch_count": applied_patch_ledger["rejected_patch_count"],
             "text_diff_consistency_passed": text_diff_consistency,
             "comparison_uses_actual_revised_text": comparison_uses_actual,
+            "mechanical_ready_for_ablation": mechanical_ready_for_ablation,
+            "strategic_ready_for_ablation": strategic_ready_for_ablation,
             "ready_for_executed_ablation": (
-                text_diff_consistency and comparison_uses_actual
+                mechanical_ready_for_ablation and strategic_ready_for_ablation
+            ),
+            "ready_for_executed_ablation_basis": (
+                "mechanical_and_strategic"
+                if strategic_ready_for_ablation
+                else "diagnostic_only_due_to_dominance_policy"
+            ),
+            "evidence_dominance_checked": evidence_dominance_checked,
+            "dominant_variant_promoted_or_justified": (
+                dominant_variant_promoted_or_justified
+            ),
+            "selected_base_dominated_by_available_variant": selected_base_dominated,
+            "patch_regresses_from_dominant_variant": patch_regresses,
+        },
+        "ablation_evidence_dominance": {
+            "report_artifact_expected": True,
+            "dominance_detected": dominance_report["dominance_detected"],
+            "best_countable_variant_id": dominance_report[
+                "best_countable_variant_id"
+            ],
+            "recommended_base_candidate_id": dominance_report[
+                "recommended_base_candidate_id"
+            ],
+            "selected_base_candidate_id": dominance_gate[
+                "selected_base_candidate_id"
+            ],
+            "dominant_variant_promoted_or_justified": (
+                dominant_variant_promoted_or_justified
+            ),
+            "selected_base_dominated_by_available_variant": selected_base_dominated,
+            "patch_regresses_from_dominant_variant": patch_regresses,
+            "dominance_regression_reasons": list(
+                dominance_gate["dominance_regression_reasons"]
             ),
         },
         "strongest_rival_pressure_preserved": preliminary_comparison[
@@ -2097,6 +2608,17 @@ def _build_packet_summary(
         "previous_repair_causal_status": payloads["ablation_evidence_summary"][
             "previous_repair_causal_status"
         ],
+        "ablation_evidence_dominance": {
+            "dominance_detected": payloads["ablation_evidence_dominance_report"][
+                "dominance_detected"
+            ],
+            "best_countable_variant_id": payloads[
+                "ablation_evidence_dominance_report"
+            ]["best_countable_variant_id"],
+            "recommended_base_candidate_id": payloads[
+                "ablation_evidence_dominance_report"
+            ]["recommended_base_candidate_id"],
+        },
         "previous_repair_treated_as_proven": False,
         "gate_report": payloads["cycle2_gate_report"],
         "non_final": True,
@@ -2634,7 +3156,10 @@ def _base_option(choice: str, text: str, basis: str) -> dict[str, Any]:
     }
 
 
-def _base_options(subject: AblationInformedSubject) -> list[dict[str, Any]]:
+def _base_options(
+    subject: AblationInformedSubject,
+    dominance_report: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     original = subject.original_candidate.text
     source_revision = subject.source_revised_candidate_text
     embodiment = _variant_text_by_operation_id(
@@ -2648,7 +3173,7 @@ def _base_options(subject: AblationInformedSubject) -> list[dict[str, Any]]:
         fallback=source_revision,
     )
     controller_composed = _compose_cycle2_base_from_evidence(original, source_revision)
-    return [
+    options = [
         _base_option(
             BASE_CHOICE_ORIGINAL,
             original,
@@ -2678,9 +3203,30 @@ def _base_options(subject: AblationInformedSubject) -> list[dict[str, Any]]:
             "controller-composed base from evidence-supported changes",
         ),
     ]
+    if dominance_report and dominance_report.get("best_countable_variant_text"):
+        best_variant_id = str(dominance_report["best_countable_variant_id"])
+        best_operation = str(dominance_report["best_countable_variant_operation"])
+        basis = (
+            "controller-recommended best countable executed-ablation variant "
+            f"{best_variant_id} ({best_operation})"
+        )
+        if dominance_report.get("dominance_detected"):
+            basis += "; dominates source revision under explicit dominance thresholds"
+        options.append(
+            _base_option(
+                BASE_CHOICE_DOMINANT_VARIANT,
+                str(dominance_report["best_countable_variant_text"]),
+                basis,
+            )
+        )
+    return options
 
 
-def _base_text_for_choice(subject: AblationInformedSubject, choice: str) -> str:
+def _base_text_for_choice(
+    subject: AblationInformedSubject,
+    choice: str,
+    dominance_report: dict[str, Any] | None = None,
+) -> str:
     if choice == BASE_CHOICE_ORIGINAL:
         return subject.original_candidate.text
     if choice == BASE_CHOICE_PACKET_0030:
@@ -2702,9 +3248,28 @@ def _base_text_for_choice(subject: AblationInformedSubject, choice: str) -> str:
             subject.original_candidate.text,
             subject.source_revised_candidate_text,
         )
+    if (
+        choice == BASE_CHOICE_DOMINANT_VARIANT
+        and dominance_report
+        and dominance_report.get("best_countable_variant_text")
+    ):
+        return str(dominance_report["best_countable_variant_text"])
     raise ModelValidationError(
         "selected_base_candidate_id must be one of controller-owned base options"
     )
+
+
+def _variant_by_id(
+    subject: AblationInformedSubject,
+    variant_id: str | None,
+) -> dict[str, Any] | None:
+    if variant_id is None:
+        return None
+    variants = subject.payloads["actual_ablation_variant_set"]["variants"]
+    for variant in variants:
+        if str(variant.get("variant_id")) == variant_id:
+            return variant
+    return None
 
 
 def _variant_text_by_operation_id(
@@ -2881,6 +3446,21 @@ def _summary_payload(
             ),
             "model_calls": len(model_results),
         },
+        "ablation_evidence_dominance": (
+            {
+                "dominance_detected": payloads[
+                    "ablation_evidence_dominance_report"
+                ]["dominance_detected"],
+                "best_countable_variant_id": payloads[
+                    "ablation_evidence_dominance_report"
+                ]["best_countable_variant_id"],
+                "recommended_base_candidate_id": payloads[
+                    "ablation_evidence_dominance_report"
+                ]["recommended_base_candidate_id"],
+            }
+            if "ablation_evidence_dominance_report" in payloads
+            else None
+        ),
         "model_calls": [result.model_call_to_dict() for result in model_results],
         "gate_report": payloads.get("cycle2_gate_report"),
         "message": message,

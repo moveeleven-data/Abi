@@ -2035,6 +2035,10 @@ def ablation_informed_base_selection_json_schema() -> dict[str, Any]:
             "evidence_rationale": {"type": "string"},
             "embodiment_preserving_insight": {"type": "string"},
             "record_law_proof_answer_insight": {"type": "string"},
+            "explicit_dominance_rejection_reason": {"type": "string"},
+            "dominance_rejection_protected_effect_or_forbidden_change_evidence": {
+                "type": "string"
+            },
             "uncertainty": {"type": "string"},
             "not_human_data": {"type": "boolean"},
         },
@@ -2045,6 +2049,8 @@ def ablation_informed_base_selection_json_schema() -> dict[str, Any]:
             "evidence_rationale",
             "embodiment_preserving_insight",
             "record_law_proof_answer_insight",
+            "explicit_dominance_rejection_reason",
+            "dominance_rejection_protected_effect_or_forbidden_change_evidence",
             "uncertainty",
             "not_human_data",
         ],
@@ -3502,6 +3508,8 @@ def _validate_ablation_informed_base_selection(payload: dict[str, Any]) -> dict[
         "evidence_rationale",
         "embodiment_preserving_insight",
         "record_law_proof_answer_insight",
+        "explicit_dominance_rejection_reason",
+        "dominance_rejection_protected_effect_or_forbidden_change_evidence",
         "uncertainty",
     ):
         _require_type(payload, key, str)
@@ -3514,6 +3522,12 @@ def _validate_ablation_informed_base_selection(payload: dict[str, Any]) -> dict[
         "embodiment_preserving_insight": payload["embodiment_preserving_insight"],
         "record_law_proof_answer_insight": payload[
             "record_law_proof_answer_insight"
+        ],
+        "explicit_dominance_rejection_reason": payload[
+            "explicit_dominance_rejection_reason"
+        ],
+        "dominance_rejection_protected_effect_or_forbidden_change_evidence": payload[
+            "dominance_rejection_protected_effect_or_forbidden_change_evidence"
         ],
         "uncertainty": payload["uncertainty"],
         "not_human_data": True,
@@ -3567,8 +3581,6 @@ def _validate_ablation_informed_patch_proposal(payload: dict[str, Any]) -> dict[
                 ),
             )
         )
-    if not patches:
-        raise ModelValidationError("patches must not be empty")
     _require_type(payload, "preserves_necessary_philosophical_pressure", str)
     _require_true(payload, "avoids_full_rewrite")
     _require_true(payload, "not_human_data")

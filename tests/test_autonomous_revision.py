@@ -45,6 +45,7 @@ from abi.modules.autonomous_revision import (
 from abi.modules.ablation_informed_revision import (
     ABLATION_INFORMED_REVISION_ARTIFACT_TYPES,
     BASE_CHOICE_CONTROLLER_COMPOSED,
+    BASE_CHOICE_DOMINANT_VARIANT,
     BASE_CHOICE_PACKET_0030,
     run_ablation_informed_revision,
 )
@@ -257,6 +258,13 @@ def revision_stub_factory(
 
 def dump_json(payload: dict[str, object]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def rewrite_payload(path: str | Path, mutator) -> None:
+    artifact_path = Path(path)
+    envelope = json.loads(artifact_path.read_text(encoding="utf-8"))
+    mutator(envelope["payload"])
+    artifact_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
 
 
 def valid_old_new_rival_payload() -> dict[str, object]:
@@ -664,11 +672,27 @@ class StubAblationInformedRevisionClient:
         if self.mode == "invalid_json":
             return "{not valid json"
         if request.schema == ABLATION_INFORMED_BASE_SELECTION_SCHEMA:
-            selected = (
-                "invented_base_candidate"
-                if self.mode == "invented_base"
-                else BASE_CHOICE_CONTROLLER_COMPOSED
-            )
+            prompt = json.loads(request.input_text)
+            dominance = prompt["ablation_evidence_dominance_report"]
+            selected = dominance["recommended_base_candidate_id"]
+            rejection_reason = "not applicable; selected controller recommendation"
+            rejection_evidence = "not applicable; no protected-effect rejection"
+            if self.mode == "invented_base":
+                selected = "invented_base_candidate"
+            elif self.mode == "weaker_base":
+                selected = BASE_CHOICE_CONTROLLER_COMPOSED
+                rejection_reason = ""
+                rejection_evidence = ""
+            elif self.mode in {"dominance_rejection", "noop_patch", "regressive_patch"}:
+                selected = BASE_CHOICE_CONTROLLER_COMPOSED
+                rejection_reason = (
+                    "The dominant variant is rejected for this test because it "
+                    "would damage a protected concrete embodiment effect."
+                )
+                rejection_evidence = (
+                    "Protected embodiment evidence: the dominant variant risks "
+                    "flattening table, spoon, and room pressure."
+                )
             return dump_json(
                 {
                     "selected_base_candidate_id": selected,
@@ -686,6 +710,10 @@ class StubAblationInformedRevisionClient:
                     ),
                     "record_law_proof_answer_insight": (
                         "Record/law/proof language should be compressed later."
+                    ),
+                    "explicit_dominance_rejection_reason": rejection_reason,
+                    "dominance_rejection_protected_effect_or_forbidden_change_evidence": (
+                        rejection_evidence
                     ),
                     "uncertainty": "medium",
                     "not_human_data": True,
@@ -736,6 +764,10 @@ class StubAblationInformedRevisionClient:
                 )
                 if self.mode == "noop_patch" and not patches:
                     replacement = span["exact_text"]
+                if self.mode == "regressive_patch":
+                    replacement = (
+                        f"{span['exact_text']} record law proof answer validation"
+                    )
                 patches.append(
                     {
                         "patch_span_id": span_id,
@@ -2575,13 +2607,10 @@ def test_executed_ablation_accepts_ablation_informed_revision_packet(tmp_path):
     subject = read_payload(result.payload["artifact_paths"]["executed_ablation_subject_manifest"])
     assert subject["revision_packet_kind"] == "ablation_informed_revision"
     assert subject["ready_for_executed_ablation"] is True
-    assert subject["patch_ledger"]["applied_patch_ids"]
-    assert subject["patch_ledger"]["applied_patch_span_ids"]
+    assert subject["patch_ledger"]["all_applied_patches_reflected_in_text"] is True
 
     work_order = read_payload(result.payload["artifact_paths"]["executed_ablation_work_order"])
     assert work_order["source_revision_packet_kind"] == "ablation_informed_revision"
-    assert work_order["allowed_source_patch_ids"]
-    assert work_order["allowed_source_patch_span_ids"]
     assert work_order["ready_for_executed_ablation"] is True
 
     variants = read_payload(result.payload["artifact_paths"]["actual_ablation_variant_set"])
@@ -2591,11 +2620,15 @@ def test_executed_ablation_accepts_ablation_informed_revision_packet(tmp_path):
         "allowed_source_patch_span_ids"
     ]
     assert any(
-        variant["operation_type"] == "revert_all_cycle2_applied_patches"
+        variant["operation_type"]
+        in {
+            "revert_all_cycle2_applied_patches",
+            "revert_direct_dominant_base_to_original_candidate",
+        }
         for variant in variants["variants"]
     )
     assert all(
-        variant["source_patch_span_ids"]
+        variant["source_patch_span_ids"] or variants["direct_dominant_base_promotion"]
         for variant in variants["variants"]
         if variant["operation_id"]
         in {
@@ -2861,12 +2894,26 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
     }
     assert "record" in evidence["evidence_interpretation"]
 
+    dominance = read_payload(
+        result.payload["artifact_paths"]["ablation_evidence_dominance_report"]
+    )
+    assert dominance["dominance_detected"] is True
+    assert dominance["best_countable_variant_id"]
+    assert dominance["recommended_base_candidate_id"] == BASE_CHOICE_DOMINANT_VARIANT
+
     base = read_payload(result.payload["artifact_paths"]["cycle2_base_candidate_selection"])
-    assert base["selected_base_choice"] == BASE_CHOICE_CONTROLLER_COMPOSED
+    assert base["selected_base_choice"] == BASE_CHOICE_DOMINANT_VARIANT
     assert base["previous_repair_treated_as_proven"] is False
     assert base["embodiment_preserving_insight_represented"] is True
     assert base["record_law_proof_compression_deferred_to_patch"] is True
     assert "packet_0030_revised_candidate" in base["allowed_choices"]
+    assert BASE_CHOICE_DOMINANT_VARIANT in base["allowed_choices"]
+    assert base["ablation_evidence_dominance"][
+        "dominant_variant_promoted_or_justified"
+    ] is True
+    assert base["ablation_evidence_dominance"][
+        "selected_base_dominated_by_available_variant"
+    ] is False
     assert "as if nothing happened" not in base["selected_base_text"]
 
     handle = read_payload(result.payload["artifact_paths"]["selected_next_failure_or_handle"])
@@ -2878,15 +2925,17 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
         result.payload["artifact_paths"]["ablation_informed_revision_work_order"]
     )
     assert work_order["controller_owned"] is True
-    assert work_order["selected_base_candidate"] == BASE_CHOICE_CONTROLLER_COMPOSED
+    assert work_order["selected_base_candidate"] == BASE_CHOICE_DOMINANT_VARIANT
     assert work_order["base_candidate_text_sha256"] == base["selected_base_text_sha256"]
-    assert work_order["patchable_spans"]
+    if not work_order["dominance_policy"]["dominant_variant_directly_selected"]:
+        assert work_order["patchable_spans"]
     assert work_order["strongest_rival_reference"] is not None
 
     patch = read_payload(result.payload["artifact_paths"]["cycle2_patch_proposal"])
     assert patch["bounded_patch_set"] is True
     assert patch["full_rewrite"] is False
-    assert patch["patches"]
+    if not patch["dominance_policy"]["dominant_variant_directly_selected"]:
+        assert patch["patches"]
     assert all(item["bounded_patch"] is True for item in patch["patches"])
 
     ledger = read_payload(result.payload["artifact_paths"]["cycle2_applied_patch_ledger"])
@@ -2909,10 +2958,11 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
 
     diff = read_payload(result.payload["artifact_paths"]["cycle2_revision_diff_report"])
     assert diff["controller_owned"] is True
-    assert diff["changed_spans"]
-    assert all(span["before_text"] for span in diff["changed_spans"])
-    assert all(span["after_text"] for span in diff["changed_spans"])
-    assert all("evidence_source" in span for span in diff["changed_spans"])
+    if patch["patches"]:
+        assert diff["changed_spans"]
+        assert all(span["before_text"] for span in diff["changed_spans"])
+        assert all(span["after_text"] for span in diff["changed_spans"])
+        assert all("evidence_source" in span for span in diff["changed_spans"])
     assert diff["diff_changed_span_count"] == ledger["applied_patch_count"]
     assert diff["source_patch_ids"] == ledger["applied_patch_ids"]
     assert diff["text_matches_diff"] is True
@@ -2935,7 +2985,12 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
     assert gate["cycle2_requires_executed_ablation_before_claim"] is True
     assert gate["integrity"]["text_diff_consistency_passed"] is True
     assert gate["integrity"]["comparison_uses_actual_revised_text"] is True
+    assert gate["integrity"]["mechanical_ready_for_ablation"] is True
+    assert gate["integrity"]["strategic_ready_for_ablation"] is True
     assert gate["integrity"]["ready_for_executed_ablation"] is True
+    assert gate["integrity"]["evidence_dominance_checked"] is True
+    assert gate["integrity"]["dominant_variant_promoted_or_justified"] is True
+    assert gate["integrity"]["selected_base_dominated_by_available_variant"] is False
     assert gate["human_validation_required"] is False
     assert gate["paper_validation_required"] is False
     assert gate["phase_shift_claim"] is False
@@ -2948,6 +3003,194 @@ def test_ablation_informed_revision_fake_creates_cycle2_packet(tmp_path):
         )
     assert final_report.refused is True
     assert "paper" not in final_report.message.lower()
+
+
+def test_ablation_informed_revision_dominance_report_identifies_best_variant(tmp_path):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    dominance = read_payload(
+        result.payload["artifact_paths"]["ablation_evidence_dominance_report"]
+    )
+    assert dominance["dominance_detected"] is True
+    assert dominance["best_countable_variant_id"] == "executed_ablation_variant_003"
+    assert dominance["best_countable_variant_operation"] == (
+        "operation_record_label_compression"
+    )
+    assert dominance["best_variant_improves_discovery"] is True
+    assert dominance["best_variant_reduces_overexplanation"] is True
+    assert dominance["best_variant_preserves_or_improves_embodiment"] is True
+    assert dominance["recommended_base_candidate_id"] == BASE_CHOICE_DOMINANT_VARIANT
+
+
+def test_ablation_informed_revision_controls_cannot_dominate(tmp_path):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    dominance = read_payload(
+        result.payload["artifact_paths"]["ablation_evidence_dominance_report"]
+    )
+    analyses = {item["variant_id"]: item for item in dominance["variant_analysis"]}
+    assert analyses["executed_ablation_variant_004"]["dominates_source_revision"] is False
+    assert "not_evidence_countable" in analyses["executed_ablation_variant_004"][
+        "disqualifiers"
+    ]
+    assert "no_op" in analyses["executed_ablation_variant_004"]["disqualifiers"]
+    assert analyses["executed_ablation_variant_005"]["dominates_source_revision"] is False
+    assert "operation_mismatch" in analyses["executed_ablation_variant_005"][
+        "disqualifiers"
+    ]
+    assert analyses["executed_ablation_variant_006"]["dominates_source_revision"] is False
+    assert "planned_only" in analyses["executed_ablation_variant_006"]["disqualifiers"]
+
+
+def test_ablation_informed_revision_lower_embodiment_variant_does_not_dominate(
+    tmp_path,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    comparison_path = Path(
+        ablation_payload["artifact_paths"]["ablation_old_new_rival_comparison"]
+    )
+
+    def _lower_embodiment(payload):
+        source = payload["revised_score"]
+        scores = payload["variant_scores"]["executed_ablation_variant_003"]
+        scores["discovery_score"] = source["discovery_score"] + 5
+        scores["overexplanation_score"] = source["overexplanation_score"] - 1
+        scores["local_embodiment_score"] = source["local_embodiment_score"] - 1
+
+    rewrite_payload(comparison_path, _lower_embodiment)
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    dominance = read_payload(
+        result.payload["artifact_paths"]["ablation_evidence_dominance_report"]
+    )
+    assert dominance["dominance_detected"] is False
+    record = {
+        item["variant_id"]: item for item in dominance["variant_analysis"]
+    }["executed_ablation_variant_003"]
+    assert "protected_embodiment_loss" in record["disqualifiers"]
+
+
+def test_ablation_informed_revision_base_options_include_dominant_variant(tmp_path):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    base = read_payload(result.payload["artifact_paths"]["cycle2_base_candidate_selection"])
+    option_ids = {option["base_candidate_id"] for option in base["base_candidate_options"]}
+    assert BASE_CHOICE_DOMINANT_VARIANT in option_ids
+    assert base["selected_base_candidate_id"] == BASE_CHOICE_DOMINANT_VARIANT
+
+
+def test_ablation_informed_revision_weaker_base_without_rejection_fails_closed(
+    tmp_path,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(clients, mode="weaker_base"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "explicit_dominance_rejection_reason" in failed_call["error_message"]
+    assert "cycle2_base_candidate_selection" not in result.payload["artifact_ids"]
+
+
+def test_ablation_informed_revision_weaker_base_with_rejection_is_recorded(
+    tmp_path,
+):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(
+            clients,
+            mode="dominance_rejection",
+        ),
+    )
+
+    assert result.exit_code == 0
+    base = read_payload(result.payload["artifact_paths"]["cycle2_base_candidate_selection"])
+    gate = read_payload(result.payload["artifact_paths"]["cycle2_gate_report"])
+    assert base["selected_base_candidate_id"] == BASE_CHOICE_CONTROLLER_COMPOSED
+    assert base["ablation_evidence_dominance"][
+        "selected_base_dominated_by_available_variant"
+    ] is True
+    assert base["ablation_evidence_dominance"][
+        "dominant_variant_promoted_or_justified"
+    ] is True
+    assert "protected" in base["ablation_evidence_dominance"][
+        "dominance_rejection_protected_effect_or_forbidden_change_evidence"
+    ].lower()
+    assert gate["integrity"]["selected_base_dominated_by_available_variant"] is True
+    assert gate["integrity"]["strategic_ready_for_ablation"] is False
+    assert gate["integrity"]["ready_for_executed_ablation"] is False
+
+
+def test_ablation_informed_revision_regressive_patch_is_flagged(tmp_path):
+    config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(clients, mode="regressive_patch"),
+    )
+
+    assert result.exit_code == 0
+    comparison = read_payload(
+        result.payload["artifact_paths"]["cycle2_preliminary_old_new_rival_comparison"]
+    )
+    gate = read_payload(result.payload["artifact_paths"]["cycle2_gate_report"])
+    assert comparison["ablation_evidence_dominance"][
+        "patch_regresses_from_dominant_variant"
+    ] is True
+    assert comparison["ablation_evidence_dominance"]["dominance_regression_reasons"]
+    assert gate["integrity"]["patch_regresses_from_dominant_variant"] is True
+    assert gate["integrity"]["strategic_ready_for_ablation"] is False
 
 
 def test_ablation_informed_revision_accepts_ablation_informed_source_packet(tmp_path):
@@ -2971,8 +3214,8 @@ def test_ablation_informed_revision_accepts_ablation_informed_source_packet(tmp_
     )
     assert subject["source_revision_packet_kind"] == "ablation_informed_revision"
     assert subject["source_revision_packet_id"] == source_revision_payload["packet_id"]
-    assert subject["source_patch_ledger"]["applied_patch_ids"]
-    assert subject["source_revision_diff"]["source_patch_span_ids"]
+    assert subject["source_patch_ledger"]["all_applied_patches_reflected_in_text"] is True
+    assert "source_patch_span_ids" in subject["source_revision_diff"]
     assert subject["source_revised_candidate"]["artifact_id"] == subject[
         "revision_artifact_ids"
     ]["revised_candidate_text"]
@@ -3250,16 +3493,19 @@ def test_ablation_informed_revision_stubbed_openai_success_is_controller_bounded
 
     option_ids = {option["base_candidate_id"] for option in base["base_candidate_options"]}
     assert base["selected_base_candidate_id"] in option_ids
-    assert base["selected_base_choice"] == BASE_CHOICE_CONTROLLER_COMPOSED
+    assert base["selected_base_choice"] == BASE_CHOICE_DOMINANT_VARIANT
     assert base["previous_repair_treated_as_proven"] is False
     assert "proof" in base["model_record_law_proof_answer_insight"]
+    assert base["ablation_evidence_dominance"][
+        "dominant_variant_promoted_or_justified"
+    ] is True
 
     assert handle["selected_next_handle"] == "record_law_proof_answer_compression"
     assert handle["strongest_rival_pressure_preserved"] is True
     assert handle["controller_owned_evidence_selection"] is True
 
     assert work_order["controller_owned"] is True
-    assert work_order["patchable_spans"]
+    assert work_order["dominance_policy"]["dominant_variant_directly_selected"] is True
     assert patch["bounded_patch_set"] is True
     assert patch["full_rewrite"] is False
     assert len(patch["patches"]) == len(work_order["patchable_spans"])
@@ -3297,7 +3543,10 @@ def test_ablation_informed_revision_stubbed_openai_success_is_controller_bounded
     assert gate["integrity"]["rejected_patch_count"] == 0
     assert gate["integrity"]["text_diff_consistency_passed"] is True
     assert gate["integrity"]["comparison_uses_actual_revised_text"] is True
+    assert gate["integrity"]["mechanical_ready_for_ablation"] is True
+    assert gate["integrity"]["strategic_ready_for_ablation"] is True
     assert gate["integrity"]["ready_for_executed_ablation"] is True
+    assert gate["integrity"]["selected_base_dominated_by_available_variant"] is False
     assert gate["human_validation_required"] is False
     assert gate["paper_validation_required"] is False
     assert gate["phase_shift_claim"] is False
@@ -3354,6 +3603,18 @@ def test_ablation_informed_revision_silent_dropped_patch_fails_closed(
     monkeypatch,
 ):
     config, ablation_payload = build_fake_executed_ablation_packet(tmp_path)
+    comparison_path = Path(
+        ablation_payload["artifact_paths"]["ablation_old_new_rival_comparison"]
+    )
+
+    def _disable_dominance(payload):
+        source = payload["revised_score"]
+        for scores in payload["variant_scores"].values():
+            scores["discovery_score"] = source["discovery_score"]
+            scores["overexplanation_score"] = source["overexplanation_score"]
+            scores["local_embodiment_score"] = source["local_embodiment_score"]
+
+    rewrite_payload(comparison_path, _disable_dominance)
     original = ablation_informed_revision_module._build_revised_candidate
 
     def _dropped_source_patch_ids(*args, **kwargs):

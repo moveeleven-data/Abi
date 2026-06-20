@@ -1088,8 +1088,9 @@ def _build_ablation_informed_variant_set(
         if entry.get("application_status") == "applied"
     ]
     if not applied_entries:
-        raise ExecutedAblationError(
-            "ablation_informed_revision packet has no applied cycle2 patches"
+        return _build_direct_ablation_informed_variant_set(
+            subject,
+            fixture_only=fixture_only,
         )
     source_patch_ids = [str(entry["patch_id"]) for entry in applied_entries]
     source_patch_span_ids = [str(entry["patch_span_id"]) for entry in applied_entries]
@@ -1243,6 +1244,160 @@ def _build_ablation_informed_variant_set(
     }
 
 
+def _build_direct_ablation_informed_variant_set(
+    subject: ExecutedAblationSubject,
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    revised = subject.revised_text
+    original = subject.original_candidate.text
+    source_span_id = "cycle2_direct_dominant_base_promotion"
+    variants = [
+        _variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[0],
+            operation_id="operation_revert_applied_patch",
+            operation_type="revert_direct_dominant_base_to_original_candidate",
+            source_span_id=source_span_id,
+            source_span_ids=[source_span_id],
+            source_patch_span_id=None,
+            source_patch_span_ids=[],
+            base_text=revised,
+            variant_text=original,
+            before_text="directly promoted dominant ablation-informed base",
+            after_text="original candidate text",
+            rationale=(
+                "No cycle2 patches were applied because the controller promoted a "
+                "dominant executed-ablation variant directly as base. Revert to the "
+                "original candidate to test whether the direct promotion carries value."
+            ),
+            expected_reader_state_effect=(
+                "If the promoted base matters, reverting to the original should weaken "
+                "the targeted discovery/compression effect."
+            ),
+        ),
+        _variant(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[1],
+            operation_id="operation_embodiment_preserving_repair",
+            operation_type="direct_base_embodiment_probe",
+            source_span_id=source_span_id,
+            source_patch_span_id=None,
+            source_patch_span_ids=[],
+            base_text=revised,
+            before_text="The legs are steady.",
+            after_text="The legs are plain.",
+            rationale=(
+                "Probe whether the promoted base depends on the preserved embodied "
+                "table pressure."
+            ),
+            expected_reader_state_effect=(
+                "Should expose whether embodiment preservation is carrying the effect."
+            ),
+        ),
+        _variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[2],
+            operation_id="operation_record_label_compression",
+            operation_type="direct_base_record_law_proof_answer_compression_probe",
+            source_span_id=source_span_id,
+            source_span_ids=[source_span_id],
+            source_patch_span_id=None,
+            source_patch_span_ids=[],
+            base_text=revised,
+            variant_text=_apply_direct_record_compression_probe(revised),
+            before_text="directly promoted record/law/proof wording",
+            after_text="further compressed direct-base wording",
+            rationale=(
+                "Test whether the directly promoted base can carry the same pressure "
+                "with still less record/law/proof labeling."
+            ),
+            expected_reader_state_effect=(
+                "Should improve discovery only if further compression is causal rather "
+                "than merely shorter."
+            ),
+        ),
+        _variant(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[3],
+            operation_id="operation_no_op_control",
+            operation_type="no_op_control",
+            source_span_id="source_span_opening_sentence",
+            source_patch_span_id=None,
+            source_patch_span_ids=[],
+            base_text=revised,
+            before_text="The table is still there in the morning.",
+            after_text="The table is still there in the morning.",
+            rationale="Diagnostic no-op control; it must not count as evidence of repair.",
+            expected_reader_state_effect="No reader-state change should be inferred.",
+            planned_only=False,
+            explicit_diagnostic_no_op=True,
+        ),
+        _variant(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[4],
+            operation_id="operation_mismatch_control",
+            operation_type="operation_mismatch_control",
+            source_span_id=source_span_id,
+            source_patch_span_id=None,
+            source_patch_span_ids=[],
+            base_text=revised,
+            before_text="almost weather",
+            after_text="almost weather at the edge",
+            rationale=(
+                "Intentional mismatch control: changed text does not match the claimed "
+                "direct-base operation, so it is not countable evidence."
+            ),
+            expected_reader_state_effect="Unreliable diagnostic; must not count.",
+            operation_matches_actual_change=False,
+        ),
+        _variant(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[5],
+            operation_id="operation_planned_probe_only",
+            operation_type="planned_only_probe",
+            source_span_id=source_span_id,
+            source_patch_span_id=None,
+            source_patch_span_ids=[],
+            base_text=revised,
+            before_text="direct base promotion",
+            after_text="planned future direct-base probe",
+            rationale="Planned-only direct-base probe retained for ledger distinction.",
+            expected_reader_state_effect="Speculative only; not executed evidence.",
+            planned_only=True,
+            controller_applied=False,
+        ),
+    ]
+    validated = [_validate_variant_operation(variant) for variant in variants]
+    return {
+        "worker": "actual_ablation_variant_set_v1_controller",
+        "controller_owned": True,
+        "source_revision_packet_kind": subject.revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
+        "source_revised_candidate_artifact_id": subject.revision_artifacts[
+            "revised_candidate_text"
+        ].id,
+        "source_cycle2_patch_ids": [],
+        "source_cycle2_patch_span_ids": [],
+        "direct_dominant_base_promotion": True,
+        "variants": validated,
+        "actual_variant_count": sum(
+            1 for variant in validated if not variant["planned_only"]
+        ),
+        "countable_evidence_variant_count": sum(
+            1 for variant in validated if variant["evidence_countable"]
+        ),
+        "planned_only_variant_count": sum(
+            1 for variant in validated if variant["planned_only"]
+        ),
+        "no_op_variant_count": sum(1 for variant in validated if variant["no_op"]),
+        "operation_mismatch_variant_count": sum(
+            1 for variant in validated if not variant["operation_matches_actual_change"]
+        ),
+        "does_not_select_winner": True,
+        "does_not_create_main_candidate": True,
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
 def _apply_cycle2_reverts(
     revised: str,
     applied_entries: list[dict[str, Any]],
@@ -1253,6 +1408,32 @@ def _apply_cycle2_reverts(
         before = str(entry["before_text"])
         if after in transformed:
             transformed = transformed.replace(after, before, 1)
+    return transformed
+
+
+def _apply_direct_record_compression_probe(revised: str) -> str:
+    transformed = revised
+    replacements = (
+        (
+            "together they leave a pattern. Not a message sent from elsewhere, "
+            "only a set of marks asking to be noticed.",
+            "together they leave marks asking to be noticed.",
+        ),
+        (
+            "It keeps staying and change together.",
+            "It keeps staying and change in one place.",
+        ),
+        (
+            "If an answer comes, it cannot arrive from outside the line it is meant to join.",
+            "If an answer comes, it has to join the line from inside.",
+        ),
+        ("No completed answer has entered this local story.", "No answer has entered."),
+    )
+    for before, after in replacements:
+        if before in transformed:
+            transformed = transformed.replace(before, after, 1)
+    if transformed == revised and revised:
+        transformed = revised.replace("record", "mark", 1)
     return transformed
 
 
