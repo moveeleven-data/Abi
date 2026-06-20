@@ -47,6 +47,8 @@ from abi.modules.ablation_informed_revision import (
     BASE_CHOICE_CONTROLLER_COMPOSED,
     BASE_CHOICE_DOMINANT_VARIANT,
     BASE_CHOICE_PACKET_0030,
+    HANDLE_RECORD_COMPRESSION,
+    RESIDUAL_BLOCKER_CANDIDATES,
     run_ablation_informed_revision,
 )
 from abi.modules.executed_ablation import (
@@ -235,6 +237,37 @@ def build_fake_executed_ablation_from_ablation_informed_packet(tmp_path: Path):
     assert ablation.payload["accepted"] is True
     assert ablation.payload["revision_packet_kind"] == "ablation_informed_revision"
     return config, ablation.payload, revision_payload
+
+
+def build_pivot_required_executed_ablation_packet(tmp_path: Path):
+    config, ablation_payload, revision_payload = (
+        build_fake_executed_ablation_from_ablation_informed_packet(tmp_path)
+    )
+
+    def _make_causal_report_useful_but_exhausted(payload):
+        payload["selected_repair_causal_status"] = "useful_but_insufficient"
+        payload["selected_repair_appears_causal"] = True
+        payload["strongest_rival_pressure_remains_blocking"] = True
+        payload["recommended_next_action"] = (
+            "preserve useful local repair and run a separate revision cycle "
+            "for remaining blockers"
+        )
+
+    def _make_old_new_support_pivot(payload):
+        payload["repair_has_causal_support"] = True
+        payload["revert_performs_same_or_better"] = False
+        payload["record_compression_improves_discovery"] = False
+        payload["strongest_rival_still_beats_candidate"] = True
+
+    rewrite_payload(
+        ablation_payload["artifact_paths"]["ablation_causal_effect_report"],
+        _make_causal_report_useful_but_exhausted,
+    )
+    rewrite_payload(
+        ablation_payload["artifact_paths"]["ablation_old_new_rival_comparison"],
+        _make_old_new_support_pivot,
+    )
+    return config, ablation_payload, revision_payload
 
 
 def revision_stub_factory(
@@ -674,7 +707,14 @@ class StubAblationInformedRevisionClient:
         if request.schema == ABLATION_INFORMED_BASE_SELECTION_SCHEMA:
             prompt = json.loads(request.input_text)
             dominance = prompt["ablation_evidence_dominance_report"]
-            selected = dominance["recommended_base_candidate_id"]
+            pivot = prompt["residual_blocker_pivot_report"]
+            selected = (
+                pivot["base_policy"]["recommended_base_candidate_id"]
+                if pivot["pivot_required"]
+                else dominance["recommended_base_candidate_id"]
+            )
+            if self.mode == "same_handle_justified" and pivot["pivot_required"]:
+                selected = BASE_CHOICE_CONTROLLER_COMPOSED
             rejection_reason = "not applicable; selected controller recommendation"
             rejection_evidence = "not applicable; no protected-effect rejection"
             if self.mode == "invented_base":
@@ -720,9 +760,30 @@ class StubAblationInformedRevisionClient:
                 }
             )
         if request.schema == ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA:
+            prompt = json.loads(request.input_text)
+            pivot = prompt["residual_blocker_pivot_report"]
+            selected = (
+                pivot["selected_residual_blocker"]
+                if pivot["pivot_required"]
+                else HANDLE_RECORD_COMPRESSION
+            )
+            same_handle_justification = ""
+            same_handle_evidence = ""
+            if self.mode == "same_handle_no_justification":
+                selected = pivot["prior_handle"]
+            elif self.mode == "same_handle_justified":
+                selected = pivot["prior_handle"]
+                same_handle_justification = (
+                    "The same handle is needed to protect a concrete embodiment "
+                    "effect that the residual blocker would damage."
+                )
+                same_handle_evidence = (
+                    "Protected embodiment evidence contradicts a clean pivot away "
+                    "from the prior handle."
+                )
             return dump_json(
                 {
-                    "selected_next_handle": "record_law_proof_answer_compression",
+                    "selected_next_handle": selected,
                     "why_previous_repair_weak_or_cosmetic": (
                         "The prior opening repair was not causally proven by ablation."
                     ),
@@ -737,6 +798,8 @@ class StubAblationInformedRevisionClient:
                     "local_law_explanation": (
                         "Let objects hold the pattern before the text names it."
                     ),
+                    "explicit_same_handle_justification": same_handle_justification,
+                    "same_handle_justification_evidence": same_handle_evidence,
                     "uncertainty": "medium",
                     "strongest_rival_pressure_remains_blocking": True,
                     "not_human_data": True,
@@ -3254,6 +3317,178 @@ def test_ablation_informed_revision_accepts_ablation_informed_source_packet(tmp_
     assert gate["eligible"] is False
     assert gate["phase_shift_claim"] is False
     assert gate["final_gates_marked_passed"] == []
+
+
+def test_ablation_informed_revision_pivot_report_triggers_for_plateaued_handle(
+    tmp_path,
+):
+    config, ablation_payload, _source_revision_payload = (
+        build_pivot_required_executed_ablation_packet(tmp_path)
+    )
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    pivot = read_payload(result.payload["artifact_paths"]["residual_blocker_pivot_report"])
+    candidate_ids = {
+        candidate["blocker_id"] for candidate in pivot["residual_blocker_candidates"]
+    }
+    assert pivot["pivot_required"] is True
+    assert pivot["prior_handle"] == HANDLE_RECORD_COMPRESSION
+    assert pivot["prior_handle_status"] == "exhausted_for_now"
+    assert pivot["same_handle_improvement_signal"] is False
+    assert pivot["same_handle_allowed"] is False
+    assert set(RESIDUAL_BLOCKER_CANDIDATES).issubset(candidate_ids)
+    assert pivot["selected_residual_blocker"] in RESIDUAL_BLOCKER_CANDIDATES
+    assert pivot["selected_residual_blocker"] != HANDLE_RECORD_COMPRESSION
+
+
+def test_ablation_informed_revision_fake_pivots_from_stale_record_handle(
+    tmp_path,
+):
+    config, ablation_payload, _source_revision_payload = (
+        build_pivot_required_executed_ablation_packet(tmp_path)
+    )
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    base = read_payload(result.payload["artifact_paths"]["cycle2_base_candidate_selection"])
+    handle = read_payload(result.payload["artifact_paths"]["selected_next_failure_or_handle"])
+    work_order = read_payload(
+        result.payload["artifact_paths"]["ablation_informed_revision_work_order"]
+    )
+    ledger = read_payload(result.payload["artifact_paths"]["cycle2_applied_patch_ledger"])
+    revised = read_payload(result.payload["artifact_paths"]["cycle2_revised_candidate_text"])
+    gate = read_payload(result.payload["artifact_paths"]["cycle2_gate_report"])
+    packet = read_payload(result.payload["artifact_paths"]["cycle2_packet"])
+
+    selected_residual = handle["selected_residual_blocker"]
+    assert base["selected_base_choice"] == BASE_CHOICE_PACKET_0030
+    assert base["residual_blocker_pivot"]["base_preserves_current_useful_repair"] is True
+    assert handle["selected_next_handle"] == selected_residual
+    assert selected_residual in RESIDUAL_BLOCKER_CANDIDATES
+    assert selected_residual != HANDLE_RECORD_COMPRESSION
+    assert handle["residual_blocker_pivot"]["same_handle_reselected"] is False
+    assert work_order["selected_residual_blocker"] == selected_residual
+    assert work_order["allowed_patch_target_ids"] == [f"cycle2_target_{selected_residual}"]
+    assert all(
+        HANDLE_RECORD_COMPRESSION not in span["patch_target_id"]
+        for span in work_order["patchable_spans"]
+    )
+    assert ledger["residual_blocker_pivot_policy"]["pivot_policy_satisfied"] is True
+    assert revised["residual_blocker_pivot_policy"]["selected_residual_blocker"] == (
+        selected_residual
+    )
+    assert gate["strongest_rival_pressure_preserved"] is True
+    assert gate["integrity"]["prior_handle_preserved"] is True
+    assert gate["integrity"]["pivot_required"] is True
+    assert gate["integrity"]["residual_blocker_selected"] is True
+    assert gate["integrity"]["same_handle_reselected"] is False
+    assert gate["integrity"]["pivot_policy_satisfied"] is True
+    assert gate["residual_blocker_pivot"]["selected_residual_blocker"] == (
+        selected_residual
+    )
+    assert packet["residual_blocker_pivot"]["selected_residual_blocker"] == (
+        selected_residual
+    )
+
+    with connect(config.db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+def test_ablation_informed_revision_same_handle_without_justification_fails_closed(
+    tmp_path,
+):
+    config, ablation_payload, _source_revision_payload = (
+        build_pivot_required_executed_ablation_packet(tmp_path)
+    )
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(
+            clients,
+            mode="same_handle_no_justification",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 2
+    assert "explicit_same_handle_justification" in result.payload["message"]
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == ABLATION_INFORMED_HANDLE_SELECTION_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "cycle2_base_candidate_selection" in result.payload["artifact_ids"]
+    assert "selected_next_failure_or_handle" not in result.payload["artifact_ids"]
+    assert "cycle2_packet" not in result.payload["artifact_ids"]
+
+
+def test_ablation_informed_revision_same_handle_with_justification_reaches_patch_policy(
+    tmp_path,
+):
+    config, ablation_payload, _source_revision_payload = (
+        build_pivot_required_executed_ablation_packet(tmp_path)
+    )
+    clients = []
+
+    result = run_ablation_informed_revision(
+        config,
+        client_name="openai",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-ablation-informed-model",
+        client_factory=ablation_informed_stub_factory(
+            clients,
+            mode="same_handle_justified",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 3
+    assert "patch proposal must include at least one patch" in result.payload["message"]
+    handle = read_payload(result.payload["artifact_paths"]["selected_next_failure_or_handle"])
+    work_order = read_payload(
+        result.payload["artifact_paths"]["ablation_informed_revision_work_order"]
+    )
+
+    assert handle["selected_next_handle"] == HANDLE_RECORD_COMPRESSION
+    assert handle["selected_residual_blocker"] is None
+    assert handle["residual_blocker_pivot"]["same_handle_reselected"] is True
+    assert handle["residual_blocker_pivot"][
+        "same_handle_reselected_with_justification"
+    ] is True
+    assert "protected" in handle["residual_blocker_pivot"][
+        "same_handle_justification_evidence"
+    ].lower()
+    assert work_order["residual_blocker_pivot_policy"]["pivot_policy_satisfied"] is True
+    assert work_order["residual_blocker_pivot_policy"]["selected_residual_blocker"] is None
+    assert result.payload["model_calls"][-1]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "cycle2_patch_proposal" not in result.payload["artifact_ids"]
+    assert "cycle2_packet" not in result.payload["artifact_ids"]
 
 
 @pytest.mark.parametrize(

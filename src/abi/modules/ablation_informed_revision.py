@@ -43,6 +43,7 @@ ABLATION_INFORMED_REVISION_ARTIFACT_TYPES = (
     "ablation_informed_revision_subject_manifest",
     "ablation_evidence_summary",
     "ablation_evidence_dominance_report",
+    "residual_blocker_pivot_report",
     "cycle2_base_candidate_selection",
     "selected_next_failure_or_handle",
     "ablation_informed_revision_work_order",
@@ -61,6 +62,16 @@ BASE_CHOICE_EMBODIMENT = "embodiment_preserving_ablation_variant"
 BASE_CHOICE_RECORD = "record_label_compression_ablation_variant"
 BASE_CHOICE_CONTROLLER_COMPOSED = "controller_composed_base_from_evidence_supported_changes"
 BASE_CHOICE_DOMINANT_VARIANT = "dominant_countable_ablation_variant"
+
+HANDLE_RECORD_COMPRESSION = "record_law_proof_answer_compression"
+RESIDUAL_BLOCKER_CANDIDATES = (
+    "middle_abstraction_ladder_compression",
+    "proof_line_redundancy_cleanup",
+    "final_return_closure_embodiment",
+    "rival_informed_object_event_pressure",
+    "separation_pressure_overnaming",
+    "no_outside_answer_pressure_preservation",
+)
 
 SOURCE_REVISION_KIND_AUTONOMOUS = "autonomous_revision"
 SOURCE_REVISION_KIND_ABLATION_INFORMED = "ablation_informed_revision"
@@ -353,11 +364,27 @@ def _run_packet(
                 subject.artifacts["comparison_consistency_report"].id,
             ],
         )
+        payloads["residual_blocker_pivot_report"] = _build_residual_pivot_report(
+            subject,
+            evidence_summary=payloads["ablation_evidence_summary"],
+            fixture_only=fixture_only,
+        )
+        artifacts["residual_blocker_pivot_report"] = writer.write_artifact(
+            "residual_blocker_pivot_report",
+            payloads["residual_blocker_pivot_report"],
+            parent_ids=[
+                artifacts["ablation_evidence_summary"].id,
+                artifacts["ablation_evidence_dominance_report"].id,
+                subject.artifacts["ablation_causal_effect_report"].id,
+                subject.artifacts["ablation_old_new_rival_comparison"].id,
+            ],
+        )
 
     if model_client is not None:
         base_parent_ids = [
             artifacts["ablation_evidence_summary"].id,
             artifacts["ablation_evidence_dominance_report"].id,
+            artifacts["residual_blocker_pivot_report"].id,
             subject.revision_artifacts["revised_candidate_text"].id,
             subject.artifacts["actual_ablation_variant_set"].id,
         ]
@@ -368,6 +395,7 @@ def _run_packet(
             model_client=model_client,
             evidence_summary=payloads["ablation_evidence_summary"],
             dominance_report=payloads["ablation_evidence_dominance_report"],
+            residual_pivot_report=payloads["residual_blocker_pivot_report"],
             parent_ids=base_parent_ids,
         )
         model_results.append(result)
@@ -386,6 +414,7 @@ def _run_packet(
             subject,
             payloads["ablation_evidence_summary"],
             payloads["ablation_evidence_dominance_report"],
+            payloads["residual_blocker_pivot_report"],
             model_payload=result.parsed_payload,
             model_call_id=result.model_call.id,
             fixture_only=fixture_only,
@@ -405,6 +434,7 @@ def _run_packet(
 
         handle_parent_ids = [
             artifacts["ablation_evidence_summary"].id,
+            artifacts["residual_blocker_pivot_report"].id,
             artifacts["cycle2_base_candidate_selection"].id,
             subject.artifacts["ablation_causal_effect_report"].id,
         ]
@@ -418,6 +448,7 @@ def _run_packet(
             output_dir=output_dir,
             model_client=model_client,
             evidence_summary=payloads["ablation_evidence_summary"],
+            residual_pivot_report=payloads["residual_blocker_pivot_report"],
             base_selection=payloads["cycle2_base_candidate_selection"],
             parent_ids=handle_parent_ids,
         )
@@ -436,6 +467,7 @@ def _run_packet(
         payloads["selected_next_failure_or_handle"] = _build_next_handle(
             subject,
             payloads["ablation_evidence_summary"],
+            payloads["residual_blocker_pivot_report"],
             model_payload=result.parsed_payload,
             model_call_id=result.model_call.id,
             fixture_only=fixture_only,
@@ -467,6 +499,7 @@ def _run_packet(
                 subject,
                 payloads["ablation_evidence_summary"],
                 payloads["ablation_evidence_dominance_report"],
+                payloads["residual_blocker_pivot_report"],
                 fixture_only=fixture_only,
             )
             artifacts["cycle2_base_candidate_selection"] = writer.write_artifact(
@@ -475,6 +508,7 @@ def _run_packet(
                 parent_ids=[
                     artifacts["ablation_evidence_summary"].id,
                     artifacts["ablation_evidence_dominance_report"].id,
+                    artifacts["residual_blocker_pivot_report"].id,
                     subject.revision_artifacts["revised_candidate_text"].id,
                     subject.artifacts["actual_ablation_variant_set"].id,
                 ],
@@ -483,6 +517,7 @@ def _run_packet(
             payloads["selected_next_failure_or_handle"] = _build_next_handle(
                 subject,
                 payloads["ablation_evidence_summary"],
+                payloads["residual_blocker_pivot_report"],
                 fixture_only=fixture_only,
             )
             artifacts["selected_next_failure_or_handle"] = writer.write_artifact(
@@ -490,6 +525,8 @@ def _run_packet(
                 payloads["selected_next_failure_or_handle"],
                 parent_ids=[
                     artifacts["ablation_evidence_summary"].id,
+                    artifacts["residual_blocker_pivot_report"].id,
+                    artifacts["cycle2_base_candidate_selection"].id,
                     subject.artifacts["ablation_causal_effect_report"].id,
                     *(
                         [subject.revision_artifacts["selected_failure_diagnosis"].id]
@@ -514,6 +551,7 @@ def _run_packet(
             base_selection=payloads["cycle2_base_candidate_selection"],
             next_handle=payloads["selected_next_failure_or_handle"],
             dominance_report=payloads["ablation_evidence_dominance_report"],
+            residual_pivot_report=payloads["residual_blocker_pivot_report"],
         )
         artifacts["ablation_informed_revision_work_order"] = writer.write_artifact(
             "ablation_informed_revision_work_order",
@@ -521,6 +559,7 @@ def _run_packet(
             parent_ids=[
                 artifacts["cycle2_base_candidate_selection"].id,
                 artifacts["selected_next_failure_or_handle"].id,
+                artifacts["residual_blocker_pivot_report"].id,
                 subject.artifacts["executed_ablation_work_order"].id,
             ],
         )
@@ -701,6 +740,7 @@ def _run_packet(
             subject=subject,
             evidence_summary=payloads["ablation_evidence_summary"],
             dominance_report=payloads["ablation_evidence_dominance_report"],
+            residual_pivot_report=payloads["residual_blocker_pivot_report"],
             applied_patch_ledger=payloads["cycle2_applied_patch_ledger"],
             revised_candidate=payloads["cycle2_revised_candidate_text"],
             diff_report=payloads["cycle2_revision_diff_report"],
@@ -714,6 +754,8 @@ def _run_packet(
             payloads["cycle2_gate_report"],
             parent_ids=[
                 artifacts["ablation_evidence_dominance_report"].id,
+                artifacts["residual_blocker_pivot_report"].id,
+                artifacts["cycle2_applied_patch_ledger"].id,
                 artifacts["cycle2_revised_candidate_text"].id,
                 artifacts["cycle2_preliminary_old_new_rival_comparison"].id,
             ],
@@ -762,6 +804,7 @@ def _run_base_selection_model(
     model_client: ModelClient,
     evidence_summary: dict[str, Any],
     dominance_report: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
     parent_ids: list[str],
 ) -> ModelDriverResult:
     driver = ModelDriver(config=config, client=model_client)
@@ -775,6 +818,7 @@ def _run_base_selection_model(
                 subject,
                 evidence_summary,
                 dominance_report,
+                residual_pivot_report,
             ),
             input_artifact_ids=list(parent_ids),
             input_packet_path=str(subject.packet_dir),
@@ -787,6 +831,7 @@ def _run_base_selection_model(
                 subject,
                 payload,
                 dominance_report,
+                residual_pivot_report,
             ),
         )
     )
@@ -799,6 +844,7 @@ def _run_handle_selection_model(
     output_dir: Path,
     model_client: ModelClient,
     evidence_summary: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
     base_selection: dict[str, Any],
     parent_ids: list[str],
 ) -> ModelDriverResult:
@@ -812,6 +858,7 @@ def _run_handle_selection_model(
             input_text=_prompt_for_handle_selection(
                 subject,
                 evidence_summary,
+                residual_pivot_report,
                 base_selection,
             ),
             input_artifact_ids=list(parent_ids),
@@ -823,6 +870,7 @@ def _run_handle_selection_model(
             register_parsed_artifact=False,
             parsed_payload_validator=lambda payload: _validate_model_handle_selection(
                 evidence_summary,
+                residual_pivot_report,
                 payload,
             ),
         )
@@ -866,6 +914,7 @@ def _prompt_for_base_selection(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
     dominance_report: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
 ) -> str:
     return _canonical_json(
         {
@@ -885,6 +934,7 @@ def _prompt_for_base_selection(
             "base_candidate_options": _base_options(subject, dominance_report),
             "evidence_summary": evidence_summary,
             "ablation_evidence_dominance_report": dominance_report,
+            "residual_blocker_pivot_report": residual_pivot_report,
             "dominance_policy": {
                 "if_dominance_detected": (
                     "Select the recommended dominant base candidate, or provide "
@@ -900,6 +950,7 @@ def _prompt_for_base_selection(
 def _prompt_for_handle_selection(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
     base_selection: dict[str, Any],
 ) -> str:
     return _canonical_json(
@@ -919,6 +970,7 @@ def _prompt_for_handle_selection(
                 ],
             },
             "evidence_summary": evidence_summary,
+            "residual_blocker_pivot_report": residual_pivot_report,
             "required_pressure": {
                 "previous_repair_treated_as_proven": False,
                 "strongest_rival_pressure_remains_blocking": evidence_summary[
@@ -946,6 +998,9 @@ def _prompt_for_patch_proposal(
             "protected_effects": work_order["protected_effects"],
             "forbidden_changes": work_order["forbidden_changes"],
             "dominance_policy": work_order["dominance_policy"],
+            "residual_blocker_pivot_policy": work_order[
+                "residual_blocker_pivot_policy"
+            ],
         }
     )
 
@@ -954,6 +1009,7 @@ def _validate_model_base_selection(
     subject: AblationInformedSubject,
     payload: dict[str, object],
     dominance_report: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
 ) -> None:
     allowed_ids = {
         option["base_candidate_id"] for option in _base_options(subject, dominance_report)
@@ -966,9 +1022,17 @@ def _validate_model_base_selection(
     prior_status = str(payload.get("prior_repair_causal_status", "")).strip()
     if not prior_status:
         raise ModelValidationError("prior_repair_causal_status must not be empty")
+    pivot_preserve_choice = bool(residual_pivot_report.get("pivot_required")) and (
+        selected in {BASE_CHOICE_PACKET_0030, BASE_CHOICE_CONTROLLER_COMPOSED}
+    )
+    if bool(residual_pivot_report.get("pivot_required")):
+        if not pivot_preserve_choice:
+            raise ModelValidationError(
+                "pivot_required base selection must preserve the useful source repair"
+            )
     if bool(dominance_report.get("dominance_detected")):
         recommended = str(dominance_report["recommended_base_candidate_id"])
-        if selected != recommended:
+        if selected != recommended and not pivot_preserve_choice:
             reason = str(payload.get("explicit_dominance_rejection_reason", "")).strip()
             evidence = str(
                 payload.get(
@@ -994,11 +1058,40 @@ def _validate_model_base_selection(
 
 def _validate_model_handle_selection(
     evidence_summary: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
     payload: dict[str, object],
 ) -> None:
     selected = str(payload.get("selected_next_handle", "")).strip()
     if not selected:
         raise ModelValidationError("selected_next_handle must not be empty")
+    selected_canonical = _canonical_handle_id(selected)
+    prior_handle = str(residual_pivot_report["prior_handle"])
+    residual_ids = {
+        str(candidate["blocker_id"])
+        for candidate in residual_pivot_report["residual_blocker_candidates"]
+    }
+    allowed_controller_handles = {HANDLE_RECORD_COMPRESSION, prior_handle, *residual_ids}
+    if selected_canonical not in allowed_controller_handles:
+        raise ModelValidationError(
+            "selected_next_handle must be a controller-owned residual blocker or prior handle"
+        )
+    if bool(residual_pivot_report["pivot_required"]) and selected_canonical == prior_handle:
+        justification = str(payload.get("explicit_same_handle_justification", "")).strip()
+        evidence = str(payload.get("same_handle_justification_evidence", "")).strip()
+        evidence_lower = evidence.lower()
+        if not justification:
+            raise ModelValidationError(
+                "explicit_same_handle_justification is required when pivot policy "
+                "marks the prior handle plateaued"
+            )
+        if not evidence or not any(
+            marker in evidence_lower
+            for marker in ("protected", "contradictory", "contradiction", "embodiment")
+        ):
+            raise ModelValidationError(
+                "same-handle justification must cite protected-effect need or "
+                "contradictory evidence"
+            )
     if (
         evidence_summary["strongest_rival_pressure_remains_blocking"]
         and payload.get("strongest_rival_pressure_remains_blocking") is not True
@@ -1424,10 +1517,174 @@ def _dominance_sort_key(item: dict[str, Any]) -> tuple[int, int, int, int]:
     )
 
 
+def _build_residual_pivot_report(
+    subject: AblationInformedSubject,
+    *,
+    evidence_summary: dict[str, Any],
+    fixture_only: bool,
+) -> dict[str, Any]:
+    prior_handle = _canonical_handle_id(
+        subject.source_selected_failure_or_handle or HANDLE_RECORD_COMPRESSION
+    )
+    same_handle_signal = _same_handle_improvement_signal(
+        prior_handle,
+        evidence_summary,
+    )
+    next_action = str(evidence_summary["recommended_next_action"]).lower()
+    repair_supported = bool(evidence_summary["repair_has_causal_support"])
+    pivot_required = bool(
+        evidence_summary["previous_repair_causal_status"] == "useful_but_insufficient"
+        and repair_supported
+        and not bool(evidence_summary["revert_performs_same_or_better"])
+        and not same_handle_signal
+        and bool(evidence_summary["strongest_rival_pressure_remains_blocking"])
+        and "preserve useful" in next_action
+        and "separate revision cycle" in next_action
+    )
+    prior_status = "active"
+    if evidence_summary["previous_repair_causal_status"] == "useful_but_insufficient":
+        prior_status = "useful_but_insufficient"
+    if pivot_required:
+        prior_status = "exhausted_for_now"
+    candidates = _residual_blocker_candidates(
+        strongest_rival_pressure_remains_blocking=bool(
+            evidence_summary["strongest_rival_pressure_remains_blocking"]
+        ),
+        prior_handle=prior_handle,
+    )
+    selected_residual = _select_residual_blocker(
+        candidates,
+        strongest_rival_pressure_remains_blocking=bool(
+            evidence_summary["strongest_rival_pressure_remains_blocking"]
+        ),
+    )
+    return {
+        "worker": "residual_blocker_pivot_report_v1_controller",
+        "controller_owned": True,
+        "source_executed_ablation_packet_id": subject.packet_id,
+        "source_revision_packet_kind": subject.source_revision_packet_kind,
+        "source_revision_packet_id": subject.revision_packet_id,
+        "prior_handle": prior_handle,
+        "raw_prior_handle": subject.source_selected_failure_or_handle,
+        "prior_handle_status": prior_status,
+        "same_handle_improvement_signal": same_handle_signal,
+        "strongest_rival_pressure_remains_blocking": evidence_summary[
+            "strongest_rival_pressure_remains_blocking"
+        ],
+        "residual_blocker_candidates": candidates,
+        "selected_residual_blocker": selected_residual,
+        "pivot_required": pivot_required,
+        "same_handle_allowed": not pivot_required,
+        "same_handle_guard": {
+            "same_handle_requires_explicit_justification": pivot_required,
+            "valid_justification_must_cite": [
+                "protected-effect need",
+                "contradictory evidence",
+            ],
+        },
+        "pivot_basis": [
+            "previous repair status is useful_but_insufficient",
+            "repair has causal support",
+            "revert does not perform same or better",
+            f"same handle improvement signal is {same_handle_signal}",
+            "strongest rival pressure remains blocking",
+            "recommended next action preserves useful repair and asks for a separate cycle",
+        ],
+        "base_policy": {
+            "preserve_current_useful_repair": pivot_required,
+            "recommended_base_candidate_id": (
+                BASE_CHOICE_PACKET_0030 if pivot_required else None
+            ),
+            "source_revision_not_treated_as_proven": True,
+        },
+        "not_human_data": True,
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
+def _same_handle_improvement_signal(
+    prior_handle: str,
+    evidence_summary: dict[str, Any],
+) -> bool:
+    if prior_handle == HANDLE_RECORD_COMPRESSION:
+        return bool(evidence_summary["record_compression_improves_discovery"])
+    return bool(evidence_summary["selected_repair_appears_causal"])
+
+
+def _residual_blocker_candidates(
+    *,
+    strongest_rival_pressure_remains_blocking: bool,
+    prior_handle: str,
+) -> list[dict[str, Any]]:
+    candidates = []
+    candidate_metadata = {
+        "middle_abstraction_ladder_compression": (
+            "compress middle abstraction ladder",
+            ["There is a deeper pattern in that", "A line of life and mind begins in chemistry"],
+        ),
+        "proof_line_redundancy_cleanup": (
+            "clean duplicated proof/line phrasing",
+            ["If proof comes", "It has to arise inside the line itself"],
+        ),
+        "final_return_closure_embodiment": (
+            "restore object-led final return closure",
+            ["return with the record intact", "readable all the way down", "promise"],
+        ),
+        "rival_informed_object_event_pressure": (
+            "increase object/event pressure against strongest rival",
+            ["table light", "ring", "dust", "spoon", "final paragraph"],
+        ),
+        "separation_pressure_overnaming": (
+            "reduce overnamed separation-pressure exposition",
+            ["separation-pressure", "boundaries feel real enough to wound"],
+        ),
+        "no_outside_answer_pressure_preservation": (
+            "preserve no-outside-answer pressure without overexplaining it",
+            ["No answer has entered this local story yet", "grown hands"],
+        ),
+    }
+    for blocker_id in RESIDUAL_BLOCKER_CANDIDATES:
+        label, target_hints = candidate_metadata[blocker_id]
+        candidates.append(
+            {
+                "blocker_id": blocker_id,
+                "label": label,
+                "prior_handle": prior_handle,
+                "is_prior_handle": blocker_id == prior_handle,
+                "selection_basis": (
+                    "prior handle plateaued; strongest rival remains blocking"
+                    if strongest_rival_pressure_remains_blocking
+                    else "prior handle plateaued; residual craft blocker remains"
+                ),
+                "target_hints": target_hints,
+            }
+        )
+    return candidates
+
+
+def _select_residual_blocker(
+    candidates: list[dict[str, Any]],
+    *,
+    strongest_rival_pressure_remains_blocking: bool,
+) -> str:
+    preferred = (
+        "rival_informed_object_event_pressure"
+        if strongest_rival_pressure_remains_blocking
+        else "middle_abstraction_ladder_compression"
+    )
+    candidate_ids = {str(candidate["blocker_id"]) for candidate in candidates}
+    return preferred if preferred in candidate_ids else str(candidates[0]["blocker_id"])
+
+
 def _build_base_selection(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
     dominance_report: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
     *,
     model_payload: dict[str, Any] | None = None,
     model_call_id: str | None = None,
@@ -1437,7 +1694,11 @@ def _build_base_selection(
     selected_choice = (
         str(model_payload["selected_base_candidate_id"])
         if model_payload is not None
-        else str(dominance_report["recommended_base_candidate_id"])
+        else (
+            str(residual_pivot_report["base_policy"]["recommended_base_candidate_id"])
+            if residual_pivot_report["pivot_required"]
+            else str(dominance_report["recommended_base_candidate_id"])
+        )
     )
     selected_text = _base_text_for_choice(subject, selected_choice, dominance_report)
     model_selection = model_payload or {}
@@ -1459,6 +1720,9 @@ def _build_base_selection(
     )
     selected_is_recommended = (
         selected_choice == dominance_report["recommended_base_candidate_id"]
+    )
+    pivot_preserve_choice = bool(residual_pivot_report["pivot_required"]) and (
+        selected_choice in {BASE_CHOICE_PACKET_0030, BASE_CHOICE_CONTROLLER_COMPOSED}
     )
     weaker_with_rejection = (
         dominance_detected
@@ -1520,6 +1784,22 @@ def _build_base_selection(
         ),
         "previous_repair_causal_status": evidence_summary["previous_repair_causal_status"],
         "previous_repair_treated_as_proven": False,
+        "residual_blocker_pivot": {
+            "pivot_required": residual_pivot_report["pivot_required"],
+            "prior_handle": residual_pivot_report["prior_handle"],
+            "prior_handle_status": residual_pivot_report["prior_handle_status"],
+            "same_handle_improvement_signal": residual_pivot_report[
+                "same_handle_improvement_signal"
+            ],
+            "selected_residual_blocker": residual_pivot_report[
+                "selected_residual_blocker"
+            ],
+            "base_preserves_current_useful_repair": (
+                not residual_pivot_report["pivot_required"]
+                or selected_choice
+                in {BASE_CHOICE_PACKET_0030, BASE_CHOICE_CONTROLLER_COMPOSED}
+            ),
+        },
         "ablation_evidence_dominance": {
             "dominance_detected": dominance_detected,
             "best_countable_variant_id": dominance_report[
@@ -1533,11 +1813,17 @@ def _build_base_selection(
             ],
             "selected_recommended_base": selected_is_recommended,
             "selected_base_dominated_by_available_variant": (
-                dominance_detected and not selected_is_recommended
+                dominance_detected
+                and not selected_is_recommended
+                and not pivot_preserve_choice
             ),
             "dominant_variant_promoted_or_justified": (
-                not dominance_detected or selected_is_recommended or weaker_with_rejection
+                not dominance_detected
+                or selected_is_recommended
+                or weaker_with_rejection
+                or pivot_preserve_choice
             ),
+            "dominance_overridden_by_residual_pivot_policy": pivot_preserve_choice,
             "explicit_dominance_rejection_reason": dominant_rejection_reason,
             "dominance_rejection_protected_effect_or_forbidden_change_evidence": (
                 dominant_rejection_evidence
@@ -1586,12 +1872,32 @@ def _build_base_selection(
 def _build_next_handle(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
     *,
     model_payload: dict[str, Any] | None = None,
     model_call_id: str | None = None,
     fixture_only: bool,
 ) -> dict[str, Any]:
     model_selection = model_payload or {}
+    selected_handle = (
+        _canonical_handle_id(str(model_selection["selected_next_handle"]))
+        if model_payload is not None
+        else (
+            str(residual_pivot_report["selected_residual_blocker"])
+            if residual_pivot_report["pivot_required"]
+            else HANDLE_RECORD_COMPRESSION
+        )
+    )
+    same_handle_justification = (
+        str(model_selection.get("explicit_same_handle_justification", ""))
+        if model_payload is not None
+        else ""
+    )
+    same_handle_evidence = (
+        str(model_selection.get("same_handle_justification_evidence", ""))
+        if model_payload is not None
+        else ""
+    )
     return {
         "worker": (
             "selected_next_failure_or_handle_v1_model_driver"
@@ -1601,6 +1907,8 @@ def _build_next_handle(
         "source_revision_packet_kind": subject.source_revision_packet_kind,
         "source_revision_packet_id": subject.revision_packet_id,
         "previous_selected_failure": subject.source_selected_failure_or_handle,
+        "prior_handle": residual_pivot_report["prior_handle"],
+        "prior_handle_status": residual_pivot_report["prior_handle_status"],
         "previous_repair_causal_status": evidence_summary[
             "previous_repair_causal_status"
         ],
@@ -1631,10 +1939,28 @@ def _build_next_handle(
             ],
         },
         "selected_next_handle": (
-            str(model_selection["selected_next_handle"])
-            if model_payload is not None
-            else "record_law_proof_answer_compression"
+            selected_handle
         ),
+        "selected_residual_blocker": (
+            selected_handle
+            if selected_handle in RESIDUAL_BLOCKER_CANDIDATES
+            else None
+        ),
+        "residual_blocker_pivot": {
+            "pivot_required": residual_pivot_report["pivot_required"],
+            "same_handle_allowed": residual_pivot_report["same_handle_allowed"],
+            "same_handle_reselected": (
+                selected_handle == residual_pivot_report["prior_handle"]
+            ),
+            "same_handle_reselected_with_justification": bool(
+                same_handle_justification and same_handle_evidence
+            ),
+            "explicit_same_handle_justification": same_handle_justification,
+            "same_handle_justification_evidence": same_handle_evidence,
+            "residual_blocker_candidates": residual_pivot_report[
+                "residual_blocker_candidates"
+            ],
+        },
         "why_better_supported_than_repeating_opening_patch": (
             str(model_selection["why_handle_better_than_opening_patch"])
             if model_payload is not None
@@ -1646,7 +1972,8 @@ def _build_next_handle(
         ),
         "revision_goal": [
             "preserve or restore concrete opening embodiment",
-            "compress early record/law/proof/answer labels",
+            "preserve useful current repair before attacking residual blockers",
+            "pivot away from plateaued prior handles when evidence requires it",
             "let objects carry significance longer before naming it",
             "preserve philosophical pressure without turning descriptive only",
         ],
@@ -1693,17 +2020,12 @@ def _build_work_order(
     base_selection: dict[str, Any],
     next_handle: dict[str, Any],
     dominance_report: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
 ) -> dict[str, Any]:
     base_text = str(base_selection["selected_base_text"])
-    patchable_spans = _patchable_spans(base_text)
-    allowed_target = {
-        "patch_target_id": "cycle2_target_record_law_proof_answer_compression",
-        "target_label": "record/law/proof/answer compression",
-        "member_patch_span_ids": [
-            str(span["patch_span_id"]) for span in patchable_spans
-        ],
-        "evidence_source": "executed ablation record-label compression variant",
-    }
+    selected_handle = str(next_handle["selected_next_handle"])
+    patchable_spans = _patchable_spans(base_text, selected_handle=selected_handle)
+    allowed_target = _patch_target_for_handle(selected_handle, patchable_spans)
     return {
         "worker": "ablation_informed_revision_work_order_v1_controller",
         "controller_owned": True,
@@ -1747,6 +2069,29 @@ def _build_work_order(
                 "recommended_patch_strategy"
             ],
         },
+        "residual_blocker_pivot_policy": {
+            "pivot_required": residual_pivot_report["pivot_required"],
+            "prior_handle": residual_pivot_report["prior_handle"],
+            "prior_handle_status": residual_pivot_report["prior_handle_status"],
+            "same_handle_improvement_signal": residual_pivot_report[
+                "same_handle_improvement_signal"
+            ],
+            "same_handle_allowed": residual_pivot_report["same_handle_allowed"],
+            "selected_residual_blocker": next_handle["selected_residual_blocker"],
+            "same_handle_reselected": next_handle["residual_blocker_pivot"][
+                "same_handle_reselected"
+            ],
+            "same_handle_reselected_with_justification": next_handle[
+                "residual_blocker_pivot"
+            ]["same_handle_reselected_with_justification"],
+            "pivot_policy_satisfied": (
+                not residual_pivot_report["pivot_required"]
+                or next_handle["selected_residual_blocker"] is not None
+                or next_handle["residual_blocker_pivot"][
+                    "same_handle_reselected_with_justification"
+                ]
+            ),
+        },
         "candidate_span_inventory": _candidate_span_inventory(base_text),
         "allowed_patch_targets": [allowed_target],
         "allowed_patch_target_ids": [allowed_target["patch_target_id"]],
@@ -1784,6 +2129,7 @@ def _build_work_order(
             ],
         },
         "selected_next_handle": next_handle["selected_next_handle"],
+        "selected_residual_blocker": next_handle["selected_residual_blocker"],
         "previous_repair_treated_as_proven": False,
         "bounded_revision_only": True,
         "non_final": True,
@@ -1802,8 +2148,14 @@ def _build_patch_proposal(
     fixture_only: bool,
 ) -> dict[str, Any]:
     patches = []
-    replacements = _cycle2_replacements()
+    selected_handle = str(work_order["selected_next_handle"])
+    replacements = _replacements_for_handle(selected_handle)
     spans_by_id = {str(span["patch_span_id"]): span for span in work_order["patchable_spans"]}
+    target_by_span = {
+        str(span["patch_span_id"]): str(span["patch_target_id"])
+        for span in work_order["patchable_spans"]
+    }
+    evidence_source = str(work_order["allowed_patch_targets"][0]["evidence_source"])
     if model_payload is not None:
         proposed_by_span = {
             str(patch["patch_span_id"]): patch for patch in model_payload["patches"]
@@ -1836,7 +2188,7 @@ def _build_patch_proposal(
         patches.append(
             {
                 "patch_id": f"cycle2_patch_{index:03d}",
-                "patch_target_id": "cycle2_target_record_law_proof_answer_compression",
+                "patch_target_id": target_by_span[patch_span_id],
                 "patch_span_id": patch_span_id,
                 "replacement_text": str(after),
                 "rationale": (
@@ -1851,7 +2203,7 @@ def _build_patch_proposal(
                     model_patch.get("local_law_explanation") if model_patch else None
                 ),
                 "uncertainty": model_patch.get("uncertainty") if model_patch else None,
-                "evidence_source": "ablation_old_new_rival_comparison.record_compression_improves_discovery",
+                "evidence_source": evidence_source,
                 "preserves_or_supersedes_packet_0030_prior_patch": "supersedes",
                 "bounded_patch": True,
                 "before_text_owned_by_controller": str(spans_by_id[patch_span_id]["exact_text"]),
@@ -1970,6 +2322,9 @@ def _build_applied_patch_ledger(
         "base_candidate_choice": base_selection["selected_base_choice"],
         "base_text_sha256": base_selection["selected_base_text_sha256"],
         "dominance_policy": work_order["dominance_policy"],
+        "residual_blocker_pivot_policy": work_order[
+            "residual_blocker_pivot_policy"
+        ],
         "revised_text": text,
         "revised_text_sha256": sha256_text(text),
         "ledger_entries": ledger_entries,
@@ -2051,6 +2406,9 @@ def _build_revised_candidate(
         "base_candidate_choice": base_selection["selected_base_choice"],
         "base_candidate_text_sha256": base_selection["selected_base_text_sha256"],
         "dominance_policy": applied_patch_ledger["dominance_policy"],
+        "residual_blocker_pivot_policy": applied_patch_ledger[
+            "residual_blocker_pivot_policy"
+        ],
         "source_patch_ids": applied_patch_ids,
         "source_patch_span_ids": applied_patch_span_ids,
         "applied_patch_ids": applied_patch_ids,
@@ -2141,6 +2499,9 @@ def _build_diff_report(
                 "dominant_variant_directly_selected"
             ],
         },
+        "residual_blocker_pivot_policy": applied_patch_ledger[
+            "residual_blocker_pivot_policy"
+        ],
         "source_patch_ids": list(revised_candidate["source_patch_ids"]),
         "source_patch_span_ids": list(revised_candidate["source_patch_span_ids"]),
         "changed_spans": changed_spans,
@@ -2313,6 +2674,9 @@ def _build_preliminary_comparison(
             ]["dominant_variant_promoted_or_justified"],
             **dominance_regression,
         },
+        "residual_blocker_pivot": revised_candidate[
+            "residual_blocker_pivot_policy"
+        ],
         "strongest_rival_remains_stronger": bool(
             old_new["strongest_rival_still_beats_candidate"]
         ),
@@ -2380,6 +2744,7 @@ def _build_gate_report(
     subject: AblationInformedSubject,
     evidence_summary: dict[str, Any],
     dominance_report: dict[str, Any],
+    residual_pivot_report: dict[str, Any],
     applied_patch_ledger: dict[str, Any],
     revised_candidate: dict[str, Any],
     diff_report: dict[str, Any],
@@ -2402,11 +2767,26 @@ def _build_gate_report(
         dominance_gate["selected_base_dominated_by_available_variant"]
     )
     patch_regresses = bool(dominance_gate["patch_regresses_from_dominant_variant"])
+    pivot_policy = applied_patch_ledger["residual_blocker_pivot_policy"]
+    pivot_required = bool(residual_pivot_report["pivot_required"])
+    residual_blocker_selected = bool(pivot_policy["selected_residual_blocker"])
+    same_handle_reselected = bool(pivot_policy["same_handle_reselected"])
+    same_handle_reselected_with_justification = bool(
+        pivot_policy["same_handle_reselected_with_justification"]
+    )
+    pivot_policy_satisfied = bool(pivot_policy["pivot_policy_satisfied"])
+    prior_handle_preserved = bool(
+        not pivot_required
+        or applied_patch_ledger["base_candidate_choice"]
+        in {BASE_CHOICE_PACKET_0030, BASE_CHOICE_CONTROLLER_COMPOSED}
+    )
     strategic_ready_for_ablation = (
         evidence_dominance_checked
         and dominant_variant_promoted_or_justified
         and not selected_base_dominated
         and not patch_regresses
+        and prior_handle_preserved
+        and pivot_policy_satisfied
     )
     if selected_base_dominated:
         unresolved.append(
@@ -2415,6 +2795,15 @@ def _build_gate_report(
     if patch_regresses:
         unresolved.append(
             "cycle2 candidate regresses below dominant executed-ablation variant"
+        )
+    if pivot_required and not prior_handle_preserved:
+        unresolved.append(
+            "pivot policy requires preserving the current useful source repair as base"
+        )
+    if pivot_required and not pivot_policy_satisfied:
+        unresolved.append(
+            "pivot policy requires selecting a residual blocker or justifying "
+            "same-handle reselection"
         )
     text_diff_consistency = bool(
         diff_report["text_matches_diff"]
@@ -2454,6 +2843,51 @@ def _build_gate_report(
             "cycle2_not_regressed_from_dominant_variant",
             not patch_regresses,
             list(dominance_gate["dominance_regression_reasons"]),
+        ),
+        _gate_result("prior_handle_preserved", prior_handle_preserved),
+        _gate_result("pivot_required", True),
+        _gate_result(
+            "residual_blocker_selected",
+            (
+                not pivot_required
+                or residual_blocker_selected
+                or same_handle_reselected_with_justification
+            ),
+            (
+                []
+                if (
+                    not pivot_required
+                    or residual_blocker_selected
+                    or same_handle_reselected_with_justification
+                )
+                else ["pivot required but no residual blocker was selected"]
+            ),
+        ),
+        _gate_result(
+            "same_handle_reselected_with_justification",
+            (
+                not pivot_required
+                or not same_handle_reselected
+                or same_handle_reselected_with_justification
+            ),
+            (
+                []
+                if (
+                    not pivot_required
+                    or not same_handle_reselected
+                    or same_handle_reselected_with_justification
+                )
+                else ["same handle was reselected without valid justification"]
+            ),
+        ),
+        _gate_result(
+            "pivot_policy_satisfied",
+            pivot_policy_satisfied,
+            (
+                []
+                if pivot_policy_satisfied
+                else ["residual-blocker pivot policy is unsatisfied"]
+            ),
         ),
         _gate_result(
             "previous_repair_causal_status_recorded",
@@ -2504,7 +2938,11 @@ def _build_gate_report(
             "ready_for_executed_ablation_basis": (
                 "mechanical_and_strategic"
                 if strategic_ready_for_ablation
-                else "diagnostic_only_due_to_dominance_policy"
+                else (
+                    "diagnostic_only_due_to_pivot_policy"
+                    if not pivot_policy_satisfied or not prior_handle_preserved
+                    else "diagnostic_only_due_to_dominance_policy"
+                )
             ),
             "evidence_dominance_checked": evidence_dominance_checked,
             "dominant_variant_promoted_or_justified": (
@@ -2512,6 +2950,14 @@ def _build_gate_report(
             ),
             "selected_base_dominated_by_available_variant": selected_base_dominated,
             "patch_regresses_from_dominant_variant": patch_regresses,
+            "prior_handle_preserved": prior_handle_preserved,
+            "pivot_required": pivot_required,
+            "residual_blocker_selected": residual_blocker_selected,
+            "same_handle_reselected": same_handle_reselected,
+            "same_handle_reselected_with_justification": (
+                same_handle_reselected_with_justification
+            ),
+            "pivot_policy_satisfied": pivot_policy_satisfied,
         },
         "ablation_evidence_dominance": {
             "report_artifact_expected": True,
@@ -2533,6 +2979,23 @@ def _build_gate_report(
             "dominance_regression_reasons": list(
                 dominance_gate["dominance_regression_reasons"]
             ),
+        },
+        "residual_blocker_pivot": {
+            "report_artifact_expected": True,
+            "prior_handle": residual_pivot_report["prior_handle"],
+            "prior_handle_status": residual_pivot_report["prior_handle_status"],
+            "same_handle_improvement_signal": residual_pivot_report[
+                "same_handle_improvement_signal"
+            ],
+            "pivot_required": pivot_required,
+            "same_handle_allowed": residual_pivot_report["same_handle_allowed"],
+            "selected_residual_blocker": pivot_policy["selected_residual_blocker"],
+            "same_handle_reselected": same_handle_reselected,
+            "same_handle_reselected_with_justification": (
+                same_handle_reselected_with_justification
+            ),
+            "prior_handle_preserved": prior_handle_preserved,
+            "pivot_policy_satisfied": pivot_policy_satisfied,
         },
         "strongest_rival_pressure_preserved": preliminary_comparison[
             "strongest_rival_remains_stronger"
@@ -2618,6 +3081,32 @@ def _build_packet_summary(
             "recommended_base_candidate_id": payloads[
                 "ablation_evidence_dominance_report"
             ]["recommended_base_candidate_id"],
+        },
+        "residual_blocker_pivot": {
+            "pivot_required": payloads["residual_blocker_pivot_report"][
+                "pivot_required"
+            ],
+            "prior_handle": payloads["residual_blocker_pivot_report"]["prior_handle"],
+            "prior_handle_status": payloads["residual_blocker_pivot_report"][
+                "prior_handle_status"
+            ],
+            "same_handle_improvement_signal": payloads[
+                "residual_blocker_pivot_report"
+            ]["same_handle_improvement_signal"],
+            "selected_residual_blocker": payloads[
+                "selected_next_failure_or_handle"
+            ]["selected_residual_blocker"],
+            "same_handle_reselected": payloads["selected_next_failure_or_handle"][
+                "residual_blocker_pivot"
+            ]["same_handle_reselected"],
+            "same_handle_reselected_with_justification": payloads[
+                "selected_next_failure_or_handle"
+            ]["residual_blocker_pivot"][
+                "same_handle_reselected_with_justification"
+            ],
+            "pivot_policy_satisfied": payloads["cycle2_gate_report"][
+                "residual_blocker_pivot"
+            ]["pivot_policy_satisfied"],
         },
         "previous_repair_treated_as_proven": False,
         "gate_report": payloads["cycle2_gate_report"],
@@ -3074,20 +3563,25 @@ def _compose_cycle2_base_from_evidence(original: str, source_revision_text: str)
     return text
 
 
-def _patchable_spans(text: str) -> list[dict[str, Any]]:
+def _patchable_spans(
+    text: str,
+    *,
+    selected_handle: str = HANDLE_RECORD_COMPRESSION,
+) -> list[dict[str, Any]]:
     spans = []
-    for index, before in enumerate(_cycle2_replacements(), start=1):
+    target = _patch_target_metadata(selected_handle)
+    for index, before in enumerate(_replacements_for_handle(selected_handle), start=1):
         start = text.find(before)
         if start < 0:
             continue
         spans.append(
             {
                 "patch_span_id": f"cycle2_patch_span_{index:03d}",
-                "patch_target_id": "cycle2_target_record_law_proof_answer_compression",
+                "patch_target_id": target["patch_target_id"],
                 "char_start": start,
                 "char_end": start + len(before),
                 "exact_text": before,
-                "selection_basis": "executed ablation record/law/proof/answer handle",
+                "selection_basis": target["selection_basis"],
             }
         )
     return spans
@@ -3134,12 +3628,147 @@ def _cycle2_replacements() -> dict[str, str]:
     }
 
 
+def _residual_replacements() -> dict[str, dict[str, str]]:
+    return {
+        "middle_abstraction_ladder_compression": {
+            (
+                "There is a deeper pattern in that, one easy to miss if you are "
+                "looking for miracles."
+            ): (
+                "The table shows that deeper pattern before anyone has to name it."
+            ),
+            (
+                "A line of life and mind begins in chemistry, but before thought "
+                "can climb, chemistry has to yield something thought can search."
+            ): (
+                "A line toward life and mind begins as matter learns to leave "
+                "searchable marks."
+            ),
+        },
+        "proof_line_redundancy_cleanup": {
+            (
+                "If proof comes, it has to appear inside the line it joins. It has "
+                "to arise inside the line itself."
+            ): "If proof comes, it has to arise inside the line it joins.",
+        },
+        "final_return_closure_embodiment": {
+            "It will be return with the record intact.": (
+                "It will be return with the ring, dust, and spoon still carrying "
+                "what happened."
+            ),
+            "the room remains the room, but now it is readable all the way down.": (
+                "the room remains the room, but now its marks read back through one another."
+            ),
+            (
+                "The beginning is no longer merely the beginning; it is a promise "
+                "that could only be understood after the passage through strain."
+            ): (
+                "The beginning is no longer merely first; it is the table waiting "
+                "to be reread after strain."
+            ),
+        },
+        "rival_informed_object_event_pressure": {
+            (
+                "There is a deeper pattern in that, one easy to miss if you are "
+                "looking for miracles."
+            ): (
+                "The deeper pattern is already in the ring, the dust, and the spoon."
+            ),
+            (
+                "Before a person can recognize a pattern, the pattern has to be "
+                "there, hidden in plain matter, waiting for the right pressure to "
+                "make it visible."
+            ): (
+                "Before anyone recognizes a pattern, the table has to keep it in "
+                "plain matter until pressure makes it visible."
+            ),
+            (
+                "In the morning, the table is still there. So is the dust under it. "
+                "But the two facts no longer sit apart."
+            ): (
+                "In the morning, the table is still there, and the dust under it "
+                "has become part of the same event."
+            ),
+        },
+        "separation_pressure_overnaming": {
+            (
+                "And with texture comes separation-pressure: the sense that every "
+                "line drawn between things must be defended."
+            ): (
+                "And with texture comes the pressure of separation, each line "
+                "asking to be defended."
+            ),
+            (
+                "A lawful world makes the boundaries feel real enough to wound."
+            ): "The boundaries feel real enough to wound.",
+        },
+        "no_outside_answer_pressure_preservation": {
+            "No answer has entered this local story yet.": (
+                "No answer has entered the room yet."
+            ),
+            (
+                "We would be children waiting for grown hands. We would inherit a "
+                "rescue and mistake it for completion."
+            ): (
+                "We would wait for grown hands and mistake rescue for completion."
+            ),
+        },
+    }
+
+
+def _replacements_for_handle(handle_id: str) -> dict[str, str]:
+    if handle_id == HANDLE_RECORD_COMPRESSION:
+        return _cycle2_replacements()
+    return _residual_replacements().get(handle_id, {})
+
+
+def _patch_target_metadata(handle_id: str) -> dict[str, str]:
+    labels = {
+        HANDLE_RECORD_COMPRESSION: "record/law/proof/answer compression",
+        "middle_abstraction_ladder_compression": "middle abstraction ladder compression",
+        "proof_line_redundancy_cleanup": "proof-line redundancy cleanup",
+        "final_return_closure_embodiment": "final return closure embodiment",
+        "rival_informed_object_event_pressure": "rival-informed object/event pressure",
+        "separation_pressure_overnaming": "separation-pressure overnaming",
+        "no_outside_answer_pressure_preservation": "no-outside-answer pressure preservation",
+    }
+    safe_id = handle_id.replace("/", "_").replace("-", "_")
+    return {
+        "patch_target_id": f"cycle2_target_{safe_id}",
+        "target_label": labels.get(handle_id, handle_id),
+        "selection_basis": f"residual blocker pivot target: {handle_id}",
+        "evidence_source": f"residual_blocker_pivot_report.{handle_id}",
+    }
+
+
+def _patch_target_for_handle(
+    handle_id: str,
+    patchable_spans: list[dict[str, Any]],
+) -> dict[str, Any]:
+    target = _patch_target_metadata(handle_id)
+    return {
+        "patch_target_id": target["patch_target_id"],
+        "target_label": target["target_label"],
+        "member_patch_span_ids": [
+            str(span["patch_span_id"]) for span in patchable_spans
+        ],
+        "evidence_source": target["evidence_source"],
+    }
+
+
 def _span_before_from_patch_id(
     base_selection: dict[str, Any],
     patch: dict[str, Any],
 ) -> str | None:
     text = str(base_selection["selected_base_text"])
-    replacements = _cycle2_replacements()
+    handle_id = str(
+        base_selection.get("residual_blocker_pivot", {}).get(
+            "selected_residual_blocker",
+            HANDLE_RECORD_COMPRESSION,
+        )
+        or HANDLE_RECORD_COMPRESSION
+    )
+    replacements = _replacements_for_handle(handle_id)
     for before, after in replacements.items():
         if after == patch["replacement_text"] and before in text:
             return before
@@ -3282,6 +3911,36 @@ def _variant_text_by_operation_id(
     if variant is None:
         return fallback
     return str(variant.get("text", fallback))
+
+
+def _canonical_handle_id(value: str | None) -> str:
+    text = str(value or "").strip()
+    normalized = (
+        text.lower()
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace(" ", "_")
+        .replace("__", "_")
+    )
+    for candidate in RESIDUAL_BLOCKER_CANDIDATES:
+        if normalized == candidate or candidate in normalized:
+            return candidate
+    if (
+        "record" in normalized
+        or "proof" in normalized
+        or "answer" in normalized
+        or "law" in normalized
+    ):
+        return HANDLE_RECORD_COMPRESSION
+    if "rival" in normalized:
+        return "rival_informed_object_event_pressure"
+    if "separation" in normalized:
+        return "separation_pressure_overnaming"
+    if "return" in normalized or "closure" in normalized:
+        return "final_return_closure_embodiment"
+    if "middle" in normalized or "abstraction" in normalized:
+        return "middle_abstraction_ladder_compression"
+    return normalized or HANDLE_RECORD_COMPRESSION
 
 
 def _evidence_interpretation(
@@ -3459,6 +4118,29 @@ def _summary_payload(
                 ]["recommended_base_candidate_id"],
             }
             if "ablation_evidence_dominance_report" in payloads
+            else None
+        ),
+        "residual_blocker_pivot": (
+            {
+                "pivot_required": payloads["residual_blocker_pivot_report"][
+                    "pivot_required"
+                ],
+                "prior_handle": payloads["residual_blocker_pivot_report"][
+                    "prior_handle"
+                ],
+                "prior_handle_status": payloads["residual_blocker_pivot_report"][
+                    "prior_handle_status"
+                ],
+                "same_handle_improvement_signal": payloads[
+                    "residual_blocker_pivot_report"
+                ]["same_handle_improvement_signal"],
+                "selected_residual_blocker": (
+                    payloads.get("selected_next_failure_or_handle", {}).get(
+                        "selected_residual_blocker"
+                    )
+                ),
+            }
+            if "residual_blocker_pivot_report" in payloads
             else None
         ),
         "model_calls": [result.model_call_to_dict() for result in model_results],

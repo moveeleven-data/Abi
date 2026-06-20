@@ -2065,6 +2065,8 @@ def ablation_informed_handle_selection_json_schema() -> dict[str, Any]:
             "evidence_summary": {"type": "string"},
             "why_handle_better_than_opening_patch": {"type": "string"},
             "local_law_explanation": {"type": "string"},
+            "explicit_same_handle_justification": {"type": "string"},
+            "same_handle_justification_evidence": {"type": "string"},
             "uncertainty": {"type": "string"},
             "strongest_rival_pressure_remains_blocking": {"type": "boolean"},
             "not_human_data": {"type": "boolean"},
@@ -2075,6 +2077,8 @@ def ablation_informed_handle_selection_json_schema() -> dict[str, Any]:
             "evidence_summary",
             "why_handle_better_than_opening_patch",
             "local_law_explanation",
+            "explicit_same_handle_justification",
+            "same_handle_justification_evidence",
             "uncertainty",
             "strongest_rival_pressure_remains_blocking",
             "not_human_data",
@@ -3541,6 +3545,8 @@ def _validate_ablation_informed_handle_selection(payload: dict[str, Any]) -> dic
         "evidence_summary",
         "why_handle_better_than_opening_patch",
         "local_law_explanation",
+        "explicit_same_handle_justification",
+        "same_handle_justification_evidence",
         "uncertainty",
     ):
         _require_type(payload, key, str)
@@ -3556,6 +3562,12 @@ def _validate_ablation_informed_handle_selection(payload: dict[str, Any]) -> dic
             "why_handle_better_than_opening_patch"
         ],
         "local_law_explanation": payload["local_law_explanation"],
+        "explicit_same_handle_justification": payload[
+            "explicit_same_handle_justification"
+        ],
+        "same_handle_justification_evidence": payload[
+            "same_handle_justification_evidence"
+        ],
         "uncertainty": payload["uncertainty"],
         "strongest_rival_pressure_remains_blocking": payload[
             "strongest_rival_pressure_remains_blocking"
