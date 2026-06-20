@@ -42,6 +42,10 @@ from abi.modules.autonomous_revision import (
     _validate_revision_work_order_payload,
     run_autonomous_revision,
 )
+from abi.modules.autonomous_evidence_synthesis import (
+    AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES,
+    run_autonomous_evidence_synthesis,
+)
 from abi.modules.ablation_informed_revision import (
     ABLATION_INFORMED_REVISION_ARTIFACT_TYPES,
     BASE_CHOICE_CONTROLLER_COMPOSED,
@@ -271,6 +275,57 @@ def build_pivot_required_executed_ablation_packet(tmp_path: Path):
         _make_old_new_support_pivot,
     )
     return config, ablation_payload, revision_payload
+
+
+def build_fake_evidence_synthesis_chain(tmp_path: Path):
+    config, ablation_payload, revision_payload = build_pivot_required_executed_ablation_packet(
+        tmp_path
+    )
+    pivot_revision = run_ablation_informed_revision(
+        config,
+        client_name="fake",
+        executed_ablation_packet=ablation_payload["packet_dir"],
+    )
+    assert pivot_revision.exit_code == 0
+    assert pivot_revision.payload["accepted"] is True
+    failed_ablation = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=pivot_revision.payload["packet_dir"],
+    )
+    assert failed_ablation.exit_code == 0
+    assert failed_ablation.payload["accepted"] is True
+
+    def _make_pivot_causal_report_failed(payload):
+        payload["selected_repair_causal_status"] = "noncausal_or_cosmetic"
+        payload["selected_repair_appears_causal"] = False
+        payload["strongest_rival_pressure_remains_blocking"] = True
+        payload["recommended_next_action"] = (
+            "consider reverting the patch or attacking a different causal handle"
+        )
+
+    def _make_pivot_comparison_failed(payload):
+        payload["repair_has_causal_support"] = False
+        payload["revert_performs_same_or_better"] = True
+        payload["record_compression_improves_discovery"] = False
+        payload["strongest_rival_still_beats_candidate"] = True
+
+    def _make_pivot_packet_failed(payload):
+        payload["selected_repair_causal_status"] = "noncausal_or_cosmetic"
+
+    rewrite_payload(
+        failed_ablation.payload["artifact_paths"]["ablation_causal_effect_report"],
+        _make_pivot_causal_report_failed,
+    )
+    rewrite_payload(
+        failed_ablation.payload["artifact_paths"]["ablation_old_new_rival_comparison"],
+        _make_pivot_comparison_failed,
+    )
+    rewrite_payload(
+        failed_ablation.payload["artifact_paths"]["executed_ablation_packet"],
+        _make_pivot_packet_failed,
+    )
+    return config, failed_ablation.payload, pivot_revision.payload, revision_payload
 
 
 def revision_stub_factory(
@@ -4141,3 +4196,106 @@ def test_stubbed_openai_autonomous_revision_invalid_output_fails_closed(tmp_path
         "causal_handle_selection",
     }
     assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_creates_fail_closed_decision_packet(tmp_path):
+    config, _failed_ablation, _pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+        run_id = get_latest_run(connection).id
+
+    result = run_autonomous_evidence_synthesis(config, run_id=run_id)
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["finalization_eligible"] is False
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.name == "packet_0001"
+    assert set(result.payload["artifact_ids"]) == set(
+        AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES
+    )
+    for artifact_type in AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    manifest = read_payload(packet_dir / "autonomous_evidence_synthesis_subject_manifest.json")
+    assert manifest["source_chain_complete"] is True
+    assert manifest["synthesis_finalization_eligible"] is False
+    assert manifest["no_phase_shift_claim"] is True
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    packet_kinds = {row["packet_kind"] for row in history["repair_events"]}
+    assert "autonomous_revision" in packet_kinds
+    assert "ablation_informed_revision" in packet_kinds
+    assert "executed_ablation" in packet_kinds
+
+    causal_summary = read_payload(packet_dir / "causal_status_summary.json")
+    finding_statuses = {finding["status"] for finding in causal_summary["findings"]}
+    assert "weak" in finding_statuses
+    assert "useful_but_insufficient" in finding_statuses
+    assert "exhausted_for_now" in finding_statuses
+    assert "failed" in finding_statuses
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    assert best["selected_best_candidate"]["selected_candidate_is_final"] is False
+    assert best["selected_best_candidate"]["selected_candidate_requires_further_testing"] is True
+    assert best["selected_best_candidate"]["packet_id"] != _pivot_revision["packet_id"]
+
+    failed = read_payload(packet_dir / "failed_or_rejected_repairs.json")
+    assert failed["failed_or_rejected_count"] >= 1
+    exhausted = read_payload(packet_dir / "exhausted_handle_report.json")
+    statuses = {handle["status"] for handle in exhausted["handles"]}
+    assert "exhausted_for_now" in statuses
+    assert "failed" in statuses
+    rival = read_payload(packet_dir / "rival_pressure_summary.json")
+    assert rival["strongest_rival_still_blocks"] is True
+    assert rival["strongest_rival_comparison_passed"] is False
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    assert blockers["macro_recomposition_recommended"] is True
+    laws = read_payload(packet_dir / "local_law_case_notes.json")
+    assert laws["case_note_count"] >= 5
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["recommendation"] == (
+        "stop_local_patching_and_synthesize_macro_recomposition_brief"
+    )
+    assert decision["not_candidate_artifact"] is True
+    macro = read_payload(packet_dir / "macro_recomposition_brief.json")
+    assert macro["brief_type"] == "future_creative_instruction_not_artifact"
+    assert macro["not_candidate_artifact"] is True
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+    packet = read_payload(packet_dir / "autonomous_evidence_synthesis_packet.json")
+    assert packet["counts"]["model_calls"] == 0
+    assert packet["strategic_decision"] == decision["recommendation"]
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_refuses_missing_critical_packets(tmp_path):
+    config = config_for(tmp_path)
+    pilot = run_pilot_artifact_set(
+        config,
+        client_name="fake",
+        source_dir=write_sources(tmp_path),
+    )
+    assert pilot.exit_code == 0
+
+    result = run_autonomous_evidence_synthesis(config, run_id=pilot.payload["run_id"])
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "missing critical source packet kinds" in result.payload["message"]
+    assert "internal_reader_lab" in result.payload["missing_critical_source_kinds"]
+    assert result.payload["finalization_eligible"] is False

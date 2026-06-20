@@ -38,6 +38,7 @@ from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_MAX_MODEL_CALLS_DEFAULT,
     run_executed_ablation,
 )
+from abi.modules.autonomous_evidence_synthesis import run_autonomous_evidence_synthesis
 from abi.modules.internal_reader_lab import (
     INTERNAL_READER_LAB_CLIENTS,
     INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
@@ -367,6 +368,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=ABLATION_INFORMED_REVISION_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for ablation-informed revision.",
     )
+    autonomous_synthesize_evidence_parser = autonomous_subparsers.add_parser(
+        "synthesize-evidence",
+        help="Synthesize autonomous revision/ablation evidence into a fail-closed decision packet",
+    )
+    autonomous_synthesize_evidence_parser.add_argument(
+        "--run-id",
+        required=True,
+        help="Run ID whose autonomous evidence chain should be synthesized.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -520,6 +530,11 @@ def main(argv: list[str] | None = None) -> int:
             executed_ablation_packet=args.executed_ablation_packet,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "synthesize-evidence":
+        return _cmd_autonomous_synthesize_evidence(
+            config,
+            run_id=args.run_id,
         )
     if args.command == "controller" and args.controller_command == "status":
         return _cmd_controller_status(config)
@@ -813,6 +828,16 @@ def _cmd_autonomous_revise_from_ablation(
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
     )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_synthesize_evidence(
+    config: AbiConfig,
+    *,
+    run_id: str,
+) -> int:
+    result = run_autonomous_evidence_synthesis(config, run_id=run_id)
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
 
