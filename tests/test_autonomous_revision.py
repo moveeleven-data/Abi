@@ -16,6 +16,7 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_ABLATION_VARIANT_SET_SCHEMA,
     AUTONOMOUS_REVISION_CAUSAL_HANDLE_SCHEMA,
     AUTONOMOUS_REVISION_DIFF_REPORT_SCHEMA,
+    EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA,
     AUTONOMOUS_REVISION_JUDGMENT_KEYS,
     AUTONOMOUS_REVISION_MODEL_SCHEMAS,
     AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
@@ -35,6 +36,11 @@ from abi.modules.autonomous_revision import (
     _load_revision_subject,
     _validate_revision_work_order_payload,
     run_autonomous_revision,
+)
+from abi.modules.executed_ablation import (
+    EXECUTED_ABLATION_ARTIFACT_TYPES,
+    _build_comparison_consistency_report,
+    run_executed_ablation,
 )
 from abi.modules.internal_reader_lab import FakeInternalReaderLabModelClient, run_internal_reader_lab
 from abi.modules.pilot_artifact_set import import_pilot_rival, run_pilot_artifact_set
@@ -168,6 +174,18 @@ def build_live_style_reader_lab_packet(tmp_path: Path) -> tuple[AbiConfig, dict[
     assert lab.exit_code == 0
     assert lab.payload["counts"]["model_calls"] == 9
     return config, lab.payload
+
+
+def build_fake_revision_packet(tmp_path: Path, *, with_rival: bool = True):
+    config, lab_payload = build_reader_lab_packet(tmp_path, with_rival=with_rival)
+    revision = run_autonomous_revision(
+        config,
+        client_name="fake",
+        reader_lab_packet=lab_payload["packet_dir"],
+    )
+    assert revision.exit_code == 0
+    assert revision.payload["accepted"] is True
+    return config, revision.payload
 
 
 def revision_stub_factory(
@@ -539,6 +557,50 @@ class ModelAuthoredAblationControlFieldsClient(FakeAutonomousRevisionModelClient
             self.payloads[request.schema.artifact_type] = payload
             return dump_json(payload)
         return raw_output
+
+
+class StubExecutedAblationClient:
+    provider = "openai"
+
+    def __init__(self, *, model: str, mode: str = "valid") -> None:
+        self.model = model
+        self.mode = mode
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        if self.mode == "invalid":
+            return "{not valid json"
+        if self.mode == "malformed":
+            return dump_json({"comparison_rows": "wrong", "not_human_data": True})
+        prompt = json.loads(request.input_text)
+        return dump_json(
+            {
+                "comparison_rows": [
+                    {
+                        "variant_id": variant["variant_id"],
+                        "comparison_summary": "stub comparison interpretation",
+                        "reader_state_effect_estimate": "stub reader-state estimate",
+                        "rationale": "stub rationale, not human data",
+                        "uncertainty": "medium",
+                        "risk_notes": "stub risk note",
+                        "not_human_data": True,
+                    }
+                    for variant in prompt["variants"]
+                ],
+                "summary": "stub executed ablation comparison",
+                "not_human_data": True,
+            }
+        )
+
+
+def executed_ablation_stub_factory(clients, *, mode: str = "valid"):
+    def _factory(model: str) -> StubExecutedAblationClient:
+        client = StubExecutedAblationClient(model=model, mode=mode)
+        clients.append(client)
+        return client
+
+    return _factory
 
 
 class InvalidOldNewRivalProvenanceClient(FakeAutonomousRevisionModelClient):
@@ -2218,6 +2280,231 @@ def test_stubbed_openai_invalid_old_new_provenance_fails_closed(tmp_path):
     assert "autonomous_closed_loop_gate_report" not in revision_artifact_types
     assert "autonomous_closed_loop_packet" not in revision_artifact_types
     assert final_report.refused is True
+
+
+def test_executed_ablation_fake_creates_diagnostic_packet(tmp_path):
+    config, revision_payload = build_fake_revision_packet(tmp_path, with_rival=True)
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=revision_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert set(result.payload["artifact_ids"]) == set(EXECUTED_ABLATION_ARTIFACT_TYPES)
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["counts"]["countable_evidence_variant_count"] == 3
+
+    work_order = read_payload(result.payload["artifact_paths"]["executed_ablation_work_order"])
+    assert work_order["controller_owned"] is True
+    assert work_order["source_autonomous_revision_packet_id"] == revision_payload["packet_id"]
+    assert work_order["allowed_operation_ids"]
+    assert work_order["allowed_source_patch_span_ids"]
+    assert work_order["allowed_source_spans"]
+    assert work_order["does_not_create_main_candidate"] is True
+
+    variants = read_payload(result.payload["artifact_paths"]["actual_ablation_variant_set"])
+    assert variants["variants"]
+    assert variants["non_final"] is True
+    assert variants["not_finalization_eligible"] is True
+    assert all(variant["operation_id"] for variant in variants["variants"])
+    assert all(
+        variant["source_span_id"] or variant["source_patch_span_id"]
+        for variant in variants["variants"]
+    )
+    no_ops = [variant for variant in variants["variants"] if variant["no_op"]]
+    mismatches = [
+        variant
+        for variant in variants["variants"]
+        if not variant["operation_matches_actual_change"]
+    ]
+    planned = [variant for variant in variants["variants"] if variant["planned_only"]]
+    assert no_ops
+    assert mismatches
+    assert planned
+    assert all(not variant["evidence_countable"] for variant in no_ops)
+    assert all(not variant["evidence_countable"] for variant in mismatches)
+    assert all(not variant["evidence_countable"] for variant in planned)
+
+    execution = read_payload(result.payload["artifact_paths"]["ablation_execution_report"])
+    assert execution["actual_executed_ablation_evidence_exists"] is True
+    assert execution["planned_only_not_counted"] is True
+    assert execution["no_op_not_counted"] is True
+    assert execution["operation_mismatch_not_counted"] is True
+
+    for artifact_type in (
+        "ablation_internal_reader_comparison",
+        "ablation_old_new_rival_comparison",
+        "comparison_consistency_report",
+        "ablation_causal_effect_report",
+        "executed_ablation_gate_report",
+        "executed_ablation_packet",
+    ):
+        assert artifact_type in result.payload["artifact_ids"]
+
+    consistency = read_payload(
+        result.payload["artifact_paths"]["comparison_consistency_report"]
+    )
+    assert consistency["comparison_internal_consistency"] is True
+    assert consistency["countable_as_gate_evidence"] is True
+
+    causal = read_payload(result.payload["artifact_paths"]["ablation_causal_effect_report"])
+    assert causal["selected_repair_causal_status"] in {
+        "ambiguous",
+        "useful_but_insufficient",
+        "noncausal_or_cosmetic",
+    }
+    assert causal["not_human_validated"] is True
+    assert causal["no_phase_shift_claim"] is True
+
+    gate = read_payload(result.payload["artifact_paths"]["executed_ablation_gate_report"])
+    assert gate["eligible"] is False
+    assert gate["passed"] is False
+    assert gate["final_gates_marked_passed"] == []
+    assert gate["phase_shift_claim"] is False
+    assert gate["human_validation_required"] is False
+    assert gate["paper_validation_required"] is False
+
+    with connect(config.db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+    assert "paper" not in final_report.message.lower()
+
+
+def test_executed_ablation_refuses_missing_revision_packet(tmp_path):
+    config = config_for(tmp_path)
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=tmp_path / "missing_packet",
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "not found" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_executed_ablation_consistency_report_flags_contradictions():
+    variant_set = {
+        "variants": [
+            {
+                "variant_id": "executed_ablation_variant_001",
+                "evidence_countable": True,
+                "operation_matches_actual_change": False,
+                "planned_only": False,
+            }
+        ]
+    }
+    internal = {
+        "comparison_rows": [
+            {
+                "variant_id": "executed_ablation_variant_001",
+                "evidence_countable": True,
+                "planned_only": False,
+            }
+        ]
+    }
+    old_new = {
+        "strongest_rival_still_beats_candidate": False,
+        "another_revision_cycle_justified": False,
+        "repair_has_causal_support": True,
+        "revert_performs_same_or_better": True,
+        "summary": "The rival still beats the candidate, so another cycle is needed.",
+        "rationale": "The rival still beats the candidate.",
+        "comparison_basis": "diagnostic",
+    }
+
+    report = _build_comparison_consistency_report(
+        variant_set=variant_set,
+        internal_comparison=internal,
+        old_new_comparison=old_new,
+        fixture_only=True,
+    )
+
+    assert report["comparison_internal_consistency"] is False
+    assert report["countable_as_gate_evidence"] is False
+    assert report["contradictions"]
+    assert any("rival" in item for item in report["contradictions"])
+    assert any("revert performs" in item for item in report["contradictions"])
+    assert any("operation mismatch" in item for item in report["contradictions"])
+
+
+def test_executed_ablation_openai_guard_refuses_before_model_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    config, revision_payload = build_fake_revision_packet(tmp_path, with_rival=True)
+
+    result = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=revision_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "--allow-live-model" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_executed_ablation_stubbed_openai_success_links_model_call(tmp_path):
+    config, revision_payload = build_fake_revision_packet(tmp_path, with_rival=True)
+    clients = []
+
+    result = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=revision_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation-model",
+        client_factory=executed_ablation_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+    assert len(clients[0].requests) == 1
+    assert clients[0].requests[0].schema == EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA
+    comparison = read_payload(
+        result.payload["artifact_paths"]["ablation_internal_reader_comparison"]
+    )
+    assert comparison["model_call_id"] == result.payload["model_calls"][0]["id"]
+    assert comparison["controller_owned_evidence_status"] is True
+    assert result.payload["model_calls"][0]["parsed_output_artifact_id"] == result.payload[
+        "artifact_ids"
+    ]["ablation_internal_reader_comparison"]
+
+
+def test_executed_ablation_invalid_model_output_fails_before_parsed_artifact(tmp_path):
+    config, revision_payload = build_fake_revision_packet(tmp_path, with_rival=True)
+    clients = []
+
+    result = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=revision_payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation-model",
+        client_factory=executed_ablation_stub_factory(clients, mode="invalid"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    failed_call = result.payload["model_calls"][-1]
+    assert failed_call["schema_name"] == EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA.name
+    assert failed_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert failed_call["parsed_output_artifact_id"] is None
+    assert "ablation_internal_reader_comparison" not in result.payload["artifact_ids"]
+    assert "executed_ablation_gate_report" not in result.payload["artifact_ids"]
 
 
 def test_stubbed_openai_autonomous_revision_invalid_output_fails_closed(tmp_path):

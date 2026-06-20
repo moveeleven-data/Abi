@@ -28,6 +28,11 @@ from abi.modules.autonomous_revision import (
     AUTONOMOUS_REVISION_MAX_MODEL_CALLS_DEFAULT,
     run_autonomous_revision,
 )
+from abi.modules.executed_ablation import (
+    EXECUTED_ABLATION_CLIENTS,
+    EXECUTED_ABLATION_MAX_MODEL_CALLS_DEFAULT,
+    run_executed_ablation,
+)
 from abi.modules.internal_reader_lab import (
     INTERNAL_READER_LAB_CLIENTS,
     INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
@@ -291,6 +296,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=AUTONOMOUS_REVISION_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for revision workers.",
     )
+    autonomous_ablate_parser = autonomous_subparsers.add_parser(
+        "ablate",
+        help="Run executed counterfactual ablation over an autonomous revision packet",
+    )
+    autonomous_ablate_parser.add_argument(
+        "--client",
+        choices=EXECUTED_ABLATION_CLIENTS,
+        required=True,
+        help="Executed ablation client path to use.",
+    )
+    autonomous_ablate_parser.add_argument(
+        "--revision-packet",
+        type=Path,
+        required=True,
+        help="Autonomous closed-loop revision packet directory to ablate.",
+    )
+    autonomous_ablate_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_ablate_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=EXECUTED_ABLATION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for executed ablation workers.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -426,6 +458,14 @@ def main(argv: list[str] | None = None) -> int:
             config,
             client_name=args.client,
             reader_lab_packet=args.reader_lab_packet,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "ablate":
+        return _cmd_autonomous_ablate(
+            config,
+            client_name=args.client,
+            revision_packet=args.revision_packet,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
         )
@@ -680,6 +720,25 @@ def _cmd_autonomous_revise(
         config,
         client_name=client_name,
         reader_lab_packet=reader_lab_packet,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_ablate(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    revision_packet: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_executed_ablation(
+        config,
+        client_name=client_name,
+        revision_packet=revision_packet,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
     )

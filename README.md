@@ -1,46 +1,26 @@
-# Project Abi
+# Abi
 
-Abi v0.1 is an internal autonomous creative-engine scaffold. It is built around
-deterministic packet generation, immutable artifact lineage, structured model-call
-records, and fail-closed controller gates.
+Abi is a local research system for building and revising literary artifacts.
 
-The current active path is internal: source material can move through candidate and
-baseline packet construction, an autonomous internal reader lab, failure diagnosis,
-targeted recomposition planning, counterfactual ablation planning, strongest-rival
-pressure checks, and autonomous closed-loop revision.
+It treats writing as a structured process rather than a single draft. Source material
+is turned into traceable packets, candidate texts are compared against baselines and
+rivals, internal readers diagnose how the text is working, and bounded revisions are
+recorded as evidence-rich artifacts.
 
-Abi is not currently a public validation harness, a paper-ready evaluation system, or a
-final writing product.
+The core idea is triangular:
 
-## Current Status
+- The essay topic supplies the symbolic field.
+- The architecture preserves how every claim, revision, and comparison was made.
+- The reader transformation is treated as part of the artifact's design, not an
+  afterthought.
 
-Implemented today:
+Abi tries to keep those three sides aligned. What the piece is about, how it is built,
+and what it should change in the reader are designed as one system.
 
-- Python package and CLI: `abi`
-- SQLite-backed run, artifact, gate, and model-call state
-- Immutable JSON artifact envelopes with hashes and parent IDs
-- Deterministic Abi Ear and Minimal Reread demo packets
-- Deterministic production-harness and pilot artifact-set scaffolds
-- Strongest-rival import into pilot packets
-- Sealed model-driver layer with structured-output validation
-- Guarded fake/stub and opt-in live-worker paths
-- Autonomous Internal Reader Lab v1
-- Autonomous Closed-Loop Revision v1
-- Policy-driven finalization profiles
+## How It Works
 
-The active finalization profile is:
-
-```text
-autonomous_creative_candidate
-```
-
-That profile is intentionally fail-closed until its internal gates are present and
-passing.
-
-## What Abi Does
-
-Abi records work as packets under `runs/<run_id>/.../packet_NNNN/`. Each packet contains
-JSON artifacts wrapped in a normalized envelope:
+Abi stores work in packet directories under `runs/<run_id>/.../packet_NNNN/`.
+Each packet contains JSON artifacts with a normalized envelope:
 
 ```text
 schema_version
@@ -54,124 +34,49 @@ model_call_id
 payload
 ```
 
-Artifacts are registered in SQLite with SHA-256 hashes and parent IDs. Model-shaped
-outputs are validated against local schemas before any parsed artifact is registered.
-Invalid model output records a failed model call and stops packet assembly.
+The SQLite registry records artifact IDs, hashes, parent IDs, run state, gates, and
+model-call records. This gives Abi a durable memory outside the model context.
 
-Finalization is controlled only by controller/finalization code. Workers can produce
-evidence and blocker reports, but workers cannot finalize Abi.
+Most pipelines follow the same shape:
 
-## Current Non-Claims
+1. Build or load a source packet.
+2. Create candidate, baseline, and rival artifacts.
+3. Run internal reader analysis over the candidate set.
+4. Diagnose failures and choose a bounded repair target.
+5. Apply a controller-owned revision.
+6. Compare old, new, rival, and ablated variants.
+7. Record gate reports and blocker reports without silently finalizing anything.
 
-Do not claim from this repo state that:
+## What Is Implemented
 
-- Abi has produced a final artifact.
-- Abi has proven phase-shift-level writing.
-- Abi has passed real human validation.
-- Abi has beaten a strongest rival.
-- Abi has cleared hostile final audit.
-- Fixture or fake-client outputs are real validation evidence.
+The current repo includes:
 
-The current system is an engineering workbench for internal autonomous revision, not a
-completed validation claim.
+- The `abi` Python package and CLI.
+- SQLite-backed runs, artifacts, gates, and model-call records.
+- Immutable JSON artifacts with hashes and parent lineage.
+- Deterministic Abi Ear and Minimal Reread demos.
+- Production-harness and pilot artifact-set packet scaffolds.
+- Strongest-rival import and counterbalanced private reader-kit export.
+- Autonomous internal reader-lab packets.
+- Autonomous closed-loop revision packets.
+- Executed counterfactual ablation packets.
+- Policy-driven controller and finalization profiles.
 
-## Local Verification
+Workers can produce artifacts, comparisons, diagnoses, and blocker reports. Finalization
+is controlled separately by the controller/finalization layer.
 
-Install in editable mode with developer tools:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-```
-
-Run checks:
-
-```powershell
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m pytest
-```
-
-Inspect current state:
-
-```powershell
-.\.venv\Scripts\abi.exe status
-.\.venv\Scripts\abi.exe finalization status --profile autonomous_creative_candidate
-```
-
-Expected behavior:
-
-```powershell
-.\.venv\Scripts\abi.exe finalize --profile autonomous_creative_candidate
-```
-
-This should refuse unless all required autonomous gates are satisfied.
-
-## Useful Local Commands
-
-Deterministic demos:
-
-```powershell
-.\.venv\Scripts\abi.exe ear demo
-.\.venv\Scripts\abi.exe reread demo
-.\.venv\Scripts\abi.exe harness demo
-```
-
-Candidate and autonomous fake paths:
-
-```powershell
-.\.venv\Scripts\abi.exe pilot artifact-set --client fake --source-dir fixtures/production_harness
-.\.venv\Scripts\abi.exe autonomous reader-lab --client fake --packet-dir <pilot_packet_dir>
-.\.venv\Scripts\abi.exe autonomous revise --client fake --reader-lab-packet <reader_lab_packet_dir>
-```
-
-Inspection:
-
-```powershell
-.\.venv\Scripts\abi.exe artifact list
-.\.venv\Scripts\abi.exe run latest
-.\.venv\Scripts\abi.exe model-call list
-.\.venv\Scripts\abi.exe gate list
-.\.venv\Scripts\abi.exe controller status
-.\.venv\Scripts\abi.exe controller blockers
-.\.venv\Scripts\abi.exe controller demo
-```
-
-Some live model paths exist, but they are guarded, opt-in only, and not required for the
-local fake/demo workflows.
-
-## Repository Map
+## Repository Layout
 
 ```text
 src/abi/                      runtime package
-src/abi/controller/           gates, controller decisions, finalization policy
+src/abi/controller/           controller decisions, gates, finalization policy
 src/abi/modules/              packet-producing pipelines
 tests/                        regression tests
 fixtures/                     non-private fixture inputs
 context/                      frozen phase specs and historical context
-docs/                         operator handoff and historical protocol docs
-tools/setup_context_scripts/  phase context setup scripts
+docs/                         operator handoff and protocol notes
+tools/setup_context_scripts/  context setup utilities
 ```
 
-Runtime and private files are intentionally ignored:
-
-```text
-db/*.sqlite
-runs/*
-outputs/*
-inputs/private/
-.env
-```
-
-## Documentation
-
-Start here:
-
-- [Docs index](docs/INDEX.md)
-- [Context README](context/README.md)
-- [Core realignment context](context/24_CORE_REALIGNMENT_REMOVE_HUMAN_PAPER_VALIDATION.md)
-- [Architecture freeze](context/00_ARCHITECTURE_FREEZE.md)
-- [Gate policy v2 spec](context/19_FINALIZATION_GATE_POLICY_V2_SPEC.md)
-- [Operator handoff](docs/phase14_operator_handoff/operator_handoff.md)
-- [Known blockers](docs/phase14_operator_handoff/known_blockers.md)
-
-The `context/` files are frozen phase specs. They are useful historical records, but not
-all of them are current runtime instructions.
+Runtime state, generated packets, outputs, private source material, and environment
+files are intentionally kept out of Git.

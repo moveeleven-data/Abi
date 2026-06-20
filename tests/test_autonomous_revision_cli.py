@@ -3,6 +3,7 @@ from pathlib import Path
 
 from abi.cli import main
 from abi.modules.autonomous_revision import AUTONOMOUS_REVISION_ARTIFACT_TYPES
+from abi.modules.executed_ablation import EXECUTED_ABLATION_ARTIFACT_TYPES
 
 
 SOURCE_NOTE = """# Source Note
@@ -118,6 +119,64 @@ def test_autonomous_revise_cli_openai_guard(tmp_path, capsys, monkeypatch):
             "openai",
             "--reader-lab-packet",
             lab_payload["packet_dir"],
+        ]
+    )
+    openai_payload = json.loads(capsys.readouterr().out)
+
+    assert openai_exit == 1
+    assert openai_payload["refused"] is True
+    assert "--allow-live-model" in openai_payload["message"]
+    assert openai_payload["counts"]["model_calls"] == 0
+
+
+def test_autonomous_ablate_cli_fake_and_openai_guard(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    lab_payload = build_reader_lab_packet(tmp_path, capsys)
+    revise_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "revise",
+            "--client",
+            "fake",
+            "--reader-lab-packet",
+            lab_payload["packet_dir"],
+        ]
+    )
+    revise_payload = json.loads(capsys.readouterr().out)
+    assert revise_exit == 0
+
+    ablate_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "ablate",
+            "--client",
+            "fake",
+            "--revision-packet",
+            revise_payload["packet_dir"],
+        ]
+    )
+    ablate_payload = json.loads(capsys.readouterr().out)
+
+    assert ablate_exit == 0
+    assert ablate_payload["accepted"] is True
+    assert set(ablate_payload["artifact_ids"]) == set(EXECUTED_ABLATION_ARTIFACT_TYPES)
+    assert ablate_payload["counts"]["model_calls"] == 0
+    assert ablate_payload["gate_report"]["eligible"] is False
+
+    openai_exit = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "ablate",
+            "--client",
+            "openai",
+            "--revision-packet",
+            revise_payload["packet_dir"],
         ]
     )
     openai_payload = json.loads(capsys.readouterr().out)

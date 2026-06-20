@@ -61,6 +61,7 @@ class WorkerRole(str, Enum):
         "autonomous_revision_old_new_rival_comparator"
     )
     AUTONOMOUS_REVISION_LOCAL_LAW_REPORTER = "autonomous_revision_local_law_reporter"
+    EXECUTED_ABLATION_INTERNAL_COMPARATOR = "executed_ablation_internal_comparator"
 
 
 @dataclass(frozen=True)
@@ -423,6 +424,16 @@ AUTONOMOUS_REVISION_MODEL_SCHEMAS = (
     AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA,
 )
 
+EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA = WorkerSchema(
+    name="ExecutedAblationInternalComparisonOutput",
+    version="1",
+    artifact_type="ablation_internal_reader_comparison",
+)
+
+EXECUTED_ABLATION_MODEL_SCHEMAS = (
+    EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA,
+)
+
 LIVE_MODEL_WORKER_SCHEMAS = (
     LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
     + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
@@ -430,6 +441,7 @@ LIVE_MODEL_WORKER_SCHEMAS = (
     + PILOT_MODEL_SCHEMAS
     + INTERNAL_READER_LAB_MODEL_SCHEMAS
     + AUTONOMOUS_REVISION_MODEL_SCHEMAS
+    + EXECUTED_ABLATION_MODEL_SCHEMAS
 )
 
 
@@ -1953,6 +1965,39 @@ def autonomous_revision_local_law_case_note_json_schema() -> dict[str, Any]:
     )
 
 
+def executed_ablation_internal_comparison_json_schema() -> dict[str, Any]:
+    return _schema_with_properties(
+        {
+            "comparison_rows": {
+                "type": "array",
+                "items": _object_schema(
+                    {
+                        "variant_id": {"type": "string"},
+                        "comparison_summary": {"type": "string"},
+                        "reader_state_effect_estimate": {"type": "string"},
+                        "rationale": {"type": "string"},
+                        "uncertainty": {"type": "string"},
+                        "risk_notes": {"type": "string"},
+                        "not_human_data": {"type": "boolean"},
+                    },
+                    [
+                        "variant_id",
+                        "comparison_summary",
+                        "reader_state_effect_estimate",
+                        "rationale",
+                        "uncertainty",
+                        "risk_notes",
+                        "not_human_data",
+                    ],
+                ),
+            },
+            "summary": {"type": "string"},
+            "not_human_data": {"type": "boolean"},
+        },
+        ["comparison_rows", "summary", "not_human_data"],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -2038,6 +2083,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return autonomous_revision_old_new_rival_comparison_json_schema()
     if schema == AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA:
         return autonomous_revision_local_law_case_note_json_schema()
+    if schema == EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA:
+        return executed_ablation_internal_comparison_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -2133,6 +2180,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_autonomous_revision_old_new_rival_comparison(payload)
     if schema == AUTONOMOUS_REVISION_LOCAL_LAW_CASE_NOTE_SCHEMA:
         return _validate_autonomous_revision_local_law_case_note(payload)
+    if schema == EXECUTED_ABLATION_INTERNAL_COMPARISON_SCHEMA:
+        return _validate_executed_ablation_internal_comparison(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -3284,6 +3333,38 @@ def _validate_autonomous_revision_local_law_case_note(payload: dict[str, Any]) -
             "another_revision_cycle_needed": comparison_result["another_revision_cycle_needed"],
             "rival_still_beats_candidate": comparison_result["rival_still_beats_candidate"],
         },
+        "not_human_data": True,
+    }
+
+
+def _validate_executed_ablation_internal_comparison(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    _require_object_list(payload, "comparison_rows")
+    rows = []
+    for index, row in enumerate(payload["comparison_rows"]):
+        validated = _validate_object(
+            row,
+            f"comparison_rows[{index}]",
+            (
+                "variant_id",
+                "comparison_summary",
+                "reader_state_effect_estimate",
+                "rationale",
+                "uncertainty",
+                "risk_notes",
+            ),
+        )
+        _require_true(row, "not_human_data", field_prefix=f"comparison_rows[{index}].")
+        validated["not_human_data"] = True
+        rows.append(validated)
+    if not rows:
+        raise ModelValidationError("comparison_rows must not be empty")
+    _require_type(payload, "summary", str)
+    _require_true(payload, "not_human_data")
+    return {
+        "comparison_rows": rows,
+        "summary": payload["summary"],
         "not_human_data": True,
     }
 
