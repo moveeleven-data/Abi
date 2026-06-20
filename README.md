@@ -1,21 +1,15 @@
 # Abi
 
-Abi is a local research system for building and revising literary artifacts.
-
-It treats writing as a structured process rather than a single draft. Source material
-is turned into traceable packets, candidate texts are compared against baselines and
-rivals, internal readers diagnose how the text is working, and bounded revisions are
-recorded as evidence-rich artifacts.
-
-The core idea is triangular:
-
-- The essay topic supplies the symbolic field.
-- The architecture preserves how every claim, revision, and comparison was made.
-- The reader transformation is treated as part of the artifact's design, not an
-  afterthought.
-
-Abi tries to keep those three sides aligned. What the piece is about, how it is built,
-and what it should change in the reader are designed as one system.
+Abi is an autonomous creative engine for building artifacts through a triply isometric
+design: the machine process, the artifact's subject/form, and the reader-state
+transformation are all described in the same symbolic terms. Its core pattern is
+germ -> differentiation -> pressure -> crisis -> recomposition -> return: the
+architecture uses that pattern to generate, read, diagnose, revise, ablate, and compare
+creative work, while the target artifact embodies the same transformation and the
+internal reader model tests whether the artifact caused that transformation. Abi begins
+with one narrow literary-metaphysical domain so the architecture, topic, and reader
+effect can be maximally aligned, then aims to generalize the same causal-creative loop
+into a broader creative intelligence system.
 
 ## How It Works
 
