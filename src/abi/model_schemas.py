@@ -65,6 +65,7 @@ class WorkerRole(str, Enum):
     ABLATION_INFORMED_BASE_SELECTOR = "ablation_informed_base_selector"
     ABLATION_INFORMED_HANDLE_SELECTOR = "ablation_informed_handle_selector"
     ABLATION_INFORMED_PATCH_PROPOSER = "ablation_informed_patch_proposer"
+    BOUNDED_MACRO_RECOMPOSER = "bounded_macro_recomposer"
 
 
 @dataclass(frozen=True)
@@ -461,6 +462,14 @@ ABLATION_INFORMED_REVISION_MODEL_SCHEMAS = (
     ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA,
 )
 
+BOUNDED_MACRO_RECOMPOSITION_SCHEMA = WorkerSchema(
+    name="BoundedMacroRecompositionOutput",
+    version="1",
+    artifact_type="model_bounded_macro_recomposition",
+)
+
+BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS = (BOUNDED_MACRO_RECOMPOSITION_SCHEMA,)
+
 LIVE_MODEL_WORKER_SCHEMAS = (
     LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
     + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
@@ -470,6 +479,7 @@ LIVE_MODEL_WORKER_SCHEMAS = (
     + AUTONOMOUS_REVISION_MODEL_SCHEMAS
     + EXECUTED_ABLATION_MODEL_SCHEMAS
     + ABLATION_INFORMED_REVISION_MODEL_SCHEMAS
+    + BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS
 )
 
 
@@ -2121,6 +2131,66 @@ def ablation_informed_patch_proposal_json_schema() -> dict[str, Any]:
     )
 
 
+def bounded_macro_recomposition_json_schema() -> dict[str, Any]:
+    constraint_mapping_item = _object_schema(
+        {
+            "constraint_id": {"type": "string"},
+            "satisfied_claim": {"type": "boolean"},
+            "supporting_replacement_excerpt": {"type": "string"},
+            "rationale": {"type": "string"},
+            "uncertainty": {"type": "string"},
+            "risk_note": {"type": "string"},
+        },
+        [
+            "constraint_id",
+            "satisfied_claim",
+            "supporting_replacement_excerpt",
+            "rationale",
+            "uncertainty",
+            "risk_note",
+        ],
+    )
+    return _schema_with_properties(
+        {
+            "replacement_section_text": {"type": "string"},
+            "macro_recomposition_plan": _object_schema(
+                {
+                    "plan_summary": {"type": "string"},
+                    "plan_steps": _string_array_schema(),
+                },
+                ["plan_summary", "plan_steps"],
+            ),
+            "section_plan": _object_schema(
+                {
+                    "target_movement": {"type": "string"},
+                    "bounded": {"type": "boolean"},
+                    "full_rewrite": {"type": "boolean"},
+                    "rationale": {"type": "string"},
+                },
+                ["target_movement", "bounded", "full_rewrite", "rationale"],
+            ),
+            "constraint_mapping": {
+                "type": "array",
+                "items": constraint_mapping_item,
+            },
+            "rationale": {"type": "string"},
+            "local_law_explanation": {"type": "string"},
+            "uncertainty": {"type": "string"},
+            "predicted_reader_state_effect": {"type": "string"},
+        },
+        [
+            "replacement_section_text",
+            "macro_recomposition_plan",
+            "section_plan",
+            "constraint_mapping",
+            "rationale",
+            "local_law_explanation",
+            "uncertainty",
+            "predicted_reader_state_effect",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -2214,6 +2284,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return ablation_informed_handle_selection_json_schema()
     if schema == ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA:
         return ablation_informed_patch_proposal_json_schema()
+    if schema == BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
+        return bounded_macro_recomposition_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -2317,6 +2389,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_ablation_informed_handle_selection(payload)
     if schema == ABLATION_INFORMED_PATCH_PROPOSAL_SCHEMA:
         return _validate_ablation_informed_patch_proposal(payload)
+    if schema == BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
+        return _validate_bounded_macro_recomposition(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -3603,6 +3677,81 @@ def _validate_ablation_informed_patch_proposal(payload: dict[str, Any]) -> dict[
         ],
         "avoids_full_rewrite": True,
         "not_human_data": True,
+    }
+
+
+def _validate_bounded_macro_recomposition(payload: dict[str, Any]) -> dict[str, Any]:
+    _require_type(payload, "replacement_section_text", str)
+    _require_type(payload, "macro_recomposition_plan", dict)
+    macro_plan = _validate_object(
+        payload["macro_recomposition_plan"],
+        "macro_recomposition_plan",
+        ("plan_summary",),
+    )
+    _require_string_list(
+        payload["macro_recomposition_plan"],
+        "plan_steps",
+        field_prefix="macro_recomposition_plan.",
+    )
+    _require_type(payload, "section_plan", dict)
+    section_plan = _validate_object(
+        payload["section_plan"],
+        "section_plan",
+        ("target_movement", "rationale"),
+    )
+    _require_type(payload["section_plan"], "bounded", bool, field_prefix="section_plan.")
+    _require_type(
+        payload["section_plan"],
+        "full_rewrite",
+        bool,
+        field_prefix="section_plan.",
+    )
+    _require_object_list(payload, "constraint_mapping")
+    constraint_mapping = []
+    for index, item in enumerate(payload["constraint_mapping"]):
+        validated = _validate_object(
+            item,
+            f"constraint_mapping[{index}]",
+            (
+                "constraint_id",
+                "supporting_replacement_excerpt",
+                "rationale",
+                "uncertainty",
+                "risk_note",
+            ),
+        )
+        _require_type(
+            item,
+            "satisfied_claim",
+            bool,
+            field_prefix=f"constraint_mapping[{index}].",
+        )
+        validated["satisfied_claim"] = item["satisfied_claim"]
+        constraint_mapping.append(validated)
+    for key in (
+        "rationale",
+        "local_law_explanation",
+        "uncertainty",
+        "predicted_reader_state_effect",
+    ):
+        _require_type(payload, key, str)
+    return {
+        "replacement_section_text": payload["replacement_section_text"],
+        "macro_recomposition_plan": {
+            "plan_summary": macro_plan["plan_summary"],
+            "plan_steps": list(payload["macro_recomposition_plan"]["plan_steps"]),
+        },
+        "section_plan": {
+            "target_movement": section_plan["target_movement"],
+            "bounded": payload["section_plan"]["bounded"],
+            "full_rewrite": payload["section_plan"]["full_rewrite"],
+            "rationale": section_plan["rationale"],
+        },
+        "constraint_mapping": constraint_mapping,
+        "rationale": payload["rationale"],
+        "local_law_explanation": payload["local_law_explanation"],
+        "uncertainty": payload["uncertainty"],
+        "predicted_reader_state_effect": payload["predicted_reader_state_effect"],
     }
 
 

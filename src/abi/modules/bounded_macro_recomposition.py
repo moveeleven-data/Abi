@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -19,6 +21,13 @@ from abi.controller.state import (
 from abi.db import connect, initialize_database
 from abi.hashing import sha256_text
 from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
+from abi.model_calls import link_model_call_parsed_artifact
+from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
+from abi.model_schemas import (
+    BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+    ModelValidationError,
+    WorkerRole,
+)
 from abi.packets import PacketWriter, create_packet_dir, read_json_file
 
 
@@ -26,6 +35,10 @@ BOUNDED_MACRO_RECOMPOSITION_LINEAGE_ID = "bounded_macro_recomposition_v1"
 BOUNDED_MACRO_RECOMPOSITION_CREATED_BY = "bounded_macro_recomposition_v1_controller"
 BOUNDED_MACRO_RECOMPOSITION_CLIENTS = ("fake", "openai")
 BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT = 8
+BOUNDED_MACRO_RECOMPOSITION_REQUIRED_MODEL_CALLS = 1
+BOUNDED_MACRO_RECOMPOSITION_PROMPT_CONTRACT_ID = (
+    "autonomous.bounded_macro_recomposition.v1"
+)
 
 BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES = (
     "macro_recomposition_subject_manifest",
@@ -55,6 +68,16 @@ REQUIRED_SYNTHESIS_ARTIFACT_FILES = (
 
 TARGET_MOVEMENT = "middle_and_return_movement"
 
+REQUIRED_SEMANTIC_CONSTRAINT_IDS = (
+    "proof_from_inside_line",
+    "cosmic_silence_isolation_condition",
+    "return_without_regression",
+    "no_outside_answer_or_rescue",
+    "strongest_rival_pressure",
+    "table_dust_spoon_saucer_local_field",
+    "record_law_proof_answer_compression_preserved",
+)
+
 
 @dataclass(frozen=True)
 class BoundedMacroRecompositionResult:
@@ -62,6 +85,7 @@ class BoundedMacroRecompositionResult:
     payload: dict[str, object]
     artifacts: tuple[ArtifactRecord, ...] = ()
     gate_record: GateRecord | None = None
+    model_results: tuple[ModelDriverResult, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -102,6 +126,7 @@ def run_bounded_macro_recomposition(
     max_model_calls: int = BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
     api_key: str | None = None,
     model: str | None = None,
+    client_factory: Callable[[str], ModelClient] | None = None,
 ) -> BoundedMacroRecompositionResult:
     if client_name not in BOUNDED_MACRO_RECOMPOSITION_CLIENTS:
         return _refusal(
@@ -131,15 +156,17 @@ def run_bounded_macro_recomposition(
                 client_name=client_name,
                 model=configured_model,
             )
-        return _refusal(
-            message=(
-                "Bounded macro recomposition OpenAI worker is not implemented in "
-                "this deterministic task; use --client fake."
-            ),
-            synthesis_packet=synthesis_packet,
-            client_name=client_name,
-            model=configured_model,
-        )
+        if max_model_calls < BOUNDED_MACRO_RECOMPOSITION_REQUIRED_MODEL_CALLS:
+            return _refusal(
+                message=(
+                    "Bounded macro recomposition OpenAI path refused; "
+                    f"max-model-calls {max_model_calls} is below required budget "
+                    f"{BOUNDED_MACRO_RECOMPOSITION_REQUIRED_MODEL_CALLS}."
+                ),
+                synthesis_packet=synthesis_packet,
+                client_name=client_name,
+                model=configured_model,
+            )
 
     initialize_database(config)
     with connect(config.db_path) as connection:
@@ -178,6 +205,9 @@ def run_bounded_macro_recomposition(
 
         payloads: dict[str, dict[str, object]] = {}
         artifacts: dict[str, ArtifactRecord] = {}
+        model_results: list[ModelDriverResult] = []
+        model_payload: dict[str, object] | None = None
+        model_call_id: str | None = None
 
         payloads["macro_recomposition_subject_manifest"] = _build_subject_manifest(
             subject,
@@ -223,33 +253,102 @@ def run_bounded_macro_recomposition(
             ],
         )
 
-        payloads["macro_recomposition_plan"] = _build_recomposition_plan(subject)
-        artifacts["macro_recomposition_plan"] = writer.write_artifact(
-            "macro_recomposition_plan",
-            payloads["macro_recomposition_plan"],
-            parent_ids=[
-                artifacts["macro_recomposition_work_order"].id,
-                artifacts["protected_effects_and_forbidden_changes"].id,
-            ],
-        )
+        if client_name == "openai":
+            connection.commit()
+            factory = client_factory or _default_openai_client_factory
+            result = _run_live_macro_recomposition_model(
+                config=config,
+                subject=subject,
+                packet_dir=packet_dir,
+                model_client=factory(configured_model),
+                work_order=payloads["macro_recomposition_work_order"],
+                protected_effects=payloads["protected_effects_and_forbidden_changes"],
+                parent_ids=[
+                    artifacts["macro_recomposition_work_order"].id,
+                    artifacts["protected_effects_and_forbidden_changes"].id,
+                ],
+            )
+            model_results.append(result)
+            if not result.accepted or result.parsed_payload is None:
+                return _failure_result(
+                    subject=subject,
+                    packet_dir=packet_dir,
+                    client_name=client_name,
+                    model=configured_model,
+                    artifacts=artifacts,
+                    model_results=model_results,
+                    message=_model_failure_message(result),
+                )
+            model_payload = result.parsed_payload
+            model_call_id = result.model_call.id
 
-        recomposed = _fake_recompose_text(subject.base_text)
+        payloads["macro_recomposition_plan"] = _build_recomposition_plan(
+            subject,
+            model_payload=model_payload,
+            model_call_id=model_call_id,
+        )
+        plan_parent_ids = [
+            artifacts["macro_recomposition_work_order"].id,
+            artifacts["protected_effects_and_forbidden_changes"].id,
+        ]
+        if model_payload is None:
+            artifacts["macro_recomposition_plan"] = writer.write_artifact(
+                "macro_recomposition_plan",
+                payloads["macro_recomposition_plan"],
+                parent_ids=plan_parent_ids,
+            )
+        else:
+            artifacts["macro_recomposition_plan"] = _write_model_tagged_artifact(
+                connection=connection,
+                subject=subject,
+                packet_dir=packet_dir,
+                result=model_results[-1],
+                artifact_type="macro_recomposition_plan",
+                payload=payloads["macro_recomposition_plan"],
+                parent_ids=plan_parent_ids,
+            )
+
+        recomposed = (
+            _fake_recompose_text(subject.base_text)
+            if model_payload is None
+            else _model_recompose_text(subject, model_payload)
+        )
         payloads["macro_patch_or_section_plan"] = _build_patch_or_section_plan(
             subject,
             recomposed,
+            model_payload=model_payload,
+            model_call_id=model_call_id,
         )
-        artifacts["macro_patch_or_section_plan"] = writer.write_artifact(
-            "macro_patch_or_section_plan",
-            payloads["macro_patch_or_section_plan"],
-            parent_ids=[
-                artifacts["macro_recomposition_plan"].id,
-                artifacts["protected_effects_and_forbidden_changes"].id,
-            ],
-        )
+        patch_parent_ids = [
+            artifacts["macro_recomposition_plan"].id,
+            artifacts["protected_effects_and_forbidden_changes"].id,
+        ]
+        if model_payload is None:
+            artifacts["macro_patch_or_section_plan"] = writer.write_artifact(
+                "macro_patch_or_section_plan",
+                payloads["macro_patch_or_section_plan"],
+                parent_ids=patch_parent_ids,
+            )
+        else:
+            artifacts["macro_patch_or_section_plan"] = _write_model_tagged_artifact(
+                connection=connection,
+                subject=subject,
+                packet_dir=packet_dir,
+                result=model_results[-1],
+                artifact_type="macro_patch_or_section_plan",
+                payload=payloads["macro_patch_or_section_plan"],
+                parent_ids=patch_parent_ids,
+            )
+            model_results[-1] = _link_model_result(
+                connection=connection,
+                result=model_results[-1],
+                parsed_artifact=artifacts["macro_patch_or_section_plan"],
+            )
 
         payloads["macro_recomposed_candidate_text"] = _build_recomposed_candidate(
             subject,
             recomposed,
+            model_call_id=model_call_id,
         )
         artifacts["macro_recomposed_candidate_text"] = writer.write_artifact(
             "macro_recomposed_candidate_text",
@@ -293,6 +392,7 @@ def run_bounded_macro_recomposition(
             protected_effects=payloads["protected_effects_and_forbidden_changes"],
             diff_report=payloads["macro_recomposition_diff_report"],
             rival_check=payloads["macro_rival_pressure_check"],
+            model_payload=model_payload,
         )
         artifacts["macro_recomposition_gate_report"] = writer.write_artifact(
             "macro_recomposition_gate_report",
@@ -311,6 +411,8 @@ def run_bounded_macro_recomposition(
             payloads=payloads,
             artifacts=artifacts,
             client_name=client_name,
+            model=configured_model if client_name == "openai" else None,
+            model_results=model_results,
         )
         artifacts["macro_recomposition_packet"] = writer.write_artifact(
             "macro_recomposition_packet",
@@ -351,12 +453,15 @@ def run_bounded_macro_recomposition(
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "counts": {
-            "model_calls": 0,
+            "model_calls": len(model_results),
             "macro_recomposition_artifacts": len(artifacts),
             "required_macro_recomposition_artifacts": len(
                 BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES
             ),
         },
+        "model": configured_model if client_name == "openai" else None,
+        "model_call_ids": [result.model_call.id for result in model_results],
+        "model_calls": [result.model_call_to_dict() for result in model_results],
         "gate_report": payloads["macro_recomposition_gate_report"],
         "finalization_eligible": False,
         "not_finalization_eligible": True,
@@ -368,6 +473,7 @@ def run_bounded_macro_recomposition(
         payload=payload,
         artifacts=tuple(artifacts.values()),
         gate_record=gate_record,
+        model_results=tuple(model_results),
     )
 
 
@@ -457,6 +563,214 @@ def _load_macro_subject(
     )
 
 
+def _run_live_macro_recomposition_model(
+    *,
+    config: AbiConfig,
+    subject: MacroSubject,
+    packet_dir: Path,
+    model_client: ModelClient,
+    work_order: dict[str, object],
+    protected_effects: dict[str, object],
+    parent_ids: list[str],
+) -> ModelDriverResult:
+    driver = ModelDriver(config=config, client=model_client)
+    target = _target_window(subject.base_text)
+    request = WorkerRequest(
+        run_id=subject.run_id,
+        worker_role=WorkerRole.BOUNDED_MACRO_RECOMPOSER,
+        prompt_contract_id=BOUNDED_MACRO_RECOMPOSITION_PROMPT_CONTRACT_ID,
+        schema=BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+        input_text=_prompt_for_live_macro_recomposition(
+            subject=subject,
+            target=target,
+            work_order=work_order,
+            protected_effects=protected_effects,
+        ),
+        input_artifact_ids=list(parent_ids),
+        input_packet_path=str(subject.synthesis_packet_dir),
+        lineage_id=BOUNDED_MACRO_RECOMPOSITION_LINEAGE_ID,
+        parent_ids=list(parent_ids),
+        fixture_only=False,
+        output_dir=str(packet_dir),
+        register_parsed_artifact=False,
+        parsed_payload_validator=lambda payload: _validate_live_macro_payload(
+            subject=subject,
+            payload=payload,
+        ),
+    )
+    return driver.run(request)
+
+
+def _prompt_for_live_macro_recomposition(
+    *,
+    subject: MacroSubject,
+    target: RecomposedText,
+    work_order: dict[str, object],
+    protected_effects: dict[str, object],
+) -> str:
+    return _canonical_json(
+        {
+            "task": (
+                "Propose one bounded replacement section for the controller-owned "
+                "middle/return movement."
+            ),
+            "controller_owns": [
+                "source_synthesis_packet",
+                "base_candidate_choice",
+                "base_candidate_text",
+                "target_paragraph_indices",
+                "before_section_text",
+                "required_semantic_constraints",
+                "final_text_assembly",
+                "diff_report",
+                "gates",
+                "finalization",
+            ],
+            "model_may_own": [
+                "replacement_section_text",
+                "plan wording",
+                "section plan wording",
+                "rationale",
+                "local-law explanation",
+                "uncertainty",
+                "predicted reader-state effect",
+                "semantic constraint mapping claims",
+            ],
+            "model_must_not_own": [
+                "full artifact text",
+                "opening or prefix rewrite",
+                "base candidate choice",
+                "source packet IDs",
+                "gate pass/fail",
+                "strongest-rival defeated status",
+                "finality",
+                "phase-shift claim",
+            ],
+            "source_synthesis_packet_id": subject.synthesis_packet_id,
+            "base_candidate_packet_id": subject.base_packet_id,
+            "base_candidate_text_sha256": subject.base_text_sha256,
+            "target_movement": TARGET_MOVEMENT,
+            "target_paragraph_start_index": target.target_start_index,
+            "target_paragraph_end_index": target.target_end_index,
+            "unchanged_prefix_text": "\n\n".join(target.unchanged_prefix),
+            "before_section_text": "\n\n".join(target.original_target),
+            "required_semantic_constraints": _semantic_constraints(),
+            "work_order": work_order,
+            "protected_effects_and_forbidden_changes": protected_effects,
+            "macro_recomposition_brief": subject.synthesis_payloads[
+                "macro_recomposition_brief"
+            ],
+            "rival_pressure_summary": subject.synthesis_payloads[
+                "rival_pressure_summary"
+            ],
+            "output_rule": (
+                "Return replacement_section_text only for the target movement, "
+                "not the full artifact. Include exactly one constraint_mapping "
+                "item for every required constraint_id."
+            ),
+        }
+    )
+
+
+def _write_model_tagged_artifact(
+    *,
+    connection: sqlite3.Connection,
+    subject: MacroSubject,
+    packet_dir: Path,
+    result: ModelDriverResult,
+    artifact_type: str,
+    payload: dict[str, object],
+    parent_ids: list[str],
+) -> ArtifactRecord:
+    writer = PacketWriter(
+        connection=connection,
+        run_id=subject.run_id,
+        packet_dir=packet_dir,
+        lineage_id=BOUNDED_MACRO_RECOMPOSITION_LINEAGE_ID,
+        created_by=f"model_driver:{result.model_call.provider}:{result.model_call.model}",
+        fixture_only=False,
+        model_call_id=result.model_call.id,
+    )
+    return writer.write_artifact(artifact_type, payload, parent_ids=parent_ids)
+
+
+def _link_model_result(
+    *,
+    connection: sqlite3.Connection,
+    result: ModelDriverResult,
+    parsed_artifact: ArtifactRecord,
+) -> ModelDriverResult:
+    linked_call = link_model_call_parsed_artifact(
+        connection,
+        model_call_id=result.model_call.id,
+        parsed_output_artifact_id=parsed_artifact.id,
+    )
+    return ModelDriverResult(
+        model_call=linked_call,
+        parsed_payload=result.parsed_payload,
+        parsed_artifact=parsed_artifact,
+    )
+
+
+def _failure_result(
+    *,
+    subject: MacroSubject,
+    packet_dir: Path,
+    client_name: str,
+    model: str | None,
+    artifacts: dict[str, ArtifactRecord],
+    model_results: list[ModelDriverResult],
+    message: str,
+) -> BoundedMacroRecompositionResult:
+    payload = {
+        "accepted": False,
+        "refused": True,
+        "client": client_name,
+        "model": model,
+        "run_id": subject.run_id,
+        "packet_id": packet_dir.name,
+        "packet_dir": str(packet_dir),
+        "synthesis_packet": str(subject.synthesis_packet_dir),
+        "artifact_ids": {
+            artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
+        },
+        "artifact_paths": {
+            artifact_type: artifact.path for artifact_type, artifact in artifacts.items()
+        },
+        "counts": {
+            "model_calls": len(model_results),
+            "macro_recomposition_artifacts": len(artifacts),
+            "required_macro_recomposition_artifacts": len(
+                BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES
+            ),
+        },
+        "model_call_ids": [result.model_call.id for result in model_results],
+        "model_calls": [result.model_call_to_dict() for result in model_results],
+        "message": message,
+        "finalization_eligible": False,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "not_human_validated": True,
+    }
+    return BoundedMacroRecompositionResult(
+        exit_code=1,
+        payload=payload,
+        artifacts=tuple(artifacts.values()),
+        model_results=tuple(model_results),
+    )
+
+
+def _model_failure_message(result: ModelDriverResult) -> str:
+    detail = result.model_call.error_message or result.model_call.status
+    return f"Bounded macro recomposition refused during live recomposition: {detail}"
+
+
+def _default_openai_client_factory(model: str) -> ModelClient:
+    from abi.openai_adapter import OpenAIResponsesClient
+
+    return OpenAIResponsesClient(model=model)
+
+
 def _build_subject_manifest(
     subject: MacroSubject,
     packet_dir: Path,
@@ -515,32 +829,41 @@ def _build_brief_ref(subject: MacroSubject) -> dict[str, object]:
 
 
 def _build_work_order(subject: MacroSubject) -> dict[str, object]:
+    target = _target_window(subject.base_text)
     return {
         "work_order_id": f"macro_recomposition_{subject.synthesis_packet_id}",
         "source_synthesis_packet_id": subject.synthesis_packet_id,
         "base_candidate_packet_id": subject.base_packet_id,
         "base_candidate_text_sha256": subject.base_text_sha256,
         "target_movement": TARGET_MOVEMENT,
+        "target_paragraph_start_index": target.target_start_index,
+        "target_paragraph_end_index": target.target_end_index,
+        "before_section_text": "\n\n".join(target.original_target),
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "allowed_touch": "multiple adjacent spans in the middle/return movement",
+        "required_semantic_constraints": _semantic_constraints(),
         "controller_owns": [
             "source packet references",
             "base candidate text",
             "macro target spans",
+            "before section text",
             "protected effects",
             "forbidden changes",
+            "required semantic constraints",
             "text assembly",
             "diff report",
             "gate report",
             "finalization status",
         ],
         "model_may_own_if_live_later": [
-            "recomposition plan",
+            "recomposition plan wording",
             "replacement section text",
             "rationale",
             "local-law explanation",
             "uncertainty",
+            "predicted reader-state effect",
+            "semantic constraint mapping",
         ],
         "model_must_not_own": [
             "finalization fields",
@@ -592,7 +915,42 @@ def _build_protected_effects(subject: MacroSubject) -> dict[str, object]:
     }
 
 
-def _build_recomposition_plan(subject: MacroSubject) -> dict[str, object]:
+def _build_recomposition_plan(
+    subject: MacroSubject,
+    *,
+    model_payload: dict[str, object] | None = None,
+    model_call_id: str | None = None,
+) -> dict[str, object]:
+    if model_payload is not None:
+        plan = model_payload["macro_recomposition_plan"]
+        if not isinstance(plan, dict):
+            raise TypeError("macro_recomposition_plan must be an object")
+        return {
+            "plan_id": f"bounded_macro_plan_{sha256_text(subject.base_text)[:12]}",
+            "target_movement": TARGET_MOVEMENT,
+            "bounded_macro_recomposition": True,
+            "full_rewrite": False,
+            "plan_summary": plan["plan_summary"],
+            "plan_steps": list(plan["plan_steps"]),
+            "model_owned_fields": [
+                "plan_summary",
+                "plan_steps",
+                "rationale",
+                "local_law_explanation",
+                "uncertainty",
+                "predicted_reader_state_effect",
+            ],
+            "source_model_call_id": model_call_id,
+            "rationale": model_payload["rationale"],
+            "local_law_explanation": model_payload["local_law_explanation"],
+            "uncertainty": model_payload["uncertainty"],
+            "predicted_reader_state_effect": model_payload[
+                "predicted_reader_state_effect"
+            ],
+            "not_finalization_eligible": True,
+            "no_phase_shift_claim": True,
+            "worker": "macro_recomposition_plan_v1_model_driver",
+        }
     return {
         "plan_id": f"bounded_macro_plan_{sha256_text(subject.base_text)[:12]}",
         "target_movement": TARGET_MOVEMENT,
@@ -629,8 +987,11 @@ def _build_recomposition_plan(subject: MacroSubject) -> dict[str, object]:
 def _build_patch_or_section_plan(
     subject: MacroSubject,
     recomposed: RecomposedText,
+    *,
+    model_payload: dict[str, object] | None = None,
+    model_call_id: str | None = None,
 ) -> dict[str, object]:
-    return {
+    payload = {
         "section_plan_id": f"macro_section_{sha256_text(''.join(recomposed.replacement))[:12]}",
         "target_movement": TARGET_MOVEMENT,
         "target_paragraph_start_index": recomposed.target_start_index,
@@ -648,11 +1009,30 @@ def _build_patch_or_section_plan(
         ),
         "worker": "macro_patch_or_section_plan_v1_fake_controller",
     }
+    if model_payload is not None:
+        section_plan = model_payload["section_plan"]
+        if not isinstance(section_plan, dict):
+            raise TypeError("section_plan must be an object")
+        payload.update(
+            {
+                "model_section_plan": section_plan,
+                "constraint_mapping": list(model_payload["constraint_mapping"]),
+                "semantic_constraint_claims_model_reported": True,
+                "semantic_constraint_satisfaction_not_proven": True,
+                "requires_internal_reader_or_ablation_validation": True,
+                "source_model_call_id": model_call_id,
+                "rationale": section_plan["rationale"],
+                "worker": "macro_patch_or_section_plan_v1_model_driver",
+            }
+        )
+    return payload
 
 
 def _build_recomposed_candidate(
     subject: MacroSubject,
     recomposed: RecomposedText,
+    *,
+    model_call_id: str | None = None,
 ) -> dict[str, object]:
     return {
         "candidate_id": f"bounded_macro_recomposition_{sha256_text(recomposed.text)[:12]}",
@@ -666,15 +1046,20 @@ def _build_recomposed_candidate(
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "assembled_by_controller": True,
+        "source_model_call_id": model_call_id,
         "candidate_only": True,
         "non_final": True,
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
-        "fixture_only": subject.fixture_only,
+        "fixture_only": subject.fixture_only if model_call_id is None else False,
         "requires_executed_ablation_before_improvement_claim": True,
-        "worker": "macro_recomposed_candidate_text_v1_fake_controller",
+        "worker": (
+            "macro_recomposed_candidate_text_v1_controller_assembled_from_model"
+            if model_call_id
+            else "macro_recomposed_candidate_text_v1_fake_controller"
+        ),
     }
 
 
@@ -748,7 +1133,11 @@ def _build_gate_report(
     protected_effects: dict[str, object],
     diff_report: dict[str, object],
     rival_check: dict[str, object],
+    model_payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    constraint_mapping_complete = bool(model_payload) and _constraint_mapping_complete(
+        model_payload
+    )
     gate_results = [
         _gate_result("macro_recomposition_packet_exists", True),
         _gate_result("synthesis_packet_consumed", True),
@@ -766,6 +1155,18 @@ def _build_gate_report(
         _gate_result(
             "rival_pressure_preserved",
             bool(rival_check["strongest_rival_pressure_preserved"]),
+        ),
+        _gate_result(
+            "constraint_mapping_complete",
+            constraint_mapping_complete if model_payload is not None else True,
+        ),
+        _gate_result(
+            "semantic_constraint_satisfaction_proven",
+            False,
+            [
+                "semantic constraint satisfaction is model-reported only and "
+                "requires internal reader or executed ablation validation"
+            ],
         ),
         _gate_result(
             "macro_recomposition_executed_ablation_completed",
@@ -801,6 +1202,12 @@ def _build_gate_report(
         "no_phase_shift_claim": True,
         "phase_shift_claim": False,
         "strongest_rival_pressure_preserved": True,
+        "constraint_mapping_complete": (
+            constraint_mapping_complete if model_payload is not None else True
+        ),
+        "semantic_constraint_claims_model_reported": model_payload is not None,
+        "semantic_constraint_satisfaction_not_proven": True,
+        "requires_internal_reader_or_ablation_validation": True,
         "requires_executed_ablation_before_improvement_claim": True,
         "operator_approval_absent": True,
         "profile": "autonomous_creative_candidate",
@@ -809,6 +1216,10 @@ def _build_gate_report(
         "missing_gates": ["internal_operator_approval"],
         "final_gates_marked_passed": [],
         "unresolved_blockers": [
+            (
+                "semantic constraint satisfaction is not proven by structural "
+                "model-output validation"
+            ),
             "macro recomposition has not yet been tested by executed ablation",
             "strongest-rival pressure remains blocking",
             "internal operator approval is absent",
@@ -828,6 +1239,8 @@ def _build_packet_summary(
     payloads: dict[str, dict[str, object]],
     artifacts: dict[str, ArtifactRecord],
     client_name: str,
+    model: str | None,
+    model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
     return {
         "run_id": subject.run_id,
@@ -845,12 +1258,15 @@ def _build_packet_summary(
         },
         "artifact_types": list(artifacts),
         "counts": {
-            "model_calls": 0,
+            "model_calls": len(model_results),
             "macro_recomposition_artifacts": len(artifacts),
             "required_macro_recomposition_artifacts": len(
                 BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES
             ),
         },
+        "model": model,
+        "model_call_ids": [result.model_call.id for result in model_results],
+        "model_calls": [result.model_call_to_dict() for result in model_results],
         "candidate_artifact_id": artifacts["macro_recomposed_candidate_text"].id,
         "diff_report_artifact_id": artifacts["macro_recomposition_diff_report"].id,
         "rival_pressure_check_artifact_id": artifacts["macro_rival_pressure_check"].id,
@@ -867,10 +1283,7 @@ def _build_packet_summary(
 
 
 def _fake_recompose_text(base_text: str) -> RecomposedText:
-    paragraphs = _paragraphs(base_text)
-    start = _target_start(paragraphs)
-    unchanged_prefix = paragraphs[:start]
-    original_target = paragraphs[start:]
+    target = _target_window(base_text)
     replacement = [
         (
             "The deeper pattern does not arrive as a sentence placed over the room. "
@@ -913,15 +1326,206 @@ def _fake_recompose_text(base_text: str) -> RecomposedText:
             "unchanged, but with enough of its own pressure inside it to be read."
         ),
     ]
-    text = "\n\n".join([*unchanged_prefix, *replacement])
+    text = "\n\n".join([*target.unchanged_prefix, *replacement])
     return RecomposedText(
         text=text,
-        target_start_index=start,
-        target_end_index=len(paragraphs),
-        unchanged_prefix=unchanged_prefix,
-        original_target=original_target,
+        target_start_index=target.target_start_index,
+        target_end_index=target.target_end_index,
+        unchanged_prefix=target.unchanged_prefix,
+        original_target=target.original_target,
         replacement=replacement,
     )
+
+
+def _model_recompose_text(
+    subject: MacroSubject,
+    model_payload: dict[str, object],
+) -> RecomposedText:
+    target = _target_window(subject.base_text)
+    replacement_text = str(model_payload["replacement_section_text"]).strip()
+    replacement = _paragraphs(replacement_text)
+    text = "\n\n".join([*target.unchanged_prefix, *replacement])
+    return RecomposedText(
+        text=text,
+        target_start_index=target.target_start_index,
+        target_end_index=target.target_end_index,
+        unchanged_prefix=target.unchanged_prefix,
+        original_target=target.original_target,
+        replacement=replacement,
+    )
+
+
+def _target_window(base_text: str) -> RecomposedText:
+    paragraphs = _paragraphs(base_text)
+    start = _target_start(paragraphs)
+    return RecomposedText(
+        text=base_text,
+        target_start_index=start,
+        target_end_index=len(paragraphs),
+        unchanged_prefix=paragraphs[:start],
+        original_target=paragraphs[start:],
+        replacement=[],
+    )
+
+
+def _semantic_constraints() -> list[dict[str, str]]:
+    descriptions = {
+        "proof_from_inside_line": (
+            "Proof must arise endogenously from the line or object sequence it "
+            "integrates, not from a summary pasted over it."
+        ),
+        "cosmic_silence_isolation_condition": (
+            "Cosmic silence/no outside answer must function as the formal "
+            "isolation condition of proof, not as mere mood."
+        ),
+        "return_without_regression": (
+            "The return must bring the opening back changed, not regress to an "
+            "untouched starting point."
+        ),
+        "no_outside_answer_or_rescue": (
+            "The replacement must not solve the pressure by importing rescue, "
+            "answer, proof, or permission from outside the local field."
+        ),
+        "strongest_rival_pressure": (
+            "The replacement must preserve strongest-rival pressure rather than "
+            "claiming victory over it."
+        ),
+        "table_dust_spoon_saucer_local_field": (
+            "The domestic table/dust/spoon/saucer field must remain the local "
+            "causal field."
+        ),
+        "record_law_proof_answer_compression_preserved": (
+            "The useful record/law/proof/answer compression from the selected "
+            "base must be preserved or explicitly transformed by the macro brief."
+        ),
+    }
+    return [
+        {"constraint_id": constraint_id, "description": descriptions[constraint_id]}
+        for constraint_id in REQUIRED_SEMANTIC_CONSTRAINT_IDS
+    ]
+
+
+def _validate_live_macro_payload(
+    *,
+    subject: MacroSubject,
+    payload: dict[str, object],
+) -> None:
+    _validate_section_plan(payload)
+    _validate_constraint_mapping(payload)
+    _validate_forbidden_live_macro_claims(payload)
+    _validate_replacement_section(subject, payload)
+
+
+def _validate_section_plan(payload: dict[str, object]) -> None:
+    section_plan = payload.get("section_plan")
+    if not isinstance(section_plan, dict):
+        raise ModelValidationError("section_plan must be an object")
+    if section_plan.get("target_movement") != TARGET_MOVEMENT:
+        raise ModelValidationError("section_plan.target_movement must match controller target")
+    if section_plan.get("bounded") is not True:
+        raise ModelValidationError("section_plan.bounded must be true")
+    if section_plan.get("full_rewrite") is not False:
+        raise ModelValidationError("section_plan.full_rewrite must be false")
+
+
+def _validate_constraint_mapping(payload: dict[str, object]) -> None:
+    mapping = payload.get("constraint_mapping")
+    if not isinstance(mapping, list):
+        raise ModelValidationError("constraint_mapping must be a list")
+    seen: set[str] = set()
+    for item in mapping:
+        if not isinstance(item, dict):
+            raise ModelValidationError("constraint_mapping entries must be objects")
+        constraint_id = str(item.get("constraint_id") or "")
+        if constraint_id in seen:
+            raise ModelValidationError(f"duplicate constraint_id: {constraint_id}")
+        seen.add(constraint_id)
+        excerpt = str(item.get("supporting_replacement_excerpt") or "").strip()
+        if not excerpt:
+            raise ModelValidationError(
+                f"constraint_mapping[{constraint_id}] supporting excerpt is empty"
+            )
+    expected = set(REQUIRED_SEMANTIC_CONSTRAINT_IDS)
+    if seen != expected:
+        missing = sorted(expected - seen)
+        extra = sorted(seen - expected)
+        raise ModelValidationError(
+            "constraint_mapping must contain exactly the required constraint IDs; "
+            f"missing={missing}, extra={extra}"
+        )
+
+
+def _constraint_mapping_complete(payload: dict[str, object]) -> bool:
+    try:
+        _validate_constraint_mapping(payload)
+    except ModelValidationError:
+        return False
+    return True
+
+
+def _validate_replacement_section(
+    subject: MacroSubject,
+    payload: dict[str, object],
+) -> None:
+    replacement_text = str(payload.get("replacement_section_text") or "").strip()
+    if not replacement_text:
+        raise ModelValidationError("replacement_section_text must not be empty")
+    target = _target_window(subject.base_text)
+    replacement_paragraphs = _paragraphs(replacement_text)
+    if not replacement_paragraphs:
+        raise ModelValidationError("replacement_section_text must contain paragraphs")
+    prefix_text = "\n\n".join(target.unchanged_prefix).strip()
+    opening = target.unchanged_prefix[0] if target.unchanged_prefix else ""
+    replacement_lower = replacement_text.lower()
+    if opening and replacement_text.startswith(opening[:80]):
+        raise ModelValidationError(
+            "replacement_section_text rewrites or repeats the controller-owned prefix"
+        )
+    if prefix_text and prefix_text[:160].lower() in replacement_lower:
+        raise ModelValidationError(
+            "replacement_section_text includes controller-owned prefix text"
+        )
+    if replacement_text.strip() == subject.base_text.strip():
+        raise ModelValidationError("replacement_section_text must not be the full base text")
+
+
+def _validate_forbidden_live_macro_claims(payload: dict[str, object]) -> None:
+    text = _flatten_strings(payload).lower()
+    forbidden_markers = {
+        "final artifact": "final artifact claim",
+        "finalization eligible": "finalization claim",
+        "finalisation eligible": "finalization claim",
+        "human validated": "human-validation claim",
+        "phase-shift": "phase-shift claim",
+        "phase shift": "phase-shift claim",
+        "paper-ready": "paper-readiness claim",
+        "outside rescue arrives": "outside-rescue violation",
+        "rescued from outside": "outside-rescue violation",
+        "answer arrives from outside": "outside-answer violation",
+        "answer is supplied from outside": "outside-answer violation",
+        "proof comes from outside": "proof-from-outside violation",
+        "proof arrives from outside": "proof-from-outside violation",
+        "proof is supplied from outside": "proof-from-outside violation",
+        "discard the table": "local-field discard violation",
+        "remove the table": "local-field discard violation",
+        "without the table": "local-field discard violation",
+        "discard the dust": "local-field discard violation",
+        "discard the spoon": "local-field discard violation",
+        "discard the saucer": "local-field discard violation",
+    }
+    for marker, reason in forbidden_markers.items():
+        if marker in text:
+            raise ModelValidationError(f"{reason}: {marker}")
+
+
+def _flatten_strings(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "\n".join(_flatten_strings(child) for child in value.values())
+    if isinstance(value, list):
+        return "\n".join(_flatten_strings(child) for child in value)
+    return ""
 
 
 def _load_base_candidate_payload(packet_dir: Path, packet_kind: str) -> dict[str, Any]:
@@ -1043,3 +1647,7 @@ def _refusal(
         "no_phase_shift_claim": True,
     }
     return BoundedMacroRecompositionResult(exit_code=1, payload=payload)
+
+
+def _canonical_json(payload: object) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"

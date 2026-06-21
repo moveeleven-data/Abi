@@ -13,6 +13,7 @@ from abi.model_schemas import (
     ABI_EAR_GERM_ANALYSIS_SCHEMA,
     ABLATION_INFORMED_REVISION_MODEL_SCHEMAS,
     AUTONOMOUS_REVISION_MODEL_SCHEMAS,
+    BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     LIVE_MODEL_WORKER_SCHEMAS,
     PILOT_ABI_CANDIDATE_SCHEMA,
     PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
@@ -101,6 +102,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_autonomous_revision_prompt
     if schema in ABLATION_INFORMED_REVISION_MODEL_SCHEMAS:
         return _build_ablation_informed_revision_prompt
+    if schema == BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
+        return _build_bounded_macro_recomposition_prompt
     return _build_live_packet_prompt
 
 
@@ -203,6 +206,23 @@ def _build_ablation_informed_revision_prompt(input_text: str) -> str:
         "revised text assembly, diff reports, gates, finalization, evidence counts, "
         "and rival-defeated truth. Do not claim finality, validation, phase shift, "
         "human evidence, or paper readiness. Prompt packet:\n"
+        f"{input_text}"
+    )
+
+
+def _build_bounded_macro_recomposition_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema for one bounded macro recomposition "
+        "worker. The controller owns base selection, before text, target boundaries, "
+        "full text assembly, diffing, gates, finalization, and strongest-rival truth. "
+        "You may return only a bounded replacement_section_text for the supplied "
+        "target movement plus plan/rationale/uncertainty fields and one semantic "
+        "constraint mapping item for each controller-owned constraint_id. Do not "
+        "return the full artifact. Do not rewrite the opening/prefix. Do not claim "
+        "finality, validation, phase shift, human evidence, or rival defeat. Preserve "
+        "the domestic table/dust/spoon/saucer field, proof arising from inside the "
+        "line, cosmic silence/no outside answer as formal isolation, return without "
+        "regression, and strongest-rival pressure. Prompt packet:\n"
         f"{input_text}"
     )
 

@@ -27,6 +27,7 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_OLD_NEW_RIVAL_COMPARISON_SCHEMA,
     AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS,
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
+    BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     ModelValidationError,
     json_schema_for_worker_schema,
     parse_and_validate_structured_output,
@@ -48,6 +49,7 @@ from abi.modules.autonomous_evidence_synthesis import (
 )
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES,
+    REQUIRED_SEMANTIC_CONSTRAINT_IDS,
     run_bounded_macro_recomposition,
 )
 from abi.modules.ablation_informed_revision import (
@@ -926,6 +928,113 @@ def ablation_informed_stub_factory(clients, *, mode: str = "valid"):
         return client
 
     return _factory
+
+
+class StubBoundedMacroRecompositionClient:
+    provider = "openai"
+
+    def __init__(self, *, model: str, mode: str = "valid") -> None:
+        self.model = model
+        self.mode = mode
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        if request.schema != BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
+            raise AssertionError(f"unexpected schema: {request.schema.name}")
+        payload = live_macro_payload()
+        if self.mode == "invalid_json":
+            return "{not valid json"
+        if self.mode == "missing_constraint":
+            payload["constraint_mapping"] = payload["constraint_mapping"][:-1]
+        elif self.mode == "duplicate_constraint":
+            payload["constraint_mapping"] = [
+                *payload["constraint_mapping"],
+                dict(payload["constraint_mapping"][0]),
+            ]
+        elif self.mode == "empty_excerpt":
+            payload["constraint_mapping"][0]["supporting_replacement_excerpt"] = ""
+        elif self.mode == "outside_rescue":
+            payload["replacement_section_text"] += "\n\nThen outside rescue arrives."
+        elif self.mode == "proof_from_outside":
+            payload["replacement_section_text"] += "\n\nHere proof comes from outside."
+        elif self.mode == "final_claim":
+            payload["rationale"] = "This achieves phase-shift success."
+        elif self.mode == "prefix_rewrite":
+            prompt = json.loads(request.input_text)
+            payload["replacement_section_text"] = (
+                f"{prompt['unchanged_prefix_text']}\n\n{payload['replacement_section_text']}"
+            )
+        return dump_json(payload)
+
+
+def bounded_macro_stub_factory(clients, *, mode: str = "valid"):
+    def _factory(model: str) -> StubBoundedMacroRecompositionClient:
+        client = StubBoundedMacroRecompositionClient(model=model, mode=mode)
+        clients.append(client)
+        return client
+
+    return _factory
+
+
+def live_macro_payload() -> dict[str, object]:
+    replacement = (
+        "The room does not need a new witness. The ring on the wood has dried "
+        "lighter at one rim, and the spoon has turned a small brightness toward "
+        "the saucer as if the night had moved through metal before it moved "
+        "through thought. Dust gathers under the table leg in a shape the shoe "
+        "made and then abandoned. The facts do not explain themselves, but they "
+        "lean into one another until the leaning becomes the pressure.\n\n"
+        "What matters is not that the room has become symbolic. It is that each "
+        "object carries a mark it cannot complete alone. The cup left the ring, "
+        "the ring changed the surface, the dust kept the path, and the path "
+        "points back to a body already gone. A law appears only as this crossing, "
+        "one condition tightening another until proof has no separate platform "
+        "to stand on.\n\n"
+        "The silence above the kitchen does not comfort the line or excuse it. "
+        "It holds the conditions shut, so the pressure has to remain local. Help "
+        "does not enter as a second story. The table, dust, spoon, saucer, ring, "
+        "and weak light must bear the change they made together.\n\n"
+        "So the return is not a reset. Morning comes back to the same table, but "
+        "the table has kept the record of relation inside itself. The objects are "
+        "ordinary and still altered by one another. The room has not been solved; "
+        "it has become readable as the place where its own pressure learned to "
+        "hold."
+    )
+    return {
+        "replacement_section_text": replacement,
+        "macro_recomposition_plan": {
+            "plan_summary": "Replace the target movement with object-event pressure.",
+            "plan_steps": [
+                "keep the selected opening unchanged",
+                "move explanation into domestic object crossings",
+                "return through record-bearing relation rather than summary",
+            ],
+        },
+        "section_plan": {
+            "target_movement": "middle_and_return_movement",
+            "bounded": True,
+            "full_rewrite": False,
+            "rationale": "The target movement can be recomposed as one bounded section.",
+        },
+        "constraint_mapping": [
+            {
+                "constraint_id": constraint_id,
+                "satisfied_claim": True,
+                "supporting_replacement_excerpt": "the objects keep relation inside the room",
+                "rationale": "The claim is carried by object relation, not a label.",
+                "uncertainty": "medium",
+                "risk_note": "needs later reader or ablation validation",
+            }
+            for constraint_id in REQUIRED_SEMANTIC_CONSTRAINT_IDS
+        ],
+        "rationale": "The bounded section shifts pressure into scene and relation.",
+        "local_law_explanation": "Each local mark becomes legible through another mark.",
+        "uncertainty": "medium",
+        "predicted_reader_state_effect": (
+            "The reader should feel the return as changed relation rather than explanation."
+        ),
+    }
 
 
 class InvalidOldNewRivalProvenanceClient(FakeAutonomousRevisionModelClient):
@@ -4448,3 +4557,203 @@ def test_bounded_macro_recomposition_openai_guards_refuse_before_model_calls(
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
     assert len(after_calls) == len(before_calls)
+
+
+def test_bounded_macro_recomposition_schema_is_strict_for_constraint_mapping():
+    schema = json_schema_for_worker_schema(BOUNDED_MACRO_RECOMPOSITION_SCHEMA)
+
+    assert_strict_object_schema(schema, path=BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name)
+    item_schema = schema["properties"]["constraint_mapping"]["items"]
+    assert item_schema["additionalProperties"] is False
+    assert "supporting_replacement_excerpt" in item_schema["required"]
+
+
+def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed_packet(
+    tmp_path,
+    monkeypatch,
+):
+    config, _failed_ablation, _pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        config,
+        client_name="openai",
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+    assert len(clients) == 1
+    assert len(clients[0].requests) == 1
+    request_prompt = json.loads(clients[0].requests[0].input_text)
+    assert request_prompt["target_movement"] == "middle_and_return_movement"
+    assert request_prompt["required_semantic_constraints"]
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    plan_envelope = json.loads(
+        (packet_dir / "macro_recomposition_plan.json").read_text(encoding="utf-8")
+    )
+    section_envelope = json.loads(
+        (packet_dir / "macro_patch_or_section_plan.json").read_text(encoding="utf-8")
+    )
+    model_call_id = result.payload["model_call_ids"][0]
+    assert plan_envelope["model_call_id"] == model_call_id
+    assert section_envelope["model_call_id"] == model_call_id
+    assert plan_envelope["fixture_only"] is False
+    assert section_envelope["fixture_only"] is False
+
+    section = section_envelope["payload"]
+    assert section["semantic_constraint_claims_model_reported"] is True
+    assert section["semantic_constraint_satisfaction_not_proven"] is True
+    assert {item["constraint_id"] for item in section["constraint_mapping"]} == set(
+        REQUIRED_SEMANTIC_CONSTRAINT_IDS
+    )
+    assert "the objects keep relation inside the room" in {
+        item["supporting_replacement_excerpt"] for item in section["constraint_mapping"]
+    }
+    assert "proof_from_inside_line" not in section["replacement_section_text"]
+
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["source_model_call_id"] == model_call_id
+    assert candidate["assembled_by_controller"] is True
+    assert candidate["full_rewrite"] is False
+    assert candidate["text"].startswith(request_prompt["unchanged_prefix_text"].split("\n\n")[0])
+    assert "The room does not need a new witness." in candidate["text"]
+    assert "The room does not need a new witness." not in request_prompt[
+        "unchanged_prefix_text"
+    ]
+
+    gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
+    assert gate["passed"] is False
+    assert gate["semantic_constraint_claims_model_reported"] is True
+    assert gate["semantic_constraint_satisfaction_not_proven"] is True
+    assert "semantic_constraint_satisfaction_proven" in gate["failed_gates"]
+
+    with connect(config.db_path) as connection:
+        model_calls = list_model_calls(connection, run_id=run_id)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    macro_calls = [
+        call
+        for call in model_calls
+        if call.schema_name == BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name
+    ]
+    assert len(macro_calls) == 1
+    assert macro_calls[0].status == MODEL_CALL_SUCCESS
+    assert macro_calls[0].provider == "openai"
+    assert macro_calls[0].model == "stub-live-macro"
+    assert macro_calls[0].parsed_output_artifact_id == result.payload["artifact_ids"][
+        "macro_patch_or_section_plan"
+    ]
+    assert final_report.refused is True
+
+
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
+        ("missing_constraint", "constraint_mapping must contain exactly"),
+        ("duplicate_constraint", "duplicate constraint_id"),
+        ("empty_excerpt", "supporting excerpt is empty"),
+    ],
+)
+def test_bounded_macro_recomposition_live_constraint_mapping_failures(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected,
+):
+    config, _failed_ablation, _pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        config,
+        client_name="openai",
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(clients, mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "macro_recomposition_plan" not in result.payload["artifact_ids"]
+    with connect(config.db_path) as connection:
+        model_calls = list_model_calls(connection, run_id=run_id)
+    macro_call = [
+        call
+        for call in model_calls
+        if call.schema_name == BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name
+    ][0]
+    assert macro_call.status == MODEL_CALL_VALIDATION_FAILED
+    assert macro_call.parsed_output_artifact_id is None
+
+
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
+        ("outside_rescue", "outside-rescue violation"),
+        ("proof_from_outside", "proof-from-outside violation"),
+        ("final_claim", "phase-shift claim"),
+        ("prefix_rewrite", "controller-owned prefix"),
+    ],
+)
+def test_bounded_macro_recomposition_live_rejects_forbidden_model_outputs(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected,
+):
+    config, _failed_ablation, _pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        config,
+        client_name="openai",
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    with connect(config.db_path) as connection:
+        model_calls = [
+            call
+            for call in list_model_calls(connection, run_id=run_id)
+            if call.schema_name == BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name
+        ]
+    assert model_calls[0].status == MODEL_CALL_VALIDATION_FAILED
+    assert model_calls[0].parsed_output_artifact_id is None
