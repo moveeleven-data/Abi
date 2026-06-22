@@ -358,6 +358,64 @@ def build_fake_bounded_macro_recomposition_packet(tmp_path: Path):
     return config, macro.payload
 
 
+def build_fake_macro_evidence_synthesis_chain(tmp_path: Path):
+    config, failed_ablation, pivot_revision, _revision_payload = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    macro = run_bounded_macro_recomposition(
+        config,
+        client_name="fake",
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+    assert macro.exit_code == 0
+    ablation = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=macro.payload["packet_dir"],
+    )
+    assert ablation.exit_code == 0
+
+    def _make_macro_causal_report_useful(payload):
+        payload["selected_repair_causal_status"] = "useful_but_insufficient"
+        payload["selected_repair_appears_causal"] = True
+        payload["reduced_overexplanation"] = True
+        payload["damaged_local_embodiment"] = False
+        payload["strongest_rival_pressure_remains_blocking"] = True
+        payload["recommended_next_action"] = (
+            "preserve useful local repair and run a separate revision cycle "
+            "for remaining blockers"
+        )
+
+    def _make_macro_comparison_useful(payload):
+        payload["repair_has_causal_support"] = True
+        payload["revert_performs_same_or_better"] = False
+        payload["reverting_patch_weakens_candidate"] = True
+        payload["record_compression_improves_discovery"] = False
+        payload["strongest_rival_still_beats_candidate"] = True
+
+    def _make_macro_packet_useful(payload):
+        payload["selected_repair_causal_status"] = "useful_but_insufficient"
+        payload["comparison_internal_consistency"] = True
+
+    rewrite_payload(
+        ablation.payload["artifact_paths"]["ablation_causal_effect_report"],
+        _make_macro_causal_report_useful,
+    )
+    rewrite_payload(
+        ablation.payload["artifact_paths"]["ablation_old_new_rival_comparison"],
+        _make_macro_comparison_useful,
+    )
+    rewrite_payload(
+        ablation.payload["artifact_paths"]["executed_ablation_packet"],
+        _make_macro_packet_useful,
+    )
+    return config, failed_ablation, pivot_revision, macro.payload, ablation.payload
+
+
 def revision_stub_factory(
     clients: list[FakeAutonomousRevisionModelClient],
     *,
@@ -4767,6 +4825,150 @@ def test_autonomous_evidence_synthesis_creates_fail_closed_decision_packet(tmp_p
     packet = read_payload(packet_dir / "autonomous_evidence_synthesis_packet.json")
     assert packet["counts"]["model_calls"] == 0
     assert packet["strategic_decision"] == decision["recommendation"]
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_consumes_macro_timeline_v2(tmp_path):
+    config, failed_ablation, pivot_revision, macro_payload, macro_ablation = (
+        build_fake_macro_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+        run_id = get_latest_run(connection).id
+
+    result = run_autonomous_evidence_synthesis(config, run_id=run_id)
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(packet_dir / "autonomous_evidence_synthesis_subject_manifest.json")
+    assert manifest["normalized_evidence_timeline_version"] == "v2"
+    assert "bounded_macro_recomposition" in manifest["source_packet_kinds"]
+    assert "executed_ablation" in manifest["proof_packet_kinds"]
+    assert macro_payload["packet_id"] in manifest["bounded_macro_packets_consumed"]
+    assert macro_ablation["packet_id"] in manifest["bounded_macro_ablation_packets_consumed"]
+    macro_ablation_summary = [
+        source
+        for source in manifest["source_packets"]
+        if source["packet_id"] == macro_ablation["packet_id"]
+    ][0]
+    assert macro_ablation_summary["subject_kind"] == REVISION_PACKET_KIND_BOUNDED_MACRO
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    macro_rows = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "bounded_macro_recomposition"
+    ]
+    assert macro_rows
+    assert macro_rows[-1]["packet_id"] == macro_payload["packet_id"]
+    assert macro_rows[-1]["macro_target_coverage_passed"] is True
+    assert macro_rows[-1]["macro_materiality_passed"] is True
+    proof_rows = [
+        row
+        for row in history["repair_events"]
+        if row.get("subject_kind") == REVISION_PACKET_KIND_BOUNDED_MACRO
+    ]
+    assert proof_rows
+    assert proof_rows[-1]["source_revision_packet_id"] == macro_payload["packet_id"]
+    assert proof_rows[-1]["causal_status"] == "useful_but_insufficient"
+    assert proof_rows[-1]["repair_has_causal_support"] is True
+    assert proof_rows[-1]["reverting_patch_weakens_candidate"] is True
+    assert proof_rows[-1]["reduced_overexplanation"] is True
+    assert proof_rows[-1]["damaged_local_embodiment"] is False
+    assert proof_rows[-1]["strongest_rival_still_beats_candidate"] is True
+    assert proof_rows[-1]["flattened_summary_macro_variant_cautionary"] is True
+    assert proof_rows[-1]["non_evidence_control_variant_ids"]
+
+    causal = read_payload(packet_dir / "causal_status_summary.json")
+    findings = {finding["finding_id"]: finding for finding in causal["findings"]}
+    assert findings["bounded_macro_recomposition_packet_0008"][
+        "status"
+    ] == "useful_but_insufficient"
+    assert findings["flattened_summary_macro_variant_cautionary"][
+        "status"
+    ] == "rejected_or_cautionary"
+    assert causal["macro_useful_but_insufficient_detected"] is True
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_kind"] == "bounded_macro_recomposition"
+    assert selected["packet_id"] == macro_payload["packet_id"]
+    assert selected["packet_dir"] == macro_payload["packet_dir"]
+    assert selected["selected_candidate_is_final"] is False
+    assert selected["strongest_rival_still_blocks"] is True
+    assert selected["packet_dir"] != pivot_revision["packet_dir"]
+    assert selected["packet_dir"] != failed_ablation["packet_dir"]
+
+    failed = read_payload(packet_dir / "failed_or_rejected_repairs.json")
+    rejected_handles = {
+        repair["selected_handle"] for repair in failed["failed_or_rejected_repairs"]
+    }
+    assert "flattened_summary_macro_variant" in rejected_handles
+    assert "no_op_mismatch_or_planned_only_control" in rejected_handles
+
+    exhausted = read_payload(packet_dir / "exhausted_handle_report.json")
+    handles = {handle["handle"]: handle for handle in exhausted["handles"]}
+    assert handles["local_patch_regime"]["status"] == "plateaued"
+    assert handles["bounded_macro_recomposition"][
+        "status"
+    ] == "active_useful_but_insufficient"
+    assert handles["middle_and_return_movement"]["status"] == "active_macro_target"
+    assert handles["proof_no_outside_answer_region"][
+        "status"
+    ] == "possible_next_sub_handle"
+
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    blocker_ids = {blocker["blocker_id"] for blocker in blockers["residual_blockers"]}
+    assert "proof_no_outside_answer_refinement" in blocker_ids
+    assert "reader_state_opening_return_transformation_unproven" in blocker_ids
+    assert blockers["macro_recomposition_recommended"] is False
+    assert blockers["internal_reader_state_evaluation_recommended"] is True
+    assert blockers["generic_more_compression_recommended"] is False
+
+    laws = read_payload(packet_dir / "local_law_case_notes.json")
+    law_ids = {law["law_id"] for law in laws["case_notes"]}
+    assert "macro_recomposition_can_reduce_overexplanation_without_embodiment_loss" in law_ids
+    assert "macro_revert_weakens_candidate" in law_ids
+    assert "macro_improvement_is_not_rival_victory" in law_ids
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["recommendation"] == (
+        "preserve_macro_candidate_and_run_internal_reader_state_evaluation"
+    )
+    assert decision["do_not_continue_local_patching_immediately"] is True
+    assert decision["do_not_immediately_run_second_macro_recomposition"] is True
+    assert decision["internal_reader_state_evaluation_recommended"] is True
+
+    brief = read_payload(packet_dir / "macro_recomposition_brief.json")
+    assert brief["brief_type"] == "macro_evidence_review_next_step_brief_not_artifact"
+    assert brief["run_internal_reader_state_evaluation_before_further_recomposition"] is True
+    assert brief["not_candidate_artifact"] is True
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    assert gate_results["macro_evidence_consumed"]["passed"] is True
+    assert gate_results["macro_candidate_selected_if_supported"]["passed"] is True
+    assert gate_results["macro_ablation_causal_status_recorded"]["passed"] is True
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    packet = read_payload(packet_dir / "autonomous_evidence_synthesis_packet.json")
+    assert packet["best_current_candidate"]["packet_id"] == macro_payload["packet_id"]
+    assert packet["counts"]["model_calls"] == 0
+    assert macro_ablation["packet_id"] in packet["bounded_macro_ablation_packets_consumed"]
 
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
