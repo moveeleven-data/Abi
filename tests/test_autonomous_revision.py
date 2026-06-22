@@ -51,6 +51,8 @@ from abi.modules.autonomous_evidence_synthesis import (
 from abi.modules.bounded_macro_recomposition import (
     ACTIVE_TRANSFORMATION_TARGET_IDS,
     BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES,
+    READER_STATE_MACRO_2_ACTIVE_TARGET_IDS,
+    READER_STATE_MACRO_2_TARGET_SCOPE,
     REQUIRED_SEMANTIC_CONSTRAINT_IDS,
     run_bounded_macro_recomposition,
 )
@@ -415,6 +417,43 @@ def build_fake_macro_evidence_synthesis_chain(tmp_path: Path):
         _make_macro_packet_useful,
     )
     return config, failed_ablation, pivot_revision, macro.payload, ablation.payload
+
+
+def build_reader_state_macro_synthesis_chain(tmp_path: Path):
+    config, failed_ablation, pivot_revision, macro_payload, macro_ablation = (
+        build_fake_macro_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    macro_synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert macro_synthesis.exit_code == 0
+
+    def _reader_state_client_factory(model: str) -> FakeInternalReaderLabModelClient:
+        return FakeInternalReaderLabModelClient(provider="openai", model=model)
+
+    reader_state = run_internal_reader_state_evaluation(
+        config,
+        client_name="openai",
+        synthesis_packet=macro_synthesis.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-reader-state-model",
+        client_factory=_reader_state_client_factory,
+    )
+    assert reader_state.exit_code == 0
+    assert reader_state.payload["accepted"] is True
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    return {
+        "config": config,
+        "run_id": run_id,
+        "failed_ablation": failed_ablation,
+        "pivot_revision": pivot_revision,
+        "macro_payload": macro_payload,
+        "macro_ablation": macro_ablation,
+        "reader_state": reader_state.payload,
+        "synthesis": synthesis.payload,
+    }
 
 
 def revision_stub_factory(
@@ -1061,7 +1100,10 @@ class StubBoundedMacroRecompositionClient:
         if request.schema != BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
             raise AssertionError(f"unexpected schema: {request.schema.name}")
         prompt = json.loads(request.input_text)
-        payload = live_macro_payload(prompt.get("active_transformation_targets", []))
+        payload = live_macro_payload(
+            prompt.get("active_transformation_targets", []),
+            target_movement=str(prompt.get("target_movement") or "middle_and_return_movement"),
+        )
         if self.mode == "invalid_json":
             return "{not valid json"
         if self.mode == "missing_constraint":
@@ -1082,6 +1124,10 @@ class StubBoundedMacroRecompositionClient:
         elif self.mode == "prefix_rewrite":
             payload["replacement_section_text"] = (
                 f"{prompt['unchanged_prefix_text']}\n\n{payload['replacement_section_text']}"
+            )
+        elif self.mode == "full_rewrite":
+            payload["replacement_section_text"] = (
+                f"{prompt['unchanged_prefix_text']}\n\n{prompt['before_section_text']}"
             )
         elif self.mode == "missing_active_target":
             payload["active_target_mapping"] = payload["active_target_mapping"][:-1]
@@ -1126,6 +1172,8 @@ def bounded_macro_stub_factory(clients, *, mode: str = "valid"):
 
 def live_macro_payload(
     active_targets: list[dict[str, object]] | None = None,
+    *,
+    target_movement: str = "middle_and_return_movement",
 ) -> dict[str, object]:
     replacement = (
         "The room does not need a new witness. The ring on the wood has dried "
@@ -1161,7 +1209,7 @@ def live_macro_payload(
             ],
         },
         "section_plan": {
-            "target_movement": "middle_and_return_movement",
+            "target_movement": target_movement,
             "bounded": True,
             "full_rewrite": False,
             "rationale": "The target movement can be recomposed as one bounded section.",
@@ -5278,6 +5326,94 @@ def test_bounded_macro_recomposition_refuses_invalid_synthesis_packet_missing_br
     assert result.payload["counts"]["model_calls"] == 0
 
 
+def test_bounded_macro_recomposition_refuses_invalid_synthesis_packet_missing_best(
+    tmp_path,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    invalid_packet = tmp_path / "invalid_synthesis_packet_missing_best"
+    shutil.copytree(Path(str(chain["synthesis"]["packet_dir"])), invalid_packet)
+    (invalid_packet / "best_current_candidate_selection.json").unlink()
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="fake",
+        synthesis_packet=invalid_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "best_current_candidate_selection.json" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="fake",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["target_movement"] == READER_STATE_MACRO_2_TARGET_SCOPE
+    assert result.payload["target_scope"] == READER_STATE_MACRO_2_TARGET_SCOPE
+    assert result.payload["base_candidate_packet_id"] == chain["macro_payload"]["packet_id"]
+    assert result.payload["base_candidate_packet_id"] != chain["pivot_revision"]["packet_id"]
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(packet_dir / "macro_recomposition_subject_manifest.json")
+    assert manifest["base_candidate_packet_kind"] == "bounded_macro_recomposition"
+    assert manifest["base_candidate_packet_id"] == chain["macro_payload"]["packet_id"]
+    assert manifest["reader_state_informed_brief"] is True
+    assert manifest["reader_state_evidence_packet_id"] == chain["reader_state"]["packet_id"]
+
+    work_order = read_payload(packet_dir / "macro_recomposition_work_order.json")
+    assert work_order["target_scope"] == READER_STATE_MACRO_2_TARGET_SCOPE
+    assert work_order["selected_reader_state_evidence_packet_id"] == chain["reader_state"][
+        "packet_id"
+    ]
+    assert work_order["base_candidate_packet_id"] == chain["macro_payload"]["packet_id"]
+    assert work_order["selected_candidate_text"]
+    assert {
+        target["target_id"] for target in work_order["active_transformation_targets"]
+    } == set(READER_STATE_MACRO_2_ACTIVE_TARGET_IDS)
+
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["base_candidate_packet_id"] == chain["macro_payload"]["packet_id"]
+    assert candidate["target_movement"] == READER_STATE_MACRO_2_TARGET_SCOPE
+    assert "The table is still there" in candidate["text"]
+    assert candidate["finalization_eligible"] is False
+    assert candidate["no_phase_shift_claim"] is True
+
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    coverage = diff["target_coverage_report"]
+    assert coverage["macro_target_coverage_passed"] is True
+    assert coverage["macro_materiality_passed"] is True
+    assert coverage["active_targets_missing"] == []
+    assert set(coverage["active_transformation_targets"]) == set(
+        READER_STATE_MACRO_2_ACTIVE_TARGET_IDS
+    )
+
+    gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
+    assert gate["passed"] is False
+    assert gate["reader_state_informed_brief_consumed"] is True
+    assert gate["macro_target_coverage_passed"] is True
+    assert gate["macro_materiality_passed"] is True
+    assert "macro_recomposition_executed_ablation_completed" in gate["failed_gates"]
+    assert "internal_operator_approval" in gate["failed_gates"]
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
 def test_bounded_macro_recomposition_openai_guards_refuse_before_model_calls(
     tmp_path,
     monkeypatch,
@@ -5436,6 +5572,53 @@ def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed
     assert macro_calls[0].parsed_output_artifact_id == result.payload["artifact_ids"][
         "macro_patch_or_section_plan"
     ]
+    assert final_report.refused is True
+
+
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
+        ("copied_first_two", "proof_no_outside_answer_refinement"),
+        ("full_rewrite", "controller-owned prefix"),
+    ],
+)
+def test_bounded_macro_recomposition_reader_state_macro_2_live_validation_failures(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
+    with connect(chain["config"].db_path) as connection:
+        model_calls = [
+            call
+            for call in list_model_calls(connection, run_id=chain["run_id"])
+            if call.schema_name == BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name
+        ]
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert model_calls[-1].status == MODEL_CALL_VALIDATION_FAILED
+    assert model_calls[-1].parsed_output_artifact_id is None
     assert final_report.refused is True
 
 

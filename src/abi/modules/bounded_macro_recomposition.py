@@ -66,7 +66,13 @@ REQUIRED_SYNTHESIS_ARTIFACT_FILES = (
     "strategic_decision_report.json",
 )
 
+OPTIONAL_SYNTHESIS_ARTIFACT_FILES = (
+    "reader_state_evidence_adjudication.json",
+    "reader_state_tension_report.json",
+)
+
 TARGET_MOVEMENT = "middle_and_return_movement"
+READER_STATE_MACRO_2_TARGET_SCOPE = "reader_state_informed_macro_2"
 
 REQUIRED_SEMANTIC_CONSTRAINT_IDS = (
     "proof_from_inside_line",
@@ -91,6 +97,29 @@ MATERIAL_REQUIRED_ACTIVE_TARGET_IDS = (
     "proof_line_redundancy_cleanup",
     "no_outside_answer_pressure_preservation",
     "final_return_closure_embodiment",
+)
+
+READER_STATE_MACRO_2_ACTIVE_TARGET_IDS = (
+    "proof_no_outside_answer_refinement",
+    "final_return_echo_reread_strength",
+    "thesis_visible_proof_language_reduction",
+    "opening_return_transformation_strengthening",
+    "preserve_reader_state_partial_gain",
+)
+
+READER_STATE_MACRO_2_MATERIAL_REQUIRED_TARGET_IDS = (
+    "proof_no_outside_answer_refinement",
+    "final_return_echo_reread_strength",
+    "thesis_visible_proof_language_reduction",
+    "opening_return_transformation_strengthening",
+)
+
+SUPPORTED_TARGET_SCOPES = (
+    TARGET_MOVEMENT,
+    READER_STATE_MACRO_2_TARGET_SCOPE,
+    "proof_no_outside_answer_refinement",
+    "final_return_echo_reread_strength",
+    "reader_state_opening_return_transformation",
 )
 
 
@@ -120,6 +149,27 @@ class MacroSubject:
     base_word_count: int
     source_parent_ids: tuple[str, ...]
     fixture_only: bool
+    normalized_brief: NormalizedMacroRecompositionBrief
+
+
+@dataclass(frozen=True)
+class NormalizedMacroRecompositionBrief:
+    brief_type: str
+    target_scope: str
+    target_movement: str
+    target_submovement: tuple[str, ...]
+    active_transformation_target_ids: tuple[str, ...]
+    material_required_target_ids: tuple[str, ...]
+    protected_effects: tuple[str, ...]
+    forbidden_changes: tuple[str, ...]
+    success_criteria: tuple[str, ...]
+    source_reader_state_evidence: dict[str, Any]
+    source_reader_state_tensions: dict[str, Any]
+    reader_state_evidence_packet_id: str | None
+    selected_best_candidate_packet_id: str
+    selected_best_candidate_text_sha256: str | None
+    requires_future_ablation_or_reader_eval: bool
+    reader_state_informed: bool
 
 
 @dataclass(frozen=True)
@@ -324,7 +374,7 @@ def run_bounded_macro_recomposition(
             )
 
         recomposed = (
-            _fake_recompose_text(subject.base_text)
+            _fake_recompose_text(subject)
             if model_payload is None
             else _model_recompose_text(subject, model_payload)
         )
@@ -465,7 +515,9 @@ def run_bounded_macro_recomposition(
         "base_candidate_packet_id": subject.base_packet_id,
         "base_candidate_packet_dir": str(subject.base_packet_dir),
         "base_candidate_text_sha256": subject.base_text_sha256,
-        "target_movement": TARGET_MOVEMENT,
+        "target_movement": subject.normalized_brief.target_movement,
+        "target_scope": subject.normalized_brief.target_scope,
+        "target_submovement": list(subject.normalized_brief.target_submovement),
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "counts": {
@@ -514,18 +566,19 @@ def _load_macro_subject(
         file_name.removesuffix(".json"): _read_payload(resolved_packet_dir / file_name)
         for file_name in REQUIRED_SYNTHESIS_ARTIFACT_FILES
     }
+    for file_name in OPTIONAL_SYNTHESIS_ARTIFACT_FILES:
+        path = resolved_packet_dir / file_name
+        if path.exists():
+            payloads[file_name.removesuffix(".json")] = _read_payload(path)
     packet = payloads["autonomous_evidence_synthesis_packet"]
     best = payloads["best_current_candidate_selection"]
-    macro_brief = payloads["macro_recomposition_brief"]
     selected = best.get("selected_best_candidate")
     if not isinstance(selected, dict):
         raise ValueError("best_current_candidate_selection lacks selected_best_candidate")
-    if macro_brief.get("target_region_or_movement") != TARGET_MOVEMENT:
-        raise ValueError(
-            "macro recomposition brief does not target middle_and_return_movement"
-        )
-    if macro_brief.get("allowed_scale") != "bounded_macro_recomposition_not_full_rewrite":
-        raise ValueError("macro recomposition brief does not require bounded scale")
+    normalized_brief = _normalize_macro_recomposition_brief(
+        payloads=payloads,
+        selected=selected,
+    )
     if selected.get("packet_id") == "packet_0022":
         raise ValueError("synthesis-selected base is the failed pivot packet_0022")
     run_id = str(packet.get("run_id") or "")
@@ -576,6 +629,109 @@ def _load_macro_subject(
             for payload in payloads.values()
             if isinstance(payload, dict)
         ),
+        normalized_brief=normalized_brief,
+    )
+
+
+def _normalize_macro_recomposition_brief(
+    *,
+    payloads: dict[str, dict[str, Any]],
+    selected: dict[str, Any],
+) -> NormalizedMacroRecompositionBrief:
+    brief = payloads["macro_recomposition_brief"]
+    adjudication = payloads.get("reader_state_evidence_adjudication", {})
+    tensions = payloads.get("reader_state_tension_report", {})
+    brief_type = str(brief.get("brief_type") or "macro_recomposition_brief_v1")
+    selected_packet_id = str(selected.get("packet_id") or "")
+    if not selected_packet_id:
+        raise ValueError("selected best candidate has no packet_id")
+    selected_hash = selected.get("selected_best_candidate_text_sha256") or selected.get(
+        "text_sha256"
+    )
+    selected_hash_text = str(selected_hash) if selected_hash else None
+    if "reader_state_informed_macro_2" in brief_type or brief.get(
+        "reader_state_evidence_consumed"
+    ):
+        expected_packet_id = str(
+            brief.get("current_best_base_candidate_packet_id")
+            or _dict_value(brief.get("current_best_base_candidate"), "packet_id")
+            or selected_packet_id
+        )
+        if expected_packet_id != selected_packet_id:
+            raise ValueError(
+                "macro recomposition brief base does not match selected best candidate"
+            )
+        submovement = _string_tuple(brief.get("target_movement_or_submovement"))
+        if not submovement:
+            submovement = (
+                "proof/no-outside-answer refinement",
+                "final return echo / reread strength",
+                "reduce thesis-visible proof language",
+                "increase first-read object-event vividness without weakening macro structure",
+            )
+        return NormalizedMacroRecompositionBrief(
+            brief_type=brief_type,
+            target_scope=READER_STATE_MACRO_2_TARGET_SCOPE,
+            target_movement=READER_STATE_MACRO_2_TARGET_SCOPE,
+            target_submovement=submovement,
+            active_transformation_target_ids=READER_STATE_MACRO_2_ACTIVE_TARGET_IDS,
+            material_required_target_ids=READER_STATE_MACRO_2_MATERIAL_REQUIRED_TARGET_IDS,
+            protected_effects=tuple(
+                _unique(
+                    [
+                        *list(brief.get("protected_effects", [])),
+                        *list(brief.get("protected_effects_to_preserve", [])),
+                        "packet_0008 partial reread gain",
+                        "table/dust/spoon/saucer/ring causal field",
+                        "reduced overexplanation achieved by macro recomposition",
+                        "strongest-rival pressure as active constraint",
+                    ]
+                )
+            ),
+            forbidden_changes=tuple(_string_tuple(brief.get("forbidden_changes"))),
+            success_criteria=tuple(
+                _string_tuple(brief.get("success_criteria"))
+                or _string_tuple(brief.get("ablation_and_evaluation_plan_after_recomposition"))
+            ),
+            source_reader_state_evidence=dict(adjudication),
+            source_reader_state_tensions=dict(tensions),
+            reader_state_evidence_packet_id=str(
+                brief.get("reader_state_evidence_packet_id")
+                or adjudication.get("packet_id")
+                or ""
+            )
+            or None,
+            selected_best_candidate_packet_id=selected_packet_id,
+            selected_best_candidate_text_sha256=selected_hash_text,
+            requires_future_ablation_or_reader_eval=True,
+            reader_state_informed=True,
+        )
+
+    target = str(brief.get("target_region_or_movement") or "")
+    if target != TARGET_MOVEMENT:
+        raise ValueError(
+            "macro recomposition brief has unsupported target; expected a supported "
+            f"target scope such as {TARGET_MOVEMENT} or {READER_STATE_MACRO_2_TARGET_SCOPE}"
+        )
+    if brief.get("allowed_scale") != "bounded_macro_recomposition_not_full_rewrite":
+        raise ValueError("macro recomposition brief does not require bounded scale")
+    return NormalizedMacroRecompositionBrief(
+        brief_type=brief_type,
+        target_scope=TARGET_MOVEMENT,
+        target_movement=TARGET_MOVEMENT,
+        target_submovement=(TARGET_MOVEMENT,),
+        active_transformation_target_ids=ACTIVE_TRANSFORMATION_TARGET_IDS,
+        material_required_target_ids=MATERIAL_REQUIRED_ACTIVE_TARGET_IDS,
+        protected_effects=tuple(_string_tuple(brief.get("protected_effects_to_preserve"))),
+        forbidden_changes=tuple(_string_tuple(brief.get("forbidden_changes"))),
+        success_criteria=tuple(_string_tuple(brief.get("success_criteria"))),
+        source_reader_state_evidence=dict(adjudication),
+        source_reader_state_tensions=dict(tensions),
+        reader_state_evidence_packet_id=None,
+        selected_best_candidate_packet_id=selected_packet_id,
+        selected_best_candidate_text_sha256=selected_hash_text,
+        requires_future_ablation_or_reader_eval=True,
+        reader_state_informed=False,
     )
 
 
@@ -668,13 +824,18 @@ def _prompt_for_live_macro_recomposition(
             "source_synthesis_packet_id": subject.synthesis_packet_id,
             "base_candidate_packet_id": subject.base_packet_id,
             "base_candidate_text_sha256": subject.base_text_sha256,
-            "target_movement": TARGET_MOVEMENT,
+            "target_movement": subject.normalized_brief.target_movement,
+            "target_scope": subject.normalized_brief.target_scope,
+            "target_submovement": list(subject.normalized_brief.target_submovement),
             "target_paragraph_start_index": target.target_start_index,
             "target_paragraph_end_index": target.target_end_index,
             "unchanged_prefix_text": "\n\n".join(target.unchanged_prefix),
             "before_section_text": "\n\n".join(target.original_target),
             "protected_semantic_constraints": _semantic_constraints(),
-            "active_transformation_targets": _active_transformation_targets(target),
+            "active_transformation_targets": _active_transformation_targets(
+                subject,
+                target,
+            ),
             "work_order": work_order,
             "protected_effects_and_forbidden_changes": protected_effects,
             "macro_recomposition_brief": subject.synthesis_payloads[
@@ -821,7 +982,11 @@ def _build_subject_manifest(
         "failed_pivot_packet_used_as_base": subject.base_packet_id == "packet_0022",
         "original_candidate_used_as_base": False,
         "packet_0030_used_as_base": subject.base_packet_id == "packet_0030",
-        "target_movement": TARGET_MOVEMENT,
+        "target_movement": subject.normalized_brief.target_movement,
+        "target_scope": subject.normalized_brief.target_scope,
+        "target_submovement": list(subject.normalized_brief.target_submovement),
+        "reader_state_informed_brief": subject.normalized_brief.reader_state_informed,
+        "reader_state_evidence_packet_id": subject.normalized_brief.reader_state_evidence_packet_id,
         "finalization_eligible": False,
         "not_finalization_eligible": True,
         "not_human_validated": True,
@@ -838,11 +1003,26 @@ def _build_brief_ref(subject: MacroSubject) -> dict[str, object]:
             "macro_recomposition_brief"
         ),
         "brief_type": brief.get("brief_type"),
+        "normalized_target_scope": subject.normalized_brief.target_scope,
+        "normalized_target_movement": subject.normalized_brief.target_movement,
+        "normalized_target_submovement": list(
+            subject.normalized_brief.target_submovement
+        ),
+        "reader_state_informed_brief": subject.normalized_brief.reader_state_informed,
+        "reader_state_evidence_packet_id": subject.normalized_brief.reader_state_evidence_packet_id,
         "target_region_or_movement": brief.get("target_region_or_movement"),
+        "target_movement_or_submovement": list(
+            brief.get("target_movement_or_submovement", [])
+            if isinstance(brief.get("target_movement_or_submovement"), list)
+            else []
+        ),
         "allowed_scale": brief.get("allowed_scale"),
-        "protected_effects_to_preserve": list(brief.get("protected_effects_to_preserve", [])),
-        "forbidden_changes": list(brief.get("forbidden_changes", [])),
-        "success_criteria": list(brief.get("success_criteria", [])),
+        "protected_effects_to_preserve": list(subject.normalized_brief.protected_effects),
+        "forbidden_changes": list(subject.normalized_brief.forbidden_changes),
+        "success_criteria": list(subject.normalized_brief.success_criteria),
+        "active_transformation_target_ids": list(
+            subject.normalized_brief.active_transformation_target_ids
+        ),
         "ablation_plan_after_recomposition": list(
             brief.get("ablation_plan_after_recomposition", [])
         ),
@@ -859,15 +1039,25 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
         "source_synthesis_packet_id": subject.synthesis_packet_id,
         "base_candidate_packet_id": subject.base_packet_id,
         "base_candidate_text_sha256": subject.base_text_sha256,
-        "target_movement": TARGET_MOVEMENT,
+        "selected_reader_state_evidence_packet_id": (
+            subject.normalized_brief.reader_state_evidence_packet_id
+        ),
+        "target_movement": subject.normalized_brief.target_movement,
+        "target_scope": subject.normalized_brief.target_scope,
+        "target_submovement": list(subject.normalized_brief.target_submovement),
         "target_paragraph_start_index": target.target_start_index,
         "target_paragraph_end_index": target.target_end_index,
         "before_section_text": "\n\n".join(target.original_target),
+        "selected_candidate_text": subject.base_text,
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "allowed_touch": "multiple adjacent spans in the middle/return movement",
         "protected_semantic_constraints": _semantic_constraints(),
-        "active_transformation_targets": _active_transformation_targets(target),
+        "active_transformation_targets": _active_transformation_targets(subject, target),
+        "protected_effects": list(subject.normalized_brief.protected_effects),
+        "forbidden_changes": list(subject.normalized_brief.forbidden_changes),
+        "reader_state_evidence_adjudication": subject.normalized_brief.source_reader_state_evidence,
+        "reader_state_tension_report": subject.normalized_brief.source_reader_state_tensions,
         "controller_owns": [
             "source packet references",
             "base candidate text",
@@ -908,10 +1098,9 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
 
 
 def _build_protected_effects(subject: MacroSubject) -> dict[str, object]:
-    brief = subject.synthesis_payloads["macro_recomposition_brief"]
     protected = _unique(
         [
-            *list(brief.get("protected_effects_to_preserve", [])),
+            *list(subject.normalized_brief.protected_effects),
             "table/dust/spoon/saucer local field",
             "proof from inside the line it integrates",
             "cosmic silence as isolation condition of proof",
@@ -922,7 +1111,7 @@ def _build_protected_effects(subject: MacroSubject) -> dict[str, object]:
     )
     forbidden = _unique(
         [
-            *list(brief.get("forbidden_changes", [])),
+            *list(subject.normalized_brief.forbidden_changes),
             "rewriting the whole artifact",
             "thinning the opening scene",
             "repeating local record/law/proof/answer compression as the main move",
@@ -936,6 +1125,8 @@ def _build_protected_effects(subject: MacroSubject) -> dict[str, object]:
         "protected_effects": protected,
         "forbidden_changes": forbidden,
         "best_current_candidate_repair_preserved": True,
+        "reader_state_informed_brief": subject.normalized_brief.reader_state_informed,
+        "reader_state_evidence_packet_id": subject.normalized_brief.reader_state_evidence_packet_id,
         "strongest_rival_pressure_must_remain_active": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
@@ -955,7 +1146,9 @@ def _build_recomposition_plan(
             raise TypeError("macro_recomposition_plan must be an object")
         return {
             "plan_id": f"bounded_macro_plan_{sha256_text(subject.base_text)[:12]}",
-            "target_movement": TARGET_MOVEMENT,
+            "target_movement": subject.normalized_brief.target_movement,
+            "target_scope": subject.normalized_brief.target_scope,
+            "target_submovement": list(subject.normalized_brief.target_submovement),
             "bounded_macro_recomposition": True,
             "full_rewrite": False,
             "plan_summary": plan["plan_summary"],
@@ -981,35 +1174,78 @@ def _build_recomposition_plan(
         }
     return {
         "plan_id": f"bounded_macro_plan_{sha256_text(subject.base_text)[:12]}",
-        "target_movement": TARGET_MOVEMENT,
+        "target_movement": subject.normalized_brief.target_movement,
+        "target_scope": subject.normalized_brief.target_scope,
+        "target_submovement": list(subject.normalized_brief.target_submovement),
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
-        "plan_steps": [
-            {
-                "step_id": "macro_step_001",
-                "action": "preserve opening scene and current useful compression",
-                "rationale": "The synthesis selected the packet_0014 candidate as the current best base.",
-            },
-            {
-                "step_id": "macro_step_002",
-                "action": "replace the middle proof ladder with object/event sequence",
-                "rationale": "The failed pivot showed pressure must be embodied rather than named.",
-            },
-            {
-                "step_id": "macro_step_003",
-                "action": "recompose return as record-bearing change, not explanatory closure",
-                "rationale": "The return must carry contradiction internally.",
-            },
-            {
-                "step_id": "macro_step_004",
-                "action": "leave strongest-rival pressure unresolved and test later by executed ablation",
-                "rationale": "No internal packet has closed rival pressure.",
-            },
-        ],
+        "plan_steps": _fake_plan_steps(subject),
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
         "worker": "macro_recomposition_plan_v1_fake_controller",
     }
+
+
+def _fake_plan_steps(subject: MacroSubject) -> list[dict[str, object]]:
+    if subject.normalized_brief.reader_state_informed:
+        return [
+            {
+                "step_id": "macro_step_001",
+                "action": "preserve the synthesis-selected macro candidate as base",
+                "rationale": (
+                    f"The synthesis selected {subject.base_packet_id}; the controller "
+                    "must not fall back to an earlier local-patch candidate."
+                ),
+            },
+            {
+                "step_id": "macro_step_002",
+                "action": "refine proof/no-outside-answer carry through local objects",
+                "rationale": (
+                    "Reader-state evidence says proof/no-answer logic remains partial "
+                    "or thesis-visible."
+                ),
+            },
+            {
+                "step_id": "macro_step_003",
+                "action": "strengthen the final return echo without weakening the opening",
+                "rationale": (
+                    "The opening became more necessary on reread, but the ending still "
+                    "does not fully transform the opening."
+                ),
+            },
+            {
+                "step_id": "macro_step_004",
+                "action": "preserve strongest-rival pressure for later testing",
+                "rationale": (
+                    "The strongest rival still blocks first-read vividness and lived "
+                    "object-event pressure."
+                ),
+            },
+        ]
+    return [
+        {
+            "step_id": "macro_step_001",
+            "action": "preserve opening scene and current useful compression",
+            "rationale": (
+                "The synthesis selected the current best candidate as the base."
+            ),
+        },
+        {
+            "step_id": "macro_step_002",
+            "action": "replace the middle proof ladder with object/event sequence",
+            "rationale": "The failed pivot showed pressure must be embodied rather than named.",
+        },
+        {
+            "step_id": "macro_step_003",
+            "action": "recompose return as record-bearing change, not explanatory closure",
+            "rationale": "The return must carry contradiction internally.",
+        },
+        {
+            "step_id": "macro_step_004",
+            "action": "leave strongest-rival pressure unresolved and test later by executed ablation",
+            "rationale": "No internal packet has closed rival pressure.",
+        },
+    ]
 
 
 def _build_patch_or_section_plan(
@@ -1020,13 +1256,16 @@ def _build_patch_or_section_plan(
     model_call_id: str | None = None,
 ) -> dict[str, object]:
     coverage_report = _build_target_coverage_report(
+        subject,
         recomposed,
         recomposed.replacement,
         model_payload=model_payload,
     )
     payload = {
         "section_plan_id": f"macro_section_{sha256_text(''.join(recomposed.replacement))[:12]}",
-        "target_movement": TARGET_MOVEMENT,
+        "target_movement": subject.normalized_brief.target_movement,
+        "target_scope": subject.normalized_brief.target_scope,
+        "target_submovement": list(subject.normalized_brief.target_submovement),
         "target_paragraph_start_index": recomposed.target_start_index,
         "target_paragraph_end_index": recomposed.target_end_index,
         "unchanged_prefix_paragraph_count": len(recomposed.unchanged_prefix),
@@ -1080,7 +1319,9 @@ def _build_recomposed_candidate(
         "base_candidate_packet_id": subject.base_packet_id,
         "base_candidate_text_sha256": subject.base_text_sha256,
         "source_synthesis_packet_id": subject.synthesis_packet_id,
-        "target_movement": TARGET_MOVEMENT,
+        "target_movement": subject.normalized_brief.target_movement,
+        "target_scope": subject.normalized_brief.target_scope,
+        "target_submovement": list(subject.normalized_brief.target_submovement),
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "assembled_by_controller": True,
@@ -1109,6 +1350,7 @@ def _build_diff_report(
     model_payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
     coverage_report = _build_target_coverage_report(
+        subject,
         recomposed,
         recomposed.replacement,
         model_payload=model_payload,
@@ -1119,7 +1361,9 @@ def _build_diff_report(
         "revised_text_sha256": candidate["text_sha256"],
         "base_word_count": subject.base_word_count,
         "revised_word_count": candidate["word_count"],
-        "target_movement": TARGET_MOVEMENT,
+        "target_movement": subject.normalized_brief.target_movement,
+        "target_scope": subject.normalized_brief.target_scope,
+        "target_submovement": list(subject.normalized_brief.target_submovement),
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "opening_scene_preserved": True,
@@ -1130,7 +1374,8 @@ def _build_diff_report(
         "changed_spans": [
             {
                 "changed_span_id": "macro_change_001",
-                "movement": TARGET_MOVEMENT,
+                "movement": subject.normalized_brief.target_movement,
+                "target_scope": subject.normalized_brief.target_scope,
                 "before_text": "\n\n".join(recomposed.original_target),
                 "after_text": "\n\n".join(recomposed.replacement),
                 "operation_type": "bounded_section_recomposition",
@@ -1210,6 +1455,12 @@ def _build_gate_report(
             bool(rival_check["strongest_rival_pressure_preserved"]),
         ),
         _gate_result(
+            "reader_state_informed_brief_consumed",
+            True,
+            [],
+            record=subject.normalized_brief.reader_state_informed,
+        ),
+        _gate_result(
             "constraint_mapping_complete",
             constraint_mapping_complete if model_payload is not None else True,
         ),
@@ -1257,6 +1508,10 @@ def _build_gate_report(
         "no_phase_shift_claim": True,
         "phase_shift_claim": False,
         "strongest_rival_pressure_preserved": True,
+        "reader_state_informed_brief_consumed": (
+            subject.normalized_brief.reader_state_informed
+        ),
+        "target_scope": subject.normalized_brief.target_scope,
         "constraint_mapping_complete": (
             constraint_mapping_complete if model_payload is not None else True
         ),
@@ -1322,7 +1577,10 @@ def _build_packet_summary(
         "base_candidate_packet_id": subject.base_packet_id,
         "base_candidate_packet_dir": str(subject.base_packet_dir),
         "base_candidate_text_sha256": subject.base_text_sha256,
-        "target_movement": TARGET_MOVEMENT,
+        "target_movement": subject.normalized_brief.target_movement,
+        "target_scope": subject.normalized_brief.target_scope,
+        "target_submovement": list(subject.normalized_brief.target_submovement),
+        "reader_state_informed_brief": subject.normalized_brief.reader_state_informed,
         "artifact_ids": {
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
         },
@@ -1355,50 +1613,13 @@ def _build_packet_summary(
     }
 
 
-def _fake_recompose_text(base_text: str) -> RecomposedText:
-    target = _target_window(base_text)
-    replacement = [
-        (
-            "The deeper pattern does not arrive as a sentence placed over the room. "
-            "It starts where the room is already busy: the ring drying lighter at "
-            "one edge, the dust dragged into a narrow fan by a passing shoe, the "
-            "spoon turning a small seam of light toward the cracked saucer. Each "
-            "object keeps its own history, but none of the histories stays sealed. "
-            "The table gathers them without becoming an explanation of them."
-        ),
-        (
-            "Pressure enters through these crossings. The cup leaves the ring, the "
-            "ring changes the wood, the dust records the shoe, and the shoe belongs "
-            "to a body that had already left the kitchen before morning could name "
-            "what happened. Nothing needs to announce a law. The law is the way one "
-            "condition presses into the next until the boundary between them becomes "
-            "visible enough to hurt."
-        ),
-        (
-            "No answer comes from outside that pressure. The silence above the room "
-            "is not a refusal of comfort added for mood; it is the condition that "
-            "keeps the proof honest. If help arrived from beyond the line, the line "
-            "would no longer have to carry what it had made. The table would become "
-            "a prop in someone else's solution. Instead it stays local, and the "
-            "local facts have to bear each other all the way through."
-        ),
-        (
-            "So return cannot mean going back to the untouched table. The table was "
-            "never untouched. The ring, the dust, the spoon, the saucer, the weak "
-            "light, the small engine-hum of the refrigerator: they are not damage "
-            "laid over a purer beginning. They are the beginning finding out what it "
-            "was able to include. The room comes back to itself with the record "
-            "still in it."
-        ),
-        (
-            "In the morning, the table is still there. The dust is still under it. "
-            "The spoon is still on its side. Nothing has been rescued from the room, "
-            "and nothing has escaped into an answer elsewhere. Yet the facts no "
-            "longer sit as separate proofs waiting to be named. They lean into one "
-            "another, and the table holds the leaning: a small world returning, not "
-            "unchanged, but with enough of its own pressure inside it to be read."
-        ),
-    ]
+def _fake_recompose_text(subject: MacroSubject) -> RecomposedText:
+    target = _target_window(subject.base_text)
+    replacement = (
+        _fake_reader_state_macro_2_replacement()
+        if subject.normalized_brief.reader_state_informed
+        else _fake_macro_1_replacement()
+    )
     text = "\n\n".join([*target.unchanged_prefix, *replacement])
     return RecomposedText(
         text=text,
@@ -1478,10 +1699,29 @@ def _semantic_constraints() -> list[dict[str, str]]:
     ]
 
 
-def _active_transformation_targets(target: RecomposedText) -> list[dict[str, object]]:
+def _active_transformation_targets(
+    subject: MacroSubject,
+    target: RecomposedText,
+) -> list[dict[str, object]]:
     paragraph_refs = _target_paragraph_refs(target.original_target)
-    target_ref_by_id = _active_target_ref_map(paragraph_refs)
-    descriptions = {
+    target_ids = subject.normalized_brief.active_transformation_target_ids
+    target_ref_by_id = _active_target_ref_map(paragraph_refs, target_ids)
+    descriptions = _active_target_descriptions()
+    return [
+        {
+            "target_id": target_id,
+            "description": descriptions[target_id],
+            "target_paragraph_ref": target_ref_by_id[target_id],
+            "material_change_required": (
+                target_id in subject.normalized_brief.material_required_target_ids
+            ),
+        }
+        for target_id in target_ids
+    ]
+
+
+def _active_target_descriptions() -> dict[str, str]:
+    return {
         "middle_abstraction_ladder_compression": (
             "Compress the middle abstraction ladder into embodied object/event "
             "pressure rather than repeating explanatory scaffolding."
@@ -1502,16 +1742,27 @@ def _active_transformation_targets(target: RecomposedText) -> list[dict[str, obj
             "Carry pressure through object/event relations without merely naming "
             "pressure more often."
         ),
+        "proof_no_outside_answer_refinement": (
+            "Make proof and no-outside-answer pressure occur through the local "
+            "object sequence rather than through visible thesis language."
+        ),
+        "final_return_echo_reread_strength": (
+            "Strengthen the final return so rereading the opening changes its "
+            "necessity without claiming closure."
+        ),
+        "thesis_visible_proof_language_reduction": (
+            "Reduce proof-language that reads as commentary while preserving "
+            "the proof function."
+        ),
+        "opening_return_transformation_strengthening": (
+            "Make the return echo the opening as altered local relation, not as "
+            "a summary of the architecture."
+        ),
+        "preserve_reader_state_partial_gain": (
+            "Preserve the macro candidate's partial reader-state gain and local "
+            "causal field while addressing remaining blockers."
+        ),
     }
-    return [
-        {
-            "target_id": target_id,
-            "description": descriptions[target_id],
-            "target_paragraph_ref": target_ref_by_id[target_id],
-            "material_change_required": target_id in MATERIAL_REQUIRED_ACTIVE_TARGET_IDS,
-        }
-        for target_id in ACTIVE_TRANSFORMATION_TARGET_IDS
-    ]
 
 
 def _validate_live_macro_payload(
@@ -1519,12 +1770,16 @@ def _validate_live_macro_payload(
     subject: MacroSubject,
     payload: dict[str, object],
 ) -> None:
-    _validate_section_plan(payload)
+    _validate_section_plan(subject, payload)
     _validate_constraint_mapping(payload)
-    _validate_active_target_mapping(payload)
+    _validate_active_target_mapping(
+        payload,
+        subject.normalized_brief.active_transformation_target_ids,
+    )
     _validate_forbidden_live_macro_claims(payload)
     _validate_replacement_section(subject, payload)
     coverage_report = _build_target_coverage_report(
+        subject,
         _target_window(subject.base_text),
         _paragraphs(str(payload["replacement_section_text"])),
         model_payload=payload,
@@ -1533,14 +1788,109 @@ def _validate_live_macro_payload(
         missing = ", ".join(coverage_report["active_targets_missing"])
         raise ModelValidationError(f"macro target coverage failed: {missing}")
     if not coverage_report["macro_materiality_passed"]:
-        raise ModelValidationError("macro materiality failed: target section is insufficiently changed")
+        raise ModelValidationError(
+            "macro materiality failed: target section is insufficiently changed"
+        )
 
 
-def _validate_section_plan(payload: dict[str, object]) -> None:
+def _fake_macro_1_replacement() -> list[str]:
+    return [
+        (
+            "The deeper pattern does not arrive as a sentence placed over the room. "
+            "It starts where the room is already busy: the ring drying lighter at "
+            "one edge, the dust dragged into a narrow fan by a passing shoe, the "
+            "spoon turning a small seam of light toward the cracked saucer. Each "
+            "object keeps its own history, but none of the histories stays sealed. "
+            "The table gathers them without becoming an explanation of them."
+        ),
+        (
+            "Pressure enters through these crossings. The cup leaves the ring, the "
+            "ring changes the wood, the dust records the shoe, and the shoe belongs "
+            "to a body that had already left the kitchen before morning could name "
+            "what happened. Nothing needs to announce a law. The law is the way one "
+            "condition presses into the next until the boundary between them becomes "
+            "visible enough to hurt."
+        ),
+        (
+            "No answer comes from outside that pressure. The silence above the room "
+            "is not a refusal of comfort added for mood; it is the condition that "
+            "keeps the proof honest. If help arrived from beyond the line, the line "
+            "would no longer have to carry what it had made. The table would become "
+            "a prop in someone else's solution. Instead it stays local, and the "
+            "local facts have to bear each other all the way through."
+        ),
+        (
+            "So return cannot mean going back to the untouched table. The table was "
+            "never untouched. The ring, the dust, the spoon, the saucer, the weak "
+            "light, the small engine-hum of the refrigerator: they are not damage "
+            "laid over a purer beginning. They are the beginning finding out what it "
+            "was able to include. The room comes back to itself with the record "
+            "still in it."
+        ),
+        (
+            "In the morning, the table is still there. The dust is still under it. "
+            "The spoon is still on its side. Nothing has been rescued from the room, "
+            "and nothing has escaped into an answer elsewhere. Yet the facts no "
+            "longer sit as separate proofs waiting to be named. They lean into one "
+            "another, and the table holds the leaning: a small world returning, not "
+            "unchanged, but with enough of its own pressure inside it to be read."
+        ),
+    ]
+
+
+def _fake_reader_state_macro_2_replacement() -> list[str]:
+    return [
+        (
+            "The room does not need a theorem added above it. The table keeps the "
+            "ring where the cup had been, and the ring keeps changing as the wood "
+            "dries around its edge. Dust still collects under the leg. The spoon "
+            "still faces the saucer with its small dull glint. These marks do not "
+            "argue; they hold one another close enough that the argument has to "
+            "happen inside them."
+        ),
+        (
+            "Proof begins there, in the way no mark can finish itself. The cup is "
+            "gone, but the ring is not free of it. The shoe is gone, but the dust "
+            "keeps the path. The hand is gone, but the spoon has remembered its "
+            "turn toward the chipped rim. Nothing descends to certify the room. "
+            "Each trace has to become the condition by which another trace can be "
+            "read."
+        ),
+        (
+            "That is why the silence above the room matters without becoming an "
+            "announcement. It seals the kitchen inside its own evidence. No rescue "
+            "arrives to explain the ring. No outside answer gathers the dust into "
+            "meaning. If the line is going to prove anything, it must prove it by "
+            "letting the table, the spoon, the saucer, and the morning light press "
+            "on one another until their relation is the proof."
+        ),
+        (
+            "The return therefore has to touch the first room again. The same table "
+            "stands there, but the table is no longer only the place where objects "
+            "were left. It is the place where absence has taken local shape. The "
+            "ring is a boundary, the dust is a path, the spoon is an angle of use, "
+            "and the saucer is the small rim against which the angle becomes "
+            "visible."
+        ),
+        (
+            "Morning does not solve this. It gives the room back with its evidence "
+            "still inside it. The table is still there; the dust is still under it; "
+            "the spoon still leans beside the saucer. What has changed is the way "
+            "the beginning returns: not as a scene waiting for a lesson, but as the "
+            "local field that already carried the lesson in its marks."
+        ),
+    ]
+
+
+def _validate_section_plan(
+    subject: MacroSubject,
+    payload: dict[str, object],
+) -> None:
     section_plan = payload.get("section_plan")
     if not isinstance(section_plan, dict):
         raise ModelValidationError("section_plan must be an object")
-    if section_plan.get("target_movement") != TARGET_MOVEMENT:
+    target_movement = str(section_plan.get("target_movement") or "")
+    if target_movement != subject.normalized_brief.target_movement:
         raise ModelValidationError("section_plan.target_movement must match controller target")
     if section_plan.get("bounded") is not True:
         raise ModelValidationError("section_plan.bounded must be true")
@@ -1575,7 +1925,10 @@ def _validate_constraint_mapping(payload: dict[str, object]) -> None:
         )
 
 
-def _validate_active_target_mapping(payload: dict[str, object]) -> None:
+def _validate_active_target_mapping(
+    payload: dict[str, object],
+    expected_target_ids: tuple[str, ...],
+) -> None:
     mapping = payload.get("active_target_mapping")
     if not isinstance(mapping, list):
         raise ModelValidationError("active_target_mapping must be a list")
@@ -1597,7 +1950,7 @@ def _validate_active_target_mapping(payload: dict[str, object]) -> None:
             raise ModelValidationError(
                 f"active_target_mapping[{target_id}] unchanged target requires justification"
             )
-    expected = set(ACTIVE_TRANSFORMATION_TARGET_IDS)
+    expected = set(expected_target_ids)
     if seen != expected:
         missing = sorted(expected - seen)
         extra = sorted(seen - expected)
@@ -1617,20 +1970,37 @@ def _constraint_mapping_complete(payload: dict[str, object]) -> bool:
 
 def _active_target_mapping_complete(payload: dict[str, object]) -> bool:
     try:
-        _validate_active_target_mapping(payload)
+        _validate_active_target_mapping(payload, ACTIVE_TRANSFORMATION_TARGET_IDS)
+    except ModelValidationError:
+        return False
+    return True
+
+
+def _active_target_mapping_complete_for_subject(
+    subject: MacroSubject,
+    payload: dict[str, object],
+) -> bool:
+    try:
+        _validate_active_target_mapping(
+            payload,
+            subject.normalized_brief.active_transformation_target_ids,
+        )
     except ModelValidationError:
         return False
     return True
 
 
 def _build_target_coverage_report(
+    subject: MacroSubject,
     target: RecomposedText,
     replacement_paragraphs: list[str],
     *,
     model_payload: dict[str, object] | None,
 ) -> dict[str, object]:
     paragraph_refs = _target_paragraph_refs(target.original_target)
-    target_ref_by_id = _active_target_ref_map(paragraph_refs)
+    active_target_ids = subject.normalized_brief.active_transformation_target_ids
+    material_required_ids = set(subject.normalized_brief.material_required_target_ids)
+    target_ref_by_id = _active_target_ref_map(paragraph_refs, active_target_ids)
     paragraph_comparison = _paragraph_materiality_comparison(
         target.original_target,
         replacement_paragraphs,
@@ -1643,11 +2013,11 @@ def _build_target_coverage_report(
     unchanged_target_paragraphs = [
         row for row in paragraph_comparison if not bool(row["materially_changed"])
     ]
-    mapping_by_target = _active_mapping_by_target(model_payload)
+    mapping_by_target = _active_mapping_by_target(model_payload, active_target_ids)
     active_targets_covered: list[str] = []
     active_targets_missing: list[str] = []
     unchanged_with_justification: list[dict[str, object]] = []
-    for target_id in ACTIVE_TRANSFORMATION_TARGET_IDS:
+    for target_id in active_target_ids:
         mapping = mapping_by_target.get(target_id)
         target_ref = target_ref_by_id[target_id]
         paragraph_material = (
@@ -1669,7 +2039,7 @@ def _build_target_coverage_report(
         if (
             mapping
             and unchanged
-            and target_id not in MATERIAL_REQUIRED_ACTIVE_TARGET_IDS
+            and target_id not in material_required_ids
             and justification.strip()
         ):
             covered = True
@@ -1690,14 +2060,14 @@ def _build_target_coverage_report(
         "materially_changed_target_paragraph_count": materially_changed_count,
         "unchanged_target_paragraph_count": len(unchanged_target_paragraphs),
         "paragraph_comparison": paragraph_comparison,
-        "active_transformation_targets": list(ACTIVE_TRANSFORMATION_TARGET_IDS),
+        "active_transformation_targets": list(active_target_ids),
         "active_targets_covered": active_targets_covered,
         "active_targets_missing": active_targets_missing,
         "unchanged_target_paragraphs_with_justification": unchanged_with_justification,
         "macro_target_coverage_passed": macro_target_coverage_passed,
         "macro_materiality_passed": macro_materiality_passed,
         "active_target_mapping_complete": bool(model_payload)
-        and _active_target_mapping_complete(model_payload),
+        and _active_target_mapping_complete_for_subject(subject, model_payload),
         "ready_for_executed_ablation": macro_target_coverage_passed,
     }
 
@@ -1765,9 +2135,10 @@ def _normalized_words(text: str) -> list[str]:
 
 def _active_mapping_by_target(
     model_payload: dict[str, object] | None,
+    active_target_ids: tuple[str, ...],
 ) -> dict[str, dict[str, object]]:
     if not model_payload:
-        return _fake_active_target_mapping()
+        return _fake_active_target_mapping(active_target_ids)
     mapping = model_payload.get("active_target_mapping", [])
     if not isinstance(mapping, list):
         return {}
@@ -1778,7 +2149,9 @@ def _active_mapping_by_target(
     }
 
 
-def _fake_active_target_mapping() -> dict[str, dict[str, object]]:
+def _fake_active_target_mapping(
+    active_target_ids: tuple[str, ...],
+) -> dict[str, dict[str, object]]:
     return {
         target_id: {
             "target_id": target_id,
@@ -1786,7 +2159,7 @@ def _fake_active_target_mapping() -> dict[str, dict[str, object]]:
             "unchanged_justification": "",
             "supporting_replacement_excerpt": "deterministic fake replacement section",
         }
-        for target_id in ACTIVE_TRANSFORMATION_TARGET_IDS
+        for target_id in active_target_ids
     }
 
 
@@ -1798,17 +2171,26 @@ def _target_paragraph_ref(index: int) -> str:
     return f"target_p{index + 1:03d}"
 
 
-def _active_target_ref_map(paragraph_refs: list[str]) -> dict[str, str]:
+def _active_target_ref_map(
+    paragraph_refs: list[str],
+    active_target_ids: tuple[str, ...],
+) -> dict[str, str]:
     first_ref = paragraph_refs[0] if paragraph_refs else "target_section"
     second_ref = paragraph_refs[1] if len(paragraph_refs) > 1 else first_ref
     last_ref = paragraph_refs[-1] if paragraph_refs else "target_section"
-    return {
+    default_refs = {
         "middle_abstraction_ladder_compression": first_ref,
         "proof_line_redundancy_cleanup": second_ref,
         "no_outside_answer_pressure_preservation": second_ref,
         "final_return_closure_embodiment": last_ref,
         "object_event_pressure_without_pressure_naming": "target_section",
+        "proof_no_outside_answer_refinement": second_ref,
+        "final_return_echo_reread_strength": last_ref,
+        "thesis_visible_proof_language_reduction": "target_section",
+        "opening_return_transformation_strengthening": last_ref,
+        "preserve_reader_state_partial_gain": "target_section",
     }
+    return {target_id: default_refs.get(target_id, "target_section") for target_id in active_target_ids}
 
 
 def _validate_replacement_section(
@@ -1877,6 +2259,8 @@ def _flatten_strings(value: object) -> str:
 
 
 def _load_base_candidate_payload(packet_dir: Path, packet_kind: str) -> dict[str, Any]:
+    if packet_kind == "bounded_macro_recomposition":
+        return _read_payload(packet_dir / "macro_recomposed_candidate_text.json")
     if packet_kind == "ablation_informed_revision":
         return _read_payload(packet_dir / "cycle2_revised_candidate_text.json")
     if packet_kind == "autonomous_revision":
@@ -1960,6 +2344,22 @@ def _unique(values: list[object]) -> list[str]:
         if value_text not in result:
             result.append(value_text)
     return result
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if isinstance(value, list):
+        return tuple(str(item) for item in value if str(item).strip())
+    if isinstance(value, tuple):
+        return tuple(str(item) for item in value if str(item).strip())
+    if isinstance(value, str) and value.strip():
+        return (value,)
+    return ()
+
+
+def _dict_value(value: object, key: str) -> object | None:
+    if isinstance(value, dict):
+        return value.get(key)
+    return None
 
 
 def _gate_result(
