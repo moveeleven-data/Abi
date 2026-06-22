@@ -2150,6 +2150,30 @@ def bounded_macro_recomposition_json_schema() -> dict[str, Any]:
             "risk_note",
         ],
     )
+    active_target_mapping_item = _object_schema(
+        {
+            "target_id": {"type": "string"},
+            "target_paragraph_ref": {"type": "string"},
+            "before_excerpt": {"type": "string"},
+            "supporting_replacement_excerpt": {"type": "string"},
+            "what_changed": {"type": "string"},
+            "rationale": {"type": "string"},
+            "uncertainty": {"type": "string"},
+            "unchanged": {"type": "boolean"},
+            "unchanged_justification": {"type": "string"},
+        },
+        [
+            "target_id",
+            "target_paragraph_ref",
+            "before_excerpt",
+            "supporting_replacement_excerpt",
+            "what_changed",
+            "rationale",
+            "uncertainty",
+            "unchanged",
+            "unchanged_justification",
+        ],
+    )
     return _schema_with_properties(
         {
             "replacement_section_text": {"type": "string"},
@@ -2173,6 +2197,10 @@ def bounded_macro_recomposition_json_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": constraint_mapping_item,
             },
+            "active_target_mapping": {
+                "type": "array",
+                "items": active_target_mapping_item,
+            },
             "rationale": {"type": "string"},
             "local_law_explanation": {"type": "string"},
             "uncertainty": {"type": "string"},
@@ -2183,6 +2211,7 @@ def bounded_macro_recomposition_json_schema() -> dict[str, Any]:
             "macro_recomposition_plan",
             "section_plan",
             "constraint_mapping",
+            "active_target_mapping",
             "rationale",
             "local_law_explanation",
             "uncertainty",
@@ -3728,6 +3757,31 @@ def _validate_bounded_macro_recomposition(payload: dict[str, Any]) -> dict[str, 
         )
         validated["satisfied_claim"] = item["satisfied_claim"]
         constraint_mapping.append(validated)
+    _require_object_list(payload, "active_target_mapping")
+    active_target_mapping = []
+    for index, item in enumerate(payload["active_target_mapping"]):
+        validated = _validate_object(
+            item,
+            f"active_target_mapping[{index}]",
+            (
+                "target_id",
+                "target_paragraph_ref",
+                "before_excerpt",
+                "supporting_replacement_excerpt",
+                "what_changed",
+                "rationale",
+                "uncertainty",
+                "unchanged_justification",
+            ),
+        )
+        _require_type(
+            item,
+            "unchanged",
+            bool,
+            field_prefix=f"active_target_mapping[{index}].",
+        )
+        validated["unchanged"] = item["unchanged"]
+        active_target_mapping.append(validated)
     for key in (
         "rationale",
         "local_law_explanation",
@@ -3748,6 +3802,7 @@ def _validate_bounded_macro_recomposition(payload: dict[str, Any]) -> dict[str, 
             "rationale": section_plan["rationale"],
         },
         "constraint_mapping": constraint_mapping,
+        "active_target_mapping": active_target_mapping,
         "rationale": payload["rationale"],
         "local_law_explanation": payload["local_law_explanation"],
         "uncertainty": payload["uncertainty"],

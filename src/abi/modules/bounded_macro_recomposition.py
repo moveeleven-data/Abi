@@ -70,12 +70,27 @@ TARGET_MOVEMENT = "middle_and_return_movement"
 
 REQUIRED_SEMANTIC_CONSTRAINT_IDS = (
     "proof_from_inside_line",
-    "cosmic_silence_isolation_condition",
+    "cosmic_silence_as_isolation_condition",
     "return_without_regression",
     "no_outside_answer_or_rescue",
     "strongest_rival_pressure",
     "table_dust_spoon_saucer_local_field",
     "record_law_proof_answer_compression_preserved",
+)
+
+ACTIVE_TRANSFORMATION_TARGET_IDS = (
+    "middle_abstraction_ladder_compression",
+    "proof_line_redundancy_cleanup",
+    "no_outside_answer_pressure_preservation",
+    "final_return_closure_embodiment",
+    "object_event_pressure_without_pressure_naming",
+)
+
+MATERIAL_REQUIRED_ACTIVE_TARGET_IDS = (
+    "middle_abstraction_ladder_compression",
+    "proof_line_redundancy_cleanup",
+    "no_outside_answer_pressure_preservation",
+    "final_return_closure_embodiment",
 )
 
 
@@ -363,6 +378,7 @@ def run_bounded_macro_recomposition(
             subject,
             recomposed,
             payloads["macro_recomposed_candidate_text"],
+            model_payload=model_payload,
         )
         artifacts["macro_recomposition_diff_report"] = writer.write_artifact(
             "macro_recomposition_diff_report",
@@ -620,7 +636,9 @@ def _prompt_for_live_macro_recomposition(
                 "base_candidate_text",
                 "target_paragraph_indices",
                 "before_section_text",
-                "required_semantic_constraints",
+                "protected_semantic_constraints",
+                "active_transformation_targets",
+                "target_coverage_validation",
                 "final_text_assembly",
                 "diff_report",
                 "gates",
@@ -635,6 +653,7 @@ def _prompt_for_live_macro_recomposition(
                 "uncertainty",
                 "predicted reader-state effect",
                 "semantic constraint mapping claims",
+                "active target mapping claims",
             ],
             "model_must_not_own": [
                 "full artifact text",
@@ -654,7 +673,8 @@ def _prompt_for_live_macro_recomposition(
             "target_paragraph_end_index": target.target_end_index,
             "unchanged_prefix_text": "\n\n".join(target.unchanged_prefix),
             "before_section_text": "\n\n".join(target.original_target),
-            "required_semantic_constraints": _semantic_constraints(),
+            "protected_semantic_constraints": _semantic_constraints(),
+            "active_transformation_targets": _active_transformation_targets(target),
             "work_order": work_order,
             "protected_effects_and_forbidden_changes": protected_effects,
             "macro_recomposition_brief": subject.synthesis_payloads[
@@ -666,7 +686,11 @@ def _prompt_for_live_macro_recomposition(
             "output_rule": (
                 "Return replacement_section_text only for the target movement, "
                 "not the full artifact. Include exactly one constraint_mapping "
-                "item for every required constraint_id."
+                "item for every protected constraint_id and exactly one "
+                "active_target_mapping item for every active target_id. Active "
+                "targets must be materially transformed unless explicitly marked "
+                "unchanged with justification, and the main active targets cannot "
+                "be satisfied by copied paragraphs."
             ),
         }
     )
@@ -842,7 +866,8 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "allowed_touch": "multiple adjacent spans in the middle/return movement",
-        "required_semantic_constraints": _semantic_constraints(),
+        "protected_semantic_constraints": _semantic_constraints(),
+        "active_transformation_targets": _active_transformation_targets(target),
         "controller_owns": [
             "source packet references",
             "base candidate text",
@@ -850,7 +875,9 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
             "before section text",
             "protected effects",
             "forbidden changes",
-            "required semantic constraints",
+            "protected semantic constraints",
+            "active transformation targets",
+            "target coverage validation",
             "text assembly",
             "diff report",
             "gate report",
@@ -864,6 +891,7 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
             "uncertainty",
             "predicted reader-state effect",
             "semantic constraint mapping",
+            "active target mapping claims",
         ],
         "model_must_not_own": [
             "finalization fields",
@@ -991,17 +1019,26 @@ def _build_patch_or_section_plan(
     model_payload: dict[str, object] | None = None,
     model_call_id: str | None = None,
 ) -> dict[str, object]:
+    coverage_report = _build_target_coverage_report(
+        recomposed,
+        recomposed.replacement,
+        model_payload=model_payload,
+    )
     payload = {
         "section_plan_id": f"macro_section_{sha256_text(''.join(recomposed.replacement))[:12]}",
         "target_movement": TARGET_MOVEMENT,
         "target_paragraph_start_index": recomposed.target_start_index,
         "target_paragraph_end_index": recomposed.target_end_index,
         "unchanged_prefix_paragraph_count": len(recomposed.unchanged_prefix),
-        "changed_paragraph_count": len(recomposed.replacement),
+        "replacement_paragraph_count": len(recomposed.replacement),
+        "changed_paragraph_count": coverage_report[
+            "materially_changed_target_paragraph_count"
+        ],
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "before_section_text": "\n\n".join(recomposed.original_target),
         "replacement_section_text": "\n\n".join(recomposed.replacement),
+        "target_coverage_report": coverage_report,
         "source_base_text_sha256": subject.base_text_sha256,
         "rationale": (
             "Replace the middle/return movement as one adjacent bounded section, "
@@ -1017,6 +1054,7 @@ def _build_patch_or_section_plan(
             {
                 "model_section_plan": section_plan,
                 "constraint_mapping": list(model_payload["constraint_mapping"]),
+                "active_target_mapping": list(model_payload["active_target_mapping"]),
                 "semantic_constraint_claims_model_reported": True,
                 "semantic_constraint_satisfaction_not_proven": True,
                 "requires_internal_reader_or_ablation_validation": True,
@@ -1067,7 +1105,14 @@ def _build_diff_report(
     subject: MacroSubject,
     recomposed: RecomposedText,
     candidate: dict[str, object],
+    *,
+    model_payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    coverage_report = _build_target_coverage_report(
+        recomposed,
+        recomposed.replacement,
+        model_payload=model_payload,
+    )
     return {
         "base_candidate_packet_id": subject.base_packet_id,
         "base_text_sha256": subject.base_text_sha256,
@@ -1079,6 +1124,7 @@ def _build_diff_report(
         "full_rewrite": False,
         "opening_scene_preserved": True,
         "unchanged_prefix_paragraph_count": len(recomposed.unchanged_prefix),
+        "target_coverage_report": coverage_report,
         "changed_paragraph_start_index": recomposed.target_start_index,
         "changed_paragraph_end_index": recomposed.target_end_index,
         "changed_spans": [
@@ -1138,6 +1184,13 @@ def _build_gate_report(
     constraint_mapping_complete = bool(model_payload) and _constraint_mapping_complete(
         model_payload
     )
+    coverage_report = diff_report.get("target_coverage_report", {})
+    if not isinstance(coverage_report, dict):
+        coverage_report = {}
+    macro_target_coverage_passed = bool(
+        coverage_report.get("macro_target_coverage_passed")
+    )
+    macro_materiality_passed = bool(coverage_report.get("macro_materiality_passed"))
     gate_results = [
         _gate_result("macro_recomposition_packet_exists", True),
         _gate_result("synthesis_packet_consumed", True),
@@ -1160,6 +1213,8 @@ def _build_gate_report(
             "constraint_mapping_complete",
             constraint_mapping_complete if model_payload is not None else True,
         ),
+        _gate_result("macro_target_coverage_passed", macro_target_coverage_passed),
+        _gate_result("macro_materiality_passed", macro_materiality_passed),
         _gate_result(
             "semantic_constraint_satisfaction_proven",
             False,
@@ -1205,9 +1260,24 @@ def _build_gate_report(
         "constraint_mapping_complete": (
             constraint_mapping_complete if model_payload is not None else True
         ),
+        "semantic_constraint_mapping_complete": (
+            constraint_mapping_complete if model_payload is not None else True
+        ),
         "semantic_constraint_claims_model_reported": model_payload is not None,
         "semantic_constraint_satisfaction_not_proven": True,
         "requires_internal_reader_or_ablation_validation": True,
+        "macro_target_coverage_passed": macro_target_coverage_passed,
+        "macro_materiality_passed": macro_materiality_passed,
+        "active_transformation_targets_covered": list(
+            coverage_report.get("active_targets_covered", [])
+        ),
+        "active_transformation_targets_missing": list(
+            coverage_report.get("active_targets_missing", [])
+        ),
+        "ready_for_executed_ablation": bool(
+            coverage_report.get("ready_for_executed_ablation")
+        ),
+        "target_coverage_report": coverage_report,
         "requires_executed_ablation_before_improvement_claim": True,
         "operator_approval_absent": True,
         "profile": "autonomous_creative_candidate",
@@ -1271,6 +1341,9 @@ def _build_packet_summary(
         "diff_report_artifact_id": artifacts["macro_recomposition_diff_report"].id,
         "rival_pressure_check_artifact_id": artifacts["macro_rival_pressure_check"].id,
         "gate_report": payloads["macro_recomposition_gate_report"],
+        "target_coverage_report": payloads["macro_recomposition_diff_report"].get(
+            "target_coverage_report"
+        ),
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "requires_executed_ablation_before_improvement_claim": True,
@@ -1374,7 +1447,7 @@ def _semantic_constraints() -> list[dict[str, str]]:
             "Proof must arise endogenously from the line or object sequence it "
             "integrates, not from a summary pasted over it."
         ),
-        "cosmic_silence_isolation_condition": (
+        "cosmic_silence_as_isolation_condition": (
             "Cosmic silence/no outside answer must function as the formal "
             "isolation condition of proof, not as mere mood."
         ),
@@ -1405,6 +1478,42 @@ def _semantic_constraints() -> list[dict[str, str]]:
     ]
 
 
+def _active_transformation_targets(target: RecomposedText) -> list[dict[str, object]]:
+    paragraph_refs = _target_paragraph_refs(target.original_target)
+    target_ref_by_id = _active_target_ref_map(paragraph_refs)
+    descriptions = {
+        "middle_abstraction_ladder_compression": (
+            "Compress the middle abstraction ladder into embodied object/event "
+            "pressure rather than repeating explanatory scaffolding."
+        ),
+        "proof_line_redundancy_cleanup": (
+            "Clean up proof-line redundancy by making proof arise through the "
+            "replacement movement instead of repeating the proof label."
+        ),
+        "no_outside_answer_pressure_preservation": (
+            "Preserve no-outside-answer pressure as a formal condition in the "
+            "target section, not as a stated mood."
+        ),
+        "final_return_closure_embodiment": (
+            "Embody the return closure as changed local relation rather than a "
+            "summarizing ending."
+        ),
+        "object_event_pressure_without_pressure_naming": (
+            "Carry pressure through object/event relations without merely naming "
+            "pressure more often."
+        ),
+    }
+    return [
+        {
+            "target_id": target_id,
+            "description": descriptions[target_id],
+            "target_paragraph_ref": target_ref_by_id[target_id],
+            "material_change_required": target_id in MATERIAL_REQUIRED_ACTIVE_TARGET_IDS,
+        }
+        for target_id in ACTIVE_TRANSFORMATION_TARGET_IDS
+    ]
+
+
 def _validate_live_macro_payload(
     *,
     subject: MacroSubject,
@@ -1412,8 +1521,19 @@ def _validate_live_macro_payload(
 ) -> None:
     _validate_section_plan(payload)
     _validate_constraint_mapping(payload)
+    _validate_active_target_mapping(payload)
     _validate_forbidden_live_macro_claims(payload)
     _validate_replacement_section(subject, payload)
+    coverage_report = _build_target_coverage_report(
+        _target_window(subject.base_text),
+        _paragraphs(str(payload["replacement_section_text"])),
+        model_payload=payload,
+    )
+    if not coverage_report["macro_target_coverage_passed"]:
+        missing = ", ".join(coverage_report["active_targets_missing"])
+        raise ModelValidationError(f"macro target coverage failed: {missing}")
+    if not coverage_report["macro_materiality_passed"]:
+        raise ModelValidationError("macro materiality failed: target section is insufficiently changed")
 
 
 def _validate_section_plan(payload: dict[str, object]) -> None:
@@ -1455,12 +1575,240 @@ def _validate_constraint_mapping(payload: dict[str, object]) -> None:
         )
 
 
+def _validate_active_target_mapping(payload: dict[str, object]) -> None:
+    mapping = payload.get("active_target_mapping")
+    if not isinstance(mapping, list):
+        raise ModelValidationError("active_target_mapping must be a list")
+    seen: set[str] = set()
+    for item in mapping:
+        if not isinstance(item, dict):
+            raise ModelValidationError("active_target_mapping entries must be objects")
+        target_id = str(item.get("target_id") or "")
+        if target_id in seen:
+            raise ModelValidationError(f"duplicate active target_id: {target_id}")
+        seen.add(target_id)
+        excerpt = str(item.get("supporting_replacement_excerpt") or "").strip()
+        if not excerpt:
+            raise ModelValidationError(
+                f"active_target_mapping[{target_id}] supporting excerpt is empty"
+            )
+        unchanged = item.get("unchanged")
+        if unchanged is True and not str(item.get("unchanged_justification") or "").strip():
+            raise ModelValidationError(
+                f"active_target_mapping[{target_id}] unchanged target requires justification"
+            )
+    expected = set(ACTIVE_TRANSFORMATION_TARGET_IDS)
+    if seen != expected:
+        missing = sorted(expected - seen)
+        extra = sorted(seen - expected)
+        raise ModelValidationError(
+            "active_target_mapping must contain exactly the active target IDs; "
+            f"missing={missing}, extra={extra}"
+        )
+
+
 def _constraint_mapping_complete(payload: dict[str, object]) -> bool:
     try:
         _validate_constraint_mapping(payload)
     except ModelValidationError:
         return False
     return True
+
+
+def _active_target_mapping_complete(payload: dict[str, object]) -> bool:
+    try:
+        _validate_active_target_mapping(payload)
+    except ModelValidationError:
+        return False
+    return True
+
+
+def _build_target_coverage_report(
+    target: RecomposedText,
+    replacement_paragraphs: list[str],
+    *,
+    model_payload: dict[str, object] | None,
+) -> dict[str, object]:
+    paragraph_refs = _target_paragraph_refs(target.original_target)
+    target_ref_by_id = _active_target_ref_map(paragraph_refs)
+    paragraph_comparison = _paragraph_materiality_comparison(
+        target.original_target,
+        replacement_paragraphs,
+    )
+    material_refs = {
+        str(row["target_paragraph_ref"])
+        for row in paragraph_comparison
+        if bool(row["materially_changed"])
+    }
+    unchanged_target_paragraphs = [
+        row for row in paragraph_comparison if not bool(row["materially_changed"])
+    ]
+    mapping_by_target = _active_mapping_by_target(model_payload)
+    active_targets_covered: list[str] = []
+    active_targets_missing: list[str] = []
+    unchanged_with_justification: list[dict[str, object]] = []
+    for target_id in ACTIVE_TRANSFORMATION_TARGET_IDS:
+        mapping = mapping_by_target.get(target_id)
+        target_ref = target_ref_by_id[target_id]
+        paragraph_material = (
+            bool(material_refs)
+            if target_ref == "target_section"
+            else target_ref in material_refs
+        )
+        unchanged = bool(mapping.get("unchanged")) if mapping else False
+        justification = str(mapping.get("unchanged_justification") or "") if mapping else ""
+        if unchanged:
+            unchanged_with_justification.append(
+                {
+                    "target_id": target_id,
+                    "target_paragraph_ref": target_ref,
+                    "justification": justification,
+                }
+            )
+        covered = bool(mapping) and paragraph_material
+        if (
+            mapping
+            and unchanged
+            and target_id not in MATERIAL_REQUIRED_ACTIVE_TARGET_IDS
+            and justification.strip()
+        ):
+            covered = True
+        if covered:
+            active_targets_covered.append(target_id)
+        else:
+            active_targets_missing.append(target_id)
+    materiality_required_count = min(
+        len(paragraph_refs),
+        max(2, (len(paragraph_refs) + 1) // 2),
+    )
+    materially_changed_count = len(material_refs)
+    macro_materiality_passed = materially_changed_count >= materiality_required_count
+    macro_target_coverage_passed = not active_targets_missing and macro_materiality_passed
+    return {
+        "target_paragraph_count": len(target.original_target),
+        "replacement_paragraph_count": len(replacement_paragraphs),
+        "materially_changed_target_paragraph_count": materially_changed_count,
+        "unchanged_target_paragraph_count": len(unchanged_target_paragraphs),
+        "paragraph_comparison": paragraph_comparison,
+        "active_transformation_targets": list(ACTIVE_TRANSFORMATION_TARGET_IDS),
+        "active_targets_covered": active_targets_covered,
+        "active_targets_missing": active_targets_missing,
+        "unchanged_target_paragraphs_with_justification": unchanged_with_justification,
+        "macro_target_coverage_passed": macro_target_coverage_passed,
+        "macro_materiality_passed": macro_materiality_passed,
+        "active_target_mapping_complete": bool(model_payload)
+        and _active_target_mapping_complete(model_payload),
+        "ready_for_executed_ablation": macro_target_coverage_passed,
+    }
+
+
+def _paragraph_materiality_comparison(
+    before_paragraphs: list[str],
+    replacement_paragraphs: list[str],
+) -> list[dict[str, object]]:
+    rows = []
+    for index, before in enumerate(before_paragraphs):
+        after = replacement_paragraphs[index] if index < len(replacement_paragraphs) else ""
+        before_words = _normalized_words(before)
+        after_words = _normalized_words(after)
+        materially_changed = _materially_changed_words(before_words, after_words)
+        rows.append(
+            {
+                "target_paragraph_ref": _target_paragraph_ref(index),
+                "before_sha256": sha256_text(before),
+                "after_sha256": sha256_text(after),
+                "before_word_count": len(before_words),
+                "after_word_count": len(after_words),
+                "normalized_text_equal": before_words == after_words,
+                "materially_changed": materially_changed,
+            }
+        )
+    return rows
+
+
+def _materially_changed_words(before_words: list[str], after_words: list[str]) -> bool:
+    if not before_words and not after_words:
+        return False
+    if before_words == after_words:
+        return False
+    before_counts = _word_counts(before_words)
+    after_counts = _word_counts(after_words)
+    overlap = sum(
+        min(count, after_counts.get(word, 0)) for word, count in before_counts.items()
+    )
+    max_count = max(len(before_words), len(after_words), 1)
+    changed_count = max_count - overlap
+    changed_ratio = changed_count / max_count
+    return changed_count >= 6 and changed_ratio >= 0.18
+
+
+def _word_counts(words: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for word in words:
+        counts[word] = counts.get(word, 0) + 1
+    return counts
+
+
+def _normalized_words(text: str) -> list[str]:
+    words: list[str] = []
+    current = []
+    for character in text.lower():
+        if character.isalnum():
+            current.append(character)
+        elif current:
+            words.append("".join(current))
+            current = []
+    if current:
+        words.append("".join(current))
+    return words
+
+
+def _active_mapping_by_target(
+    model_payload: dict[str, object] | None,
+) -> dict[str, dict[str, object]]:
+    if not model_payload:
+        return _fake_active_target_mapping()
+    mapping = model_payload.get("active_target_mapping", [])
+    if not isinstance(mapping, list):
+        return {}
+    return {
+        str(item.get("target_id")): item
+        for item in mapping
+        if isinstance(item, dict) and item.get("target_id")
+    }
+
+
+def _fake_active_target_mapping() -> dict[str, dict[str, object]]:
+    return {
+        target_id: {
+            "target_id": target_id,
+            "unchanged": False,
+            "unchanged_justification": "",
+            "supporting_replacement_excerpt": "deterministic fake replacement section",
+        }
+        for target_id in ACTIVE_TRANSFORMATION_TARGET_IDS
+    }
+
+
+def _target_paragraph_refs(paragraphs: list[str]) -> list[str]:
+    return [_target_paragraph_ref(index) for index, _paragraph in enumerate(paragraphs)]
+
+
+def _target_paragraph_ref(index: int) -> str:
+    return f"target_p{index + 1:03d}"
+
+
+def _active_target_ref_map(paragraph_refs: list[str]) -> dict[str, str]:
+    first_ref = paragraph_refs[0] if paragraph_refs else "target_section"
+    second_ref = paragraph_refs[1] if len(paragraph_refs) > 1 else first_ref
+    last_ref = paragraph_refs[-1] if paragraph_refs else "target_section"
+    return {
+        "middle_abstraction_ladder_compression": first_ref,
+        "proof_line_redundancy_cleanup": second_ref,
+        "no_outside_answer_pressure_preservation": second_ref,
+        "final_return_closure_embodiment": last_ref,
+        "object_event_pressure_without_pressure_naming": "target_section",
+    }
 
 
 def _validate_replacement_section(
@@ -1582,6 +1930,8 @@ def _resolve_path(config: AbiConfig, path: Path) -> Path:
 
 
 def _target_start(paragraphs: list[str]) -> int:
+    if len(paragraphs) <= 1:
+        return 0
     needles = (
         "There is a deeper pattern",
         "A line of life and mind",
@@ -1590,7 +1940,7 @@ def _target_start(paragraphs: list[str]) -> int:
     for index, paragraph in enumerate(paragraphs):
         if any(needle in paragraph for needle in needles):
             return index
-    return max(1, len(paragraphs) - 4)
+    return min(max(1, len(paragraphs) - 4), len(paragraphs) - 1)
 
 
 def _paragraphs(text: str) -> list[str]:

@@ -12,6 +12,7 @@ from abi.controller.finalization import check_finalization
 from abi.controller.policy import GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE
 from abi.controller.state import AUTONOMOUS_CLOSED_LOOP_REVISION_ACTIVE_PHASE, get_latest_run
 from abi.db import connect
+from abi.hashing import sha256_text
 from abi.model_calls import MODEL_CALL_SUCCESS, MODEL_CALL_VALIDATION_FAILED, list_model_calls
 from abi.model_schemas import (
     ABLATION_INFORMED_BASE_SELECTION_SCHEMA,
@@ -48,6 +49,7 @@ from abi.modules.autonomous_evidence_synthesis import (
     run_autonomous_evidence_synthesis,
 )
 from abi.modules.bounded_macro_recomposition import (
+    ACTIVE_TRANSFORMATION_TARGET_IDS,
     BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES,
     REQUIRED_SEMANTIC_CONSTRAINT_IDS,
     run_bounded_macro_recomposition,
@@ -362,6 +364,41 @@ def rewrite_payload(path: str | Path, mutator) -> None:
     envelope = json.loads(artifact_path.read_text(encoding="utf-8"))
     mutator(envelope["payload"])
     artifact_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+
+MULTI_PARAGRAPH_MACRO_BASE_TEXT = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
+
+There is a deeper pattern, and the pattern has to be named as record, law, proof, and answer before the reader can see why the table matters.
+
+A line of life and mind proves itself by announcing that proof must arise inside the line, then announces the same proof again from a higher angle.
+
+That is why the sky gives no answer. The silence is cosmic, the answer is withheld, and the pressure remains mostly stated instead of carried by the objects.
+
+In the morning the table returns, and the return is described as changed, but the change still arrives as a closing explanation rather than an event inside the room."""
+
+
+def prepare_multi_paragraph_macro_synthesis(synthesis_payload: dict[str, object]) -> Path:
+    synthesis_packet = Path(str(synthesis_payload["packet_dir"]))
+    best_path = synthesis_packet / "best_current_candidate_selection.json"
+    best = read_payload(best_path)
+    selected = best["selected_best_candidate"]
+    base_packet = Path(str(selected["packet_dir"]))
+    base_text_path = base_packet / "cycle2_revised_candidate_text.json"
+    text_sha = sha256_text(MULTI_PARAGRAPH_MACRO_BASE_TEXT)
+
+    def _rewrite_base(payload):
+        payload["text"] = MULTI_PARAGRAPH_MACRO_BASE_TEXT
+        payload["text_sha256"] = text_sha
+        payload["word_count"] = len(MULTI_PARAGRAPH_MACRO_BASE_TEXT.split())
+
+    def _rewrite_best(payload):
+        selected_best = payload["selected_best_candidate"]
+        selected_best["selected_best_candidate_text_sha256"] = text_sha
+        selected_best["text_sha256"] = text_sha
+
+    rewrite_payload(base_text_path, _rewrite_base)
+    rewrite_payload(best_path, _rewrite_best)
+    return synthesis_packet
 
 
 def valid_old_new_rival_payload() -> dict[str, object]:
@@ -942,7 +979,8 @@ class StubBoundedMacroRecompositionClient:
         self.requests.append(request)
         if request.schema != BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
             raise AssertionError(f"unexpected schema: {request.schema.name}")
-        payload = live_macro_payload()
+        prompt = json.loads(request.input_text)
+        payload = live_macro_payload(prompt.get("active_transformation_targets", []))
         if self.mode == "invalid_json":
             return "{not valid json"
         if self.mode == "missing_constraint":
@@ -961,10 +999,38 @@ class StubBoundedMacroRecompositionClient:
         elif self.mode == "final_claim":
             payload["rationale"] = "This achieves phase-shift success."
         elif self.mode == "prefix_rewrite":
-            prompt = json.loads(request.input_text)
             payload["replacement_section_text"] = (
                 f"{prompt['unchanged_prefix_text']}\n\n{payload['replacement_section_text']}"
             )
+        elif self.mode == "missing_active_target":
+            payload["active_target_mapping"] = payload["active_target_mapping"][:-1]
+        elif self.mode == "unchanged_without_justification":
+            payload["active_target_mapping"][0]["unchanged"] = True
+            payload["active_target_mapping"][0]["unchanged_justification"] = ""
+        elif self.mode == "copied_first_two":
+            payload["replacement_section_text"] = copied_target_replacement(
+                prompt,
+                copied_indexes={0, 1},
+            )
+        elif self.mode in {"proof_unchanged", "no_answer_unchanged"}:
+            payload["replacement_section_text"] = copied_target_replacement(
+                prompt,
+                copied_indexes={1},
+            )
+        elif self.mode in {"final_only_change", "mostly_copied"}:
+            before_paragraphs = [
+                paragraph.strip()
+                for paragraph in prompt["before_section_text"].split("\n\n")
+                if paragraph.strip()
+            ]
+            replacement = list(before_paragraphs)
+            if replacement:
+                replacement[-1] = (
+                    "The return is not a reset. Morning comes back to the same "
+                    "table, but the table now carries the room's relations as a "
+                    "record inside itself."
+                )
+            payload["replacement_section_text"] = "\n\n".join(replacement)
         return dump_json(payload)
 
 
@@ -977,7 +1043,9 @@ def bounded_macro_stub_factory(clients, *, mode: str = "valid"):
     return _factory
 
 
-def live_macro_payload() -> dict[str, object]:
+def live_macro_payload(
+    active_targets: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     replacement = (
         "The room does not need a new witness. The ring on the wood has dried "
         "lighter at one rim, and the spoon has turned a small brightness toward "
@@ -1028,6 +1096,7 @@ def live_macro_payload() -> dict[str, object]:
             }
             for constraint_id in REQUIRED_SEMANTIC_CONSTRAINT_IDS
         ],
+        "active_target_mapping": active_target_mapping_payload(active_targets),
         "rationale": "The bounded section shifts pressure into scene and relation.",
         "local_law_explanation": "Each local mark becomes legible through another mark.",
         "uncertainty": "medium",
@@ -1035,6 +1104,63 @@ def live_macro_payload() -> dict[str, object]:
             "The reader should feel the return as changed relation rather than explanation."
         ),
     }
+
+
+def active_target_mapping_payload(
+    active_targets: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    if not active_targets:
+        active_targets = [
+            {"target_id": target_id, "target_paragraph_ref": "target_section"}
+            for target_id in ACTIVE_TRANSFORMATION_TARGET_IDS
+        ]
+    return [
+        {
+            "target_id": str(target["target_id"]),
+            "target_paragraph_ref": str(target.get("target_paragraph_ref") or "target_section"),
+            "before_excerpt": "controller-owned target paragraph",
+            "supporting_replacement_excerpt": (
+                "object marks lean into one another until the leaning becomes pressure"
+            ),
+            "what_changed": (
+                "The target is materially recomposed through object-event relation."
+            ),
+            "rationale": "The model reports a bounded material transformation.",
+            "uncertainty": "medium",
+            "unchanged": False,
+            "unchanged_justification": "",
+        }
+        for target in active_targets
+    ]
+
+
+def copied_target_replacement(
+    prompt: dict[str, object],
+    *,
+    copied_indexes: set[int],
+) -> str:
+    before_paragraphs = [
+        paragraph.strip()
+        for paragraph in str(prompt["before_section_text"]).split("\n\n")
+        if paragraph.strip()
+    ]
+    replacement_paragraphs = [
+        paragraph.strip()
+        for paragraph in str(live_macro_payload()["replacement_section_text"]).split("\n\n")
+        if paragraph.strip()
+    ]
+    result = []
+    for index, before in enumerate(before_paragraphs):
+        if index in copied_indexes:
+            result.append(before)
+        elif index < len(replacement_paragraphs):
+            result.append(replacement_paragraphs[index])
+        else:
+            result.append(
+                "The local object field changes this paragraph through relation, "
+                "not through explanation."
+            )
+    return "\n\n".join(result)
 
 
 class InvalidOldNewRivalProvenanceClient(FakeAutonomousRevisionModelClient):
@@ -4464,8 +4590,10 @@ def test_bounded_macro_recomposition_fake_creates_fail_closed_packet(tmp_path):
     assert diff["opening_scene_preserved"] is True
     assert diff["bounded_macro_recomposition"] is True
     assert diff["full_rewrite"] is False
-    assert diff["unchanged_prefix_paragraph_count"] >= 1
+    assert diff["unchanged_prefix_paragraph_count"] >= 0
     assert diff["changed_spans"]
+    assert diff["target_coverage_report"]["macro_target_coverage_passed"] is True
+    assert diff["target_coverage_report"]["macro_materiality_passed"] is True
 
     rival = read_payload(packet_dir / "macro_rival_pressure_check.json")
     assert rival["strongest_rival_pressure_preserved"] is True
@@ -4566,6 +4694,10 @@ def test_bounded_macro_recomposition_schema_is_strict_for_constraint_mapping():
     item_schema = schema["properties"]["constraint_mapping"]["items"]
     assert item_schema["additionalProperties"] is False
     assert "supporting_replacement_excerpt" in item_schema["required"]
+    active_item_schema = schema["properties"]["active_target_mapping"]["items"]
+    assert active_item_schema["additionalProperties"] is False
+    assert "target_id" in active_item_schema["required"]
+    assert "unchanged_justification" in active_item_schema["required"]
 
 
 def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed_packet(
@@ -4579,13 +4711,14 @@ def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed
         run_id = get_latest_run(connection).id
     synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
     assert synthesis.exit_code == 0
+    synthesis_packet = prepare_multi_paragraph_macro_synthesis(synthesis.payload)
     clients = []
     monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
 
     result = run_bounded_macro_recomposition(
         config,
         client_name="openai",
-        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+        synthesis_packet=synthesis_packet,
         allow_live_model=True,
         max_model_calls=1,
         model="stub-live-macro",
@@ -4599,7 +4732,8 @@ def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed
     assert len(clients[0].requests) == 1
     request_prompt = json.loads(clients[0].requests[0].input_text)
     assert request_prompt["target_movement"] == "middle_and_return_movement"
-    assert request_prompt["required_semantic_constraints"]
+    assert request_prompt["protected_semantic_constraints"]
+    assert request_prompt["active_transformation_targets"]
     packet_dir = Path(str(result.payload["packet_dir"]))
 
     plan_envelope = json.loads(
@@ -4624,6 +4758,12 @@ def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed
         item["supporting_replacement_excerpt"] for item in section["constraint_mapping"]
     }
     assert "proof_from_inside_line" not in section["replacement_section_text"]
+    coverage = section["target_coverage_report"]
+    assert coverage["macro_target_coverage_passed"] is True
+    assert coverage["macro_materiality_passed"] is True
+    assert coverage["ready_for_executed_ablation"] is True
+    assert coverage["active_targets_missing"] == []
+    assert coverage["materially_changed_target_paragraph_count"] >= 2
 
     candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
     assert candidate["source_model_call_id"] == model_call_id
@@ -4639,6 +4779,9 @@ def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed
     assert gate["passed"] is False
     assert gate["semantic_constraint_claims_model_reported"] is True
     assert gate["semantic_constraint_satisfaction_not_proven"] is True
+    assert gate["macro_target_coverage_passed"] is True
+    assert gate["macro_materiality_passed"] is True
+    assert gate["ready_for_executed_ablation"] is True
     assert "semantic_constraint_satisfaction_proven" in gate["failed_gates"]
 
     with connect(config.db_path) as connection:
@@ -4683,13 +4826,14 @@ def test_bounded_macro_recomposition_live_constraint_mapping_failures(
     with connect(config.db_path) as connection:
         run_id = get_latest_run(connection).id
     synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    synthesis_packet = prepare_multi_paragraph_macro_synthesis(synthesis.payload)
     clients = []
     monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
 
     result = run_bounded_macro_recomposition(
         config,
         client_name="openai",
-        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+        synthesis_packet=synthesis_packet,
         allow_live_model=True,
         api_key="stub-key",
         model="stub-live-macro",
@@ -4715,6 +4859,104 @@ def test_bounded_macro_recomposition_live_constraint_mapping_failures(
 @pytest.mark.parametrize(
     "mode, expected",
     [
+        ("missing_active_target", "active_target_mapping must contain exactly"),
+        ("unchanged_without_justification", "unchanged target requires justification"),
+    ],
+)
+def test_bounded_macro_recomposition_live_active_target_mapping_failures(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected,
+):
+    config, _failed_ablation, _pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    synthesis_packet = prepare_multi_paragraph_macro_synthesis(synthesis.payload)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        config,
+        client_name="openai",
+        synthesis_packet=synthesis_packet,
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "macro_recomposition_plan" not in result.payload["artifact_ids"]
+    with connect(config.db_path) as connection:
+        model_calls = [
+            call
+            for call in list_model_calls(connection, run_id=run_id)
+            if call.schema_name == BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name
+        ]
+    assert model_calls[0].status == MODEL_CALL_VALIDATION_FAILED
+    assert model_calls[0].parsed_output_artifact_id is None
+
+
+@pytest.mark.parametrize(
+    "mode, expected_missing",
+    [
+        ("copied_first_two", "middle_abstraction_ladder_compression"),
+        ("proof_unchanged", "proof_line_redundancy_cleanup"),
+        ("no_answer_unchanged", "no_outside_answer_pressure_preservation"),
+        ("final_only_change", "middle_abstraction_ladder_compression"),
+        ("mostly_copied", "middle_abstraction_ladder_compression"),
+    ],
+)
+def test_bounded_macro_recomposition_live_target_coverage_failures(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected_missing,
+):
+    config, _failed_ablation, _pivot_revision, _useful_revision = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    synthesis_packet = prepare_multi_paragraph_macro_synthesis(synthesis.payload)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        config,
+        client_name="openai",
+        synthesis_packet=synthesis_packet,
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "macro target coverage failed" in result.payload["message"]
+    assert expected_missing in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
+    with connect(config.db_path) as connection:
+        model_calls = [
+            call
+            for call in list_model_calls(connection, run_id=run_id)
+            if call.schema_name == BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name
+        ]
+    assert model_calls[0].status == MODEL_CALL_VALIDATION_FAILED
+    assert model_calls[0].parsed_output_artifact_id is None
+
+
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
         ("outside_rescue", "outside-rescue violation"),
         ("proof_from_outside", "proof-from-outside violation"),
         ("final_claim", "phase-shift claim"),
@@ -4733,12 +4975,13 @@ def test_bounded_macro_recomposition_live_rejects_forbidden_model_outputs(
     with connect(config.db_path) as connection:
         run_id = get_latest_run(connection).id
     synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    synthesis_packet = prepare_multi_paragraph_macro_synthesis(synthesis.payload)
     monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
 
     result = run_bounded_macro_recomposition(
         config,
         client_name="openai",
-        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+        synthesis_packet=synthesis_packet,
         allow_live_model=True,
         api_key="stub-key",
         model="stub-live-macro",
