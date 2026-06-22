@@ -1100,9 +1100,16 @@ class StubBoundedMacroRecompositionClient:
         if request.schema != BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
             raise AssertionError(f"unexpected schema: {request.schema.name}")
         prompt = json.loads(request.input_text)
+        work_order = prompt.get("work_order", {})
+        target_paragraphs = (
+            work_order.get("target_paragraphs", [])
+            if isinstance(work_order, dict)
+            else []
+        )
         payload = live_macro_payload(
             prompt.get("active_transformation_targets", []),
             target_movement=str(prompt.get("target_movement") or "middle_and_return_movement"),
+            target_paragraphs=target_paragraphs,
         )
         if self.mode == "invalid_json":
             return "{not valid json"
@@ -1129,6 +1136,35 @@ class StubBoundedMacroRecompositionClient:
             payload["replacement_section_text"] = (
                 f"{prompt['unchanged_prefix_text']}\n\n{prompt['before_section_text']}"
             )
+        elif self.mode == "conflicting_replacement_section_text":
+            payload["replacement_section_text"] = (
+                "This conflicting model blob should not be used by the controller."
+            )
+        elif self.mode == "missing_target_p002":
+            payload["target_paragraph_replacements"] = [
+                item
+                for item in payload.get("target_paragraph_replacements", [])
+                if item["target_paragraph_ref"] != "target_p002"
+            ]
+        elif self.mode == "copied_target_p002":
+            _copy_target_paragraph(payload, target_paragraphs, "target_p002")
+        elif self.mode == "copied_target_p003":
+            _copy_target_paragraph(payload, target_paragraphs, "target_p003")
+        elif self.mode == "copied_target_p004":
+            _copy_target_paragraph(payload, target_paragraphs, "target_p004")
+        elif self.mode == "mismatched_target_hash":
+            payload["target_paragraph_replacements"][0]["before_text_sha256"] = "bad-hash"
+        elif self.mode == "duplicate_target_ref":
+            payload["target_paragraph_replacements"].append(
+                dict(payload["target_paragraph_replacements"][0])
+            )
+        elif self.mode == "thesis_target_uncovered":
+            for item in payload["target_paragraph_replacements"]:
+                item["active_target_ids_covered"] = [
+                    target_id
+                    for target_id in item["active_target_ids_covered"]
+                    if target_id != "thesis_visible_proof_language_reduction"
+                ]
         elif self.mode == "missing_active_target":
             payload["active_target_mapping"] = payload["active_target_mapping"][:-1]
         elif self.mode == "unchanged_without_justification":
@@ -1174,6 +1210,7 @@ def live_macro_payload(
     active_targets: list[dict[str, object]] | None = None,
     *,
     target_movement: str = "middle_and_return_movement",
+    target_paragraphs: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     replacement = (
         "The room does not need a new witness. The ring on the wood has dried "
@@ -1226,6 +1263,9 @@ def live_macro_payload(
             for constraint_id in REQUIRED_SEMANTIC_CONSTRAINT_IDS
         ],
         "active_target_mapping": active_target_mapping_payload(active_targets),
+        "target_paragraph_replacements": target_paragraph_replacements_payload(
+            target_paragraphs or []
+        ),
         "rationale": "The bounded section shifts pressure into scene and relation.",
         "local_law_explanation": "Each local mark becomes legible through another mark.",
         "uncertainty": "medium",
@@ -1233,6 +1273,82 @@ def live_macro_payload(
             "The reader should feel the return as changed relation rather than explanation."
         ),
     }
+
+
+def target_paragraph_replacements_payload(
+    target_paragraphs: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    replacements: list[dict[str, object]] = []
+    for index, paragraph in enumerate(target_paragraphs):
+        ref = str(paragraph["target_paragraph_ref"])
+        replacements.append(
+            {
+                "target_paragraph_ref": ref,
+                "before_text_sha256": str(paragraph["before_text_sha256"]),
+                "replacement_text": target_replacement_text(ref, index),
+                "active_target_ids_covered": list(paragraph.get("active_target_ids", [])),
+                "material_change_summary": (
+                    "This paragraph is materially rewritten around its assigned active targets."
+                ),
+                "preserved_effects": list(paragraph.get("protected_effects", [])),
+                "risk_notes": "needs later ablation or internal reader-state validation",
+                "uncertainty": "medium",
+            }
+        )
+    return replacements
+
+
+def target_replacement_text(target_ref: str, index: int) -> str:
+    replacements = {
+        "target_p001": (
+            "The room does not need a witness above it. The ring dries at the edge "
+            "where the cup left pressure in the wood, and the dust under the leg "
+            "keeps the path of a shoe that is already gone. The spoon turns its dull "
+            "light toward the cracked saucer. The proof begins as those marks lean "
+            "into one another, not as a sentence placed over them."
+        ),
+        "target_p002": (
+            "No answer enters from outside the kitchen. The silence overhead closes "
+            "the room around its own evidence, so the ring, the dust, the spoon, and "
+            "the saucer have to carry the relation they made. If the line proves "
+            "anything, it proves by staying with those traces until one mark becomes "
+            "the condition for reading the next."
+        ),
+        "target_p003": (
+            "The return touches the first table without restoring it. Morning gives "
+            "back the same wood, the same dust, the same spoon beside the saucer, but "
+            "the objects now hold the crossing that passed through them. The beginning "
+            "comes back as a local field already altered by its own marks, not as a "
+            "lesson waiting outside the room."
+        ),
+        "target_p004": (
+            "The final return keeps the table ordinary while making the opening "
+            "rereadable. Morning does not solve the room; it lets the same wood, dust, "
+            "spoon, and saucer hold their changed relation together. The answer stays "
+            "inside that local field, as pressure remembered rather than announced."
+        ),
+    }
+    return replacements.get(
+        target_ref,
+        (
+            f"The target paragraph {index + 1} is recomposed through local object "
+            "relations, preserving pressure without turning the passage into summary."
+        ),
+    )
+
+
+def _copy_target_paragraph(
+    payload: dict[str, object],
+    target_paragraphs: list[dict[str, object]],
+    target_ref: str,
+) -> None:
+    before_by_ref = {
+        str(paragraph["target_paragraph_ref"]): str(paragraph["before_text"])
+        for paragraph in target_paragraphs
+    }
+    for item in payload.get("target_paragraph_replacements", []):
+        if item["target_paragraph_ref"] == target_ref:
+            item["replacement_text"] = before_by_ref[target_ref]
 
 
 def active_target_mapping_payload(
@@ -1256,8 +1372,12 @@ def active_target_mapping_payload(
             ),
             "rationale": "The model reports a bounded material transformation.",
             "uncertainty": "medium",
-            "unchanged": False,
-            "unchanged_justification": "",
+            "unchanged": str(target["target_id"]) == "preserve_reader_state_partial_gain",
+            "unchanged_justification": (
+                "Preservation is the intended result for this non-material target."
+                if str(target["target_id"]) == "preserve_reader_state_partial_gain"
+                else ""
+            ),
         }
         for target in active_targets
     ]
@@ -5377,6 +5497,23 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
     ]
     assert work_order["base_candidate_packet_id"] == chain["macro_payload"]["packet_id"]
     assert work_order["selected_candidate_text"]
+    target_paragraphs = work_order["target_paragraphs"]
+    assert target_paragraphs
+    assert {paragraph["target_paragraph_ref"] for paragraph in target_paragraphs} == {
+        "target_p001",
+        "target_p002",
+        "target_p003",
+        "target_p004",
+    }
+    for paragraph in target_paragraphs:
+        assert paragraph["before_text"]
+        assert paragraph["before_text_sha256"]
+        assert paragraph["word_count"] > 0
+        assert paragraph["active_target_ids"]
+        assert paragraph["material_change_required"] is True
+        assert paragraph["transformation_instruction"]
+        assert paragraph["protected_effects"]
+        assert paragraph["forbidden_failures"]
     assert {
         target["target_id"] for target in work_order["active_transformation_targets"]
     } == set(READER_STATE_MACRO_2_ACTIVE_TARGET_IDS)
@@ -5391,6 +5528,7 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
     diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
     coverage = diff["target_coverage_report"]
     assert coverage["macro_target_coverage_passed"] is True
+    assert coverage["controller_target_coverage_passed"] is True
     assert coverage["macro_materiality_passed"] is True
     assert coverage["active_targets_missing"] == []
     assert set(coverage["active_transformation_targets"]) == set(
@@ -5467,6 +5605,14 @@ def test_bounded_macro_recomposition_schema_is_strict_for_constraint_mapping():
     assert active_item_schema["additionalProperties"] is False
     assert "target_id" in active_item_schema["required"]
     assert "unchanged_justification" in active_item_schema["required"]
+    replacement_item_schema = schema["properties"]["target_paragraph_replacements"][
+        "items"
+    ]
+    assert replacement_item_schema["additionalProperties"] is False
+    assert "target_paragraph_ref" in replacement_item_schema["required"]
+    assert "before_text_sha256" in replacement_item_schema["required"]
+    assert "replacement_text" in replacement_item_schema["required"]
+    assert "active_target_ids_covered" in replacement_item_schema["required"]
 
 
 def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed_packet(
@@ -5575,11 +5721,112 @@ def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed
     assert final_report.refused is True
 
 
+def test_bounded_macro_recomposition_reader_state_macro_2_stubbed_openai_target_addressed_success(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["target_scope"] == READER_STATE_MACRO_2_TARGET_SCOPE
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    prompt = json.loads(clients[0].requests[0].input_text)
+    assert prompt["work_order"]["target_paragraphs"]
+
+    section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    assert section["controller_assembled_from_target_paragraph_replacements"] is True
+    assert section["model_replacement_section_text_authoritative"] is False
+    replacements = section["target_paragraph_replacements"]
+    assert {item["target_paragraph_ref"] for item in replacements} == {
+        "target_p001",
+        "target_p002",
+        "target_p003",
+        "target_p004",
+    }
+    assert all(item["before_text_sha256"] for item in replacements)
+    preserve_mapping = [
+        item
+        for item in section["active_target_mapping"]
+        if item["target_id"] == "preserve_reader_state_partial_gain"
+    ][0]
+    assert preserve_mapping["unchanged"] is True
+    assert preserve_mapping["unchanged_justification"]
+    assert "No answer enters from outside the kitchen." in section[
+        "replacement_section_text"
+    ]
+    assert "The return touches the first table" in section["replacement_section_text"]
+    coverage = section["target_coverage_report"]
+    assert coverage["macro_target_coverage_passed"] is True
+    assert coverage["controller_target_coverage_passed"] is True
+    assert coverage["model_active_target_mapping_complete"] is True
+    assert coverage["active_targets_missing"] == []
+
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert "No answer enters from outside the kitchen." in candidate["text"]
+    assert candidate["source_model_call_id"] == result.payload["model_call_ids"][0]
+    assert candidate["finalization_eligible"] is False
+    assert candidate["no_phase_shift_claim"] is True
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_controller_assembly_overrides_blob(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="conflicting_replacement_section_text",
+        ),
+    )
+
+    assert result.exit_code == 0
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert "This conflicting model blob" not in section["replacement_section_text"]
+    assert "This conflicting model blob" not in candidate["text"]
+    assert "No answer enters from outside the kitchen." in candidate["text"]
+
+
 @pytest.mark.parametrize(
     "mode, expected",
     [
-        ("copied_first_two", "proof_no_outside_answer_refinement"),
-        ("full_rewrite", "controller-owned prefix"),
+        ("missing_target_p002", "missing target paragraph replacement: target_p002"),
+        ("copied_target_p002", "proof_no_outside_answer_refinement"),
+        ("copied_target_p004", "final_return_echo_reread_strength"),
+        ("mismatched_target_hash", "before_text_sha256 mismatch"),
+        ("duplicate_target_ref", "duplicate target_paragraph_ref"),
+        ("thesis_target_uncovered", "thesis_visible_proof_language_reduction"),
     ],
 )
 def test_bounded_macro_recomposition_reader_state_macro_2_live_validation_failures(

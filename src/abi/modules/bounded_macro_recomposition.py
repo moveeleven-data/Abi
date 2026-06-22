@@ -783,7 +783,10 @@ def _prompt_for_live_macro_recomposition(
     return _canonical_json(
         {
             "task": (
-                "Propose one bounded replacement section for the controller-owned "
+                "Propose target-addressed bounded replacements for the "
+                "controller-owned middle/return movement."
+                if subject.normalized_brief.reader_state_informed
+                else "Propose one bounded replacement section for the controller-owned "
                 "middle/return movement."
             ),
             "controller_owns": [
@@ -791,6 +794,8 @@ def _prompt_for_live_macro_recomposition(
                 "base_candidate_choice",
                 "base_candidate_text",
                 "target_paragraph_indices",
+                "target_paragraph_refs",
+                "target_paragraph_before_text_hashes",
                 "before_section_text",
                 "protected_semantic_constraints",
                 "active_transformation_targets",
@@ -802,6 +807,7 @@ def _prompt_for_live_macro_recomposition(
             ],
             "model_may_own": [
                 "replacement_section_text",
+                "target_paragraph_replacements",
                 "plan wording",
                 "section plan wording",
                 "rationale",
@@ -815,6 +821,7 @@ def _prompt_for_live_macro_recomposition(
                 "full artifact text",
                 "opening or prefix rewrite",
                 "base candidate choice",
+                "before text",
                 "source packet IDs",
                 "gate pass/fail",
                 "strongest-rival defeated status",
@@ -845,13 +852,17 @@ def _prompt_for_live_macro_recomposition(
                 "rival_pressure_summary"
             ],
             "output_rule": (
-                "Return replacement_section_text only for the target movement, "
-                "not the full artifact. Include exactly one constraint_mapping "
-                "item for every protected constraint_id and exactly one "
-                "active_target_mapping item for every active target_id. Active "
-                "targets must be materially transformed unless explicitly marked "
-                "unchanged with justification, and the main active targets cannot "
-                "be satisfied by copied paragraphs."
+                "Return bounded replacements only, not the full artifact. Include "
+                "exactly one constraint_mapping item for every protected "
+                "constraint_id and exactly one active_target_mapping item for "
+                "every active target_id. For reader_state_informed_macro_2, you "
+                "must also return target_paragraph_replacements keyed by the "
+                "controller target_paragraph_ref values. Replace every target "
+                "paragraph marked material_change_required; do not copy target "
+                "paragraphs unchanged. If two active targets share a paragraph, "
+                "the paragraph replacement must satisfy both. The controller will "
+                "assemble final text and reject copied paragraphs, hash mismatches, "
+                "missing target refs, and unsupported target coverage claims."
             ),
         }
     )
@@ -1034,6 +1045,7 @@ def _build_brief_ref(subject: MacroSubject) -> dict[str, object]:
 
 def _build_work_order(subject: MacroSubject) -> dict[str, object]:
     target = _target_window(subject.base_text)
+    target_paragraphs = _target_paragraph_specs(subject, target)
     return {
         "work_order_id": f"macro_recomposition_{subject.synthesis_packet_id}",
         "source_synthesis_packet_id": subject.synthesis_packet_id,
@@ -1047,6 +1059,7 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
         "target_submovement": list(subject.normalized_brief.target_submovement),
         "target_paragraph_start_index": target.target_start_index,
         "target_paragraph_end_index": target.target_end_index,
+        "target_paragraphs": target_paragraphs,
         "before_section_text": "\n\n".join(target.original_target),
         "selected_candidate_text": subject.base_text,
         "bounded_macro_recomposition": True,
@@ -1285,6 +1298,22 @@ def _build_patch_or_section_plan(
         ),
         "worker": "macro_patch_or_section_plan_v1_fake_controller",
     }
+    if subject.normalized_brief.reader_state_informed:
+        payload.update(
+            {
+                "target_paragraph_replacements": (
+                    list(model_payload["target_paragraph_replacements"])
+                    if model_payload is not None
+                    else _controller_target_paragraph_replacements(subject, recomposed)
+                ),
+                "controller_assembled_from_target_paragraph_replacements": (
+                    model_payload is not None
+                ),
+                "model_replacement_section_text_authoritative": False
+                if model_payload is not None
+                else None,
+            }
+        )
     if model_payload is not None:
         section_plan = model_payload["section_plan"]
         if not isinstance(section_plan, dict):
@@ -1303,6 +1332,37 @@ def _build_patch_or_section_plan(
             }
         )
     return payload
+
+
+def _controller_target_paragraph_replacements(
+    subject: MacroSubject,
+    recomposed: RecomposedText,
+) -> list[dict[str, object]]:
+    specs = _target_paragraph_specs(subject, recomposed)
+    replacements: list[dict[str, object]] = []
+    for index, spec in enumerate(specs):
+        replacement_text = (
+            recomposed.replacement[index]
+            if index < len(recomposed.replacement)
+            else str(spec["before_text"])
+        )
+        replacements.append(
+            {
+                "target_paragraph_ref": spec["target_paragraph_ref"],
+                "before_text_sha256": spec["before_text_sha256"],
+                "replacement_text": replacement_text,
+                "active_target_ids_covered": list(spec["active_target_ids"]),
+                "material_change_summary": (
+                    "controller-authored deterministic replacement for active targets"
+                    if bool(spec["material_change_required"])
+                    else "controller-authored preservation target"
+                ),
+                "preserved_effects": list(spec["protected_effects"]),
+                "risk_notes": "fixture/fake target-addressed replacement; no improvement claim",
+                "uncertainty": "requires executed ablation or internal reader-state testing",
+            }
+        )
+    return replacements
 
 
 def _build_recomposed_candidate(
@@ -1636,8 +1696,11 @@ def _model_recompose_text(
     model_payload: dict[str, object],
 ) -> RecomposedText:
     target = _target_window(subject.base_text)
-    replacement_text = str(model_payload["replacement_section_text"]).strip()
-    replacement = _paragraphs(replacement_text)
+    if subject.normalized_brief.reader_state_informed:
+        replacement = _target_addressed_replacement_paragraphs(subject, model_payload)
+    else:
+        replacement_text = str(model_payload["replacement_section_text"]).strip()
+        replacement = _paragraphs(replacement_text)
     text = "\n\n".join([*target.unchanged_prefix, *replacement])
     return RecomposedText(
         text=text,
@@ -1765,6 +1828,59 @@ def _active_target_descriptions() -> dict[str, str]:
     }
 
 
+def _target_paragraph_specs(
+    subject: MacroSubject,
+    target: RecomposedText,
+) -> list[dict[str, object]]:
+    paragraph_refs = _target_paragraph_refs(target.original_target)
+    target_ref_by_id = _active_target_ref_map(
+        paragraph_refs,
+        subject.normalized_brief.active_transformation_target_ids,
+    )
+    descriptions = _active_target_descriptions()
+    active_ids_by_ref: dict[str, list[str]] = {ref: [] for ref in paragraph_refs}
+    for target_id in subject.normalized_brief.active_transformation_target_ids:
+        target_ref = target_ref_by_id[target_id]
+        refs = paragraph_refs if target_ref == "target_section" else [target_ref]
+        for ref in refs:
+            active_ids_by_ref.setdefault(ref, []).append(target_id)
+
+    specs: list[dict[str, object]] = []
+    material_ids = set(subject.normalized_brief.material_required_target_ids)
+    protected = list(subject.normalized_brief.protected_effects)
+    forbidden = list(subject.normalized_brief.forbidden_changes)
+    for index, before_text in enumerate(target.original_target):
+        ref = paragraph_refs[index]
+        active_ids = _unique(active_ids_by_ref.get(ref, []))
+        material_change_required = any(target_id in material_ids for target_id in active_ids)
+        instruction_parts = [
+            descriptions[target_id]
+            for target_id in active_ids
+            if target_id in descriptions and target_id in material_ids
+        ]
+        if not instruction_parts:
+            instruction_parts = [
+                descriptions[target_id]
+                for target_id in active_ids
+                if target_id in descriptions
+            ]
+        specs.append(
+            {
+                "target_paragraph_ref": ref,
+                "before_text": before_text,
+                "before_text_sha256": sha256_text(before_text),
+                "word_count": len(_words(before_text)),
+                "active_target_ids": active_ids,
+                "material_change_required": material_change_required,
+                "transformation_instruction": " ".join(instruction_parts)
+                or "Preserve this paragraph unless the controller assigned a material target.",
+                "protected_effects": protected,
+                "forbidden_failures": forbidden,
+            }
+        )
+    return specs
+
+
 def _validate_live_macro_payload(
     *,
     subject: MacroSubject,
@@ -1777,11 +1893,19 @@ def _validate_live_macro_payload(
         subject.normalized_brief.active_transformation_target_ids,
     )
     _validate_forbidden_live_macro_claims(payload)
-    _validate_replacement_section(subject, payload)
+    if subject.normalized_brief.reader_state_informed:
+        replacement_paragraphs = _target_addressed_replacement_paragraphs(
+            subject,
+            payload,
+        )
+        _validate_replacement_text(subject, "\n\n".join(replacement_paragraphs))
+    else:
+        _validate_replacement_section(subject, payload)
+        replacement_paragraphs = _paragraphs(str(payload["replacement_section_text"]))
     coverage_report = _build_target_coverage_report(
         subject,
         _target_window(subject.base_text),
-        _paragraphs(str(payload["replacement_section_text"])),
+        replacement_paragraphs,
         model_payload=payload,
     )
     if not coverage_report["macro_target_coverage_passed"]:
@@ -2065,8 +2189,11 @@ def _build_target_coverage_report(
         "active_targets_missing": active_targets_missing,
         "unchanged_target_paragraphs_with_justification": unchanged_with_justification,
         "macro_target_coverage_passed": macro_target_coverage_passed,
+        "controller_target_coverage_passed": macro_target_coverage_passed,
         "macro_materiality_passed": macro_materiality_passed,
         "active_target_mapping_complete": bool(model_payload)
+        and _active_target_mapping_complete_for_subject(subject, model_payload),
+        "model_active_target_mapping_complete": bool(model_payload)
         and _active_target_mapping_complete_for_subject(subject, model_payload),
         "ready_for_executed_ablation": macro_target_coverage_passed,
     }
@@ -2193,11 +2320,98 @@ def _active_target_ref_map(
     return {target_id: default_refs.get(target_id, "target_section") for target_id in active_target_ids}
 
 
+def _target_addressed_replacement_paragraphs(
+    subject: MacroSubject,
+    payload: dict[str, object],
+) -> list[str]:
+    target = _target_window(subject.base_text)
+    specs = _target_paragraph_specs(subject, target)
+    spec_by_ref = {str(spec["target_paragraph_ref"]): spec for spec in specs}
+    replacements = payload.get("target_paragraph_replacements")
+    if not isinstance(replacements, list):
+        raise ModelValidationError(
+            "target_paragraph_replacements is required for reader_state_informed_macro_2"
+        )
+
+    material_target_ids = set(subject.normalized_brief.material_required_target_ids)
+    material_refs = {
+        str(spec["target_paragraph_ref"])
+        for spec in specs
+        if bool(spec["material_change_required"])
+    }
+    seen_refs: dict[str, dict[str, object]] = {}
+    covered_material_targets: set[str] = set()
+    for item in replacements:
+        if not isinstance(item, dict):
+            raise ModelValidationError("target_paragraph_replacements entries must be objects")
+        ref = str(item.get("target_paragraph_ref") or "")
+        if ref not in spec_by_ref:
+            raise ModelValidationError(f"unsupported target_paragraph_ref: {ref}")
+        if ref in seen_refs:
+            raise ModelValidationError(f"duplicate target_paragraph_ref: {ref}")
+        spec = spec_by_ref[ref]
+        before_hash = str(item.get("before_text_sha256") or "")
+        if before_hash != spec["before_text_sha256"]:
+            raise ModelValidationError(
+                f"target_paragraph_replacements[{ref}] before_text_sha256 mismatch"
+            )
+        replacement_text = str(item.get("replacement_text") or "").strip()
+        if not replacement_text:
+            raise ModelValidationError(
+                f"target_paragraph_replacements[{ref}] replacement_text is empty"
+            )
+        active_ids_covered = _string_tuple(item.get("active_target_ids_covered"))
+        allowed_target_ids = set(_string_tuple(spec.get("active_target_ids")))
+        unsupported = sorted(set(active_ids_covered) - allowed_target_ids)
+        if unsupported:
+            raise ModelValidationError(
+                f"target_paragraph_replacements[{ref}] covers unassigned active target IDs: "
+                + ", ".join(unsupported)
+            )
+        before_words = _normalized_words(str(spec["before_text"]))
+        after_words = _normalized_words(replacement_text)
+        materially_changed = _materially_changed_words(before_words, after_words)
+        if bool(spec["material_change_required"]) and not materially_changed:
+            required_ids = sorted(allowed_target_ids & material_target_ids)
+            raise ModelValidationError(
+                f"target_paragraph_replacements[{ref}] copied or insufficiently changed "
+                f"for material targets: {', '.join(required_ids)}"
+            )
+        if materially_changed:
+            covered_material_targets.update(
+                target_id for target_id in active_ids_covered if target_id in material_target_ids
+            )
+        seen_refs[ref] = item
+
+    missing_refs = sorted(material_refs - set(seen_refs))
+    if missing_refs:
+        raise ModelValidationError(
+            "missing target paragraph replacement: " + ", ".join(missing_refs)
+        )
+    missing_targets = sorted(material_target_ids - covered_material_targets)
+    if missing_targets:
+        raise ModelValidationError(
+            "target paragraph replacements do not cover material active targets: "
+            + ", ".join(missing_targets)
+        )
+
+    return [
+        str(seen_refs[ref]["replacement_text"]).strip()
+        if ref in seen_refs
+        else str(spec_by_ref[ref]["before_text"])
+        for ref in _target_paragraph_refs(target.original_target)
+    ]
+
+
 def _validate_replacement_section(
     subject: MacroSubject,
     payload: dict[str, object],
 ) -> None:
     replacement_text = str(payload.get("replacement_section_text") or "").strip()
+    _validate_replacement_text(subject, replacement_text)
+
+
+def _validate_replacement_text(subject: MacroSubject, replacement_text: str) -> None:
     if not replacement_text:
         raise ModelValidationError("replacement_section_text must not be empty")
     target = _target_window(subject.base_text)

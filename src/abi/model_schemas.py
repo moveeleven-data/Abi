@@ -2174,6 +2174,28 @@ def bounded_macro_recomposition_json_schema() -> dict[str, Any]:
             "unchanged_justification",
         ],
     )
+    target_paragraph_replacement_item = _object_schema(
+        {
+            "target_paragraph_ref": {"type": "string"},
+            "before_text_sha256": {"type": "string"},
+            "replacement_text": {"type": "string"},
+            "active_target_ids_covered": _string_array_schema(),
+            "material_change_summary": {"type": "string"},
+            "preserved_effects": _string_array_schema(),
+            "risk_notes": {"type": "string"},
+            "uncertainty": {"type": "string"},
+        },
+        [
+            "target_paragraph_ref",
+            "before_text_sha256",
+            "replacement_text",
+            "active_target_ids_covered",
+            "material_change_summary",
+            "preserved_effects",
+            "risk_notes",
+            "uncertainty",
+        ],
+    )
     return _schema_with_properties(
         {
             "replacement_section_text": {"type": "string"},
@@ -2200,6 +2222,10 @@ def bounded_macro_recomposition_json_schema() -> dict[str, Any]:
             "active_target_mapping": {
                 "type": "array",
                 "items": active_target_mapping_item,
+            },
+            "target_paragraph_replacements": {
+                "type": "array",
+                "items": target_paragraph_replacement_item,
             },
             "rationale": {"type": "string"},
             "local_law_explanation": {"type": "string"},
@@ -3782,6 +3808,37 @@ def _validate_bounded_macro_recomposition(payload: dict[str, Any]) -> dict[str, 
         )
         validated["unchanged"] = item["unchanged"]
         active_target_mapping.append(validated)
+    target_paragraph_replacements = []
+    if "target_paragraph_replacements" in payload:
+        _require_object_list(payload, "target_paragraph_replacements")
+        for index, item in enumerate(payload["target_paragraph_replacements"]):
+            validated = _validate_object(
+                item,
+                f"target_paragraph_replacements[{index}]",
+                (
+                    "target_paragraph_ref",
+                    "before_text_sha256",
+                    "replacement_text",
+                    "material_change_summary",
+                    "risk_notes",
+                    "uncertainty",
+                ),
+            )
+            _require_string_list(
+                item,
+                "active_target_ids_covered",
+                field_prefix=f"target_paragraph_replacements[{index}].",
+            )
+            _require_string_list(
+                item,
+                "preserved_effects",
+                field_prefix=f"target_paragraph_replacements[{index}].",
+            )
+            validated["active_target_ids_covered"] = list(
+                item["active_target_ids_covered"]
+            )
+            validated["preserved_effects"] = list(item["preserved_effects"])
+            target_paragraph_replacements.append(validated)
     for key in (
         "rationale",
         "local_law_explanation",
@@ -3789,7 +3846,7 @@ def _validate_bounded_macro_recomposition(payload: dict[str, Any]) -> dict[str, 
         "predicted_reader_state_effect",
     ):
         _require_type(payload, key, str)
-    return {
+    result = {
         "replacement_section_text": payload["replacement_section_text"],
         "macro_recomposition_plan": {
             "plan_summary": macro_plan["plan_summary"],
@@ -3808,6 +3865,9 @@ def _validate_bounded_macro_recomposition(payload: dict[str, Any]) -> dict[str, 
         "uncertainty": payload["uncertainty"],
         "predicted_reader_state_effect": payload["predicted_reader_state_effect"],
     }
+    if "target_paragraph_replacements" in payload:
+        result["target_paragraph_replacements"] = target_paragraph_replacements
+    return result
 
 
 def _validate_revision_span_ref(payload: dict[str, Any], label: str) -> dict[str, str]:
