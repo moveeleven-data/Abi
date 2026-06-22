@@ -1453,6 +1453,43 @@ def assert_strict_object_schema(schema: object, *, path: str) -> None:
             assert_strict_object_schema(value, path=f"{path}[{index}]")
 
 
+def assert_openai_strict_object_schema(schema: object, *, path: str) -> None:
+    if isinstance(schema, dict):
+        if schema.get("type") == "object":
+            assert schema.get("additionalProperties") is False, path
+            properties = schema.get("properties")
+            required = schema.get("required")
+            assert isinstance(properties, dict), path
+            assert isinstance(required, list), path
+            assert set(required) == set(properties), path
+        if "properties" in schema:
+            for key, value in schema["properties"].items():
+                assert_openai_strict_object_schema(
+                    value,
+                    path=f"{path}.properties.{key}",
+                )
+        if "items" in schema:
+            assert_openai_strict_object_schema(
+                schema["items"],
+                path=f"{path}.items",
+            )
+        for key in ("anyOf", "allOf", "oneOf"):
+            for index, value in enumerate(schema.get(key, [])):
+                assert_openai_strict_object_schema(
+                    value,
+                    path=f"{path}.{key}[{index}]",
+                )
+        for key in ("$defs", "definitions"):
+            for name, value in schema.get(key, {}).items():
+                assert_openai_strict_object_schema(
+                    value,
+                    path=f"{path}.{key}.{name}",
+                )
+    elif isinstance(schema, list):
+        for index, value in enumerate(schema):
+            assert_openai_strict_object_schema(value, path=f"{path}[{index}]")
+
+
 def assert_valid_work_order_payload(
     *,
     work_order: dict[str, object],
@@ -5598,21 +5635,45 @@ def test_bounded_macro_recomposition_schema_is_strict_for_constraint_mapping():
     schema = json_schema_for_worker_schema(BOUNDED_MACRO_RECOMPOSITION_SCHEMA)
 
     assert_strict_object_schema(schema, path=BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name)
+    assert_openai_strict_object_schema(
+        schema,
+        path=BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name,
+    )
+    assert "target_paragraph_replacements" in schema["required"]
     item_schema = schema["properties"]["constraint_mapping"]["items"]
     assert item_schema["additionalProperties"] is False
+    assert set(item_schema["required"]) == set(item_schema["properties"])
     assert "supporting_replacement_excerpt" in item_schema["required"]
     active_item_schema = schema["properties"]["active_target_mapping"]["items"]
     assert active_item_schema["additionalProperties"] is False
+    assert set(active_item_schema["required"]) == set(active_item_schema["properties"])
     assert "target_id" in active_item_schema["required"]
     assert "unchanged_justification" in active_item_schema["required"]
     replacement_item_schema = schema["properties"]["target_paragraph_replacements"][
         "items"
     ]
     assert replacement_item_schema["additionalProperties"] is False
+    assert set(replacement_item_schema["required"]) == set(
+        replacement_item_schema["properties"]
+    )
     assert "target_paragraph_ref" in replacement_item_schema["required"]
     assert "before_text_sha256" in replacement_item_schema["required"]
     assert "replacement_text" in replacement_item_schema["required"]
     assert "active_target_ids_covered" in replacement_item_schema["required"]
+
+    parsed_macro_1_payload = parse_and_validate_structured_output(
+        dump_json(live_macro_payload()),
+        BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+    )
+    assert parsed_macro_1_payload["target_paragraph_replacements"] == []
+
+    missing_targets_payload = live_macro_payload()
+    del missing_targets_payload["target_paragraph_replacements"]
+    with pytest.raises(ModelValidationError, match="target_paragraph_replacements"):
+        parse_and_validate_structured_output(
+            dump_json(missing_targets_payload),
+            BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+        )
 
 
 def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed_packet(

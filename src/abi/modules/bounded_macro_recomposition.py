@@ -862,7 +862,9 @@ def _prompt_for_live_macro_recomposition(
                 "paragraphs unchanged. If two active targets share a paragraph, "
                 "the paragraph replacement must satisfy both. The controller will "
                 "assemble final text and reject copied paragraphs, hash mismatches, "
-                "missing target refs, and unsupported target coverage claims."
+                "missing target refs, and unsupported target coverage claims. For "
+                "non-reader-state macro recomposition, return "
+                "target_paragraph_replacements as an empty array."
             ),
         }
     )
