@@ -68,7 +68,11 @@ from abi.modules.ablation_informed_revision import (
 )
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
+    REVISION_PACKET_KIND_ABLATION_INFORMED,
+    REVISION_PACKET_KIND_AUTONOMOUS,
+    REVISION_PACKET_KIND_BOUNDED_MACRO,
     _build_comparison_consistency_report,
+    _load_subject,
     run_executed_ablation,
 )
 from abi.modules.internal_reader_lab import FakeInternalReaderLabModelClient, run_internal_reader_lab
@@ -334,6 +338,24 @@ def build_fake_evidence_synthesis_chain(tmp_path: Path):
         _make_pivot_packet_failed,
     )
     return config, failed_ablation.payload, pivot_revision.payload, revision_payload
+
+
+def build_fake_bounded_macro_recomposition_packet(tmp_path: Path):
+    config, _failed_ablation, _pivot_revision, _revision_payload = (
+        build_fake_evidence_synthesis_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        run_id = get_latest_run(connection).id
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    macro = run_bounded_macro_recomposition(
+        config,
+        client_name="fake",
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+    assert macro.exit_code == 0
+    assert macro.payload["accepted"] is True
+    return config, macro.payload
 
 
 def revision_stub_factory(
@@ -3002,6 +3024,242 @@ def test_executed_ablation_accepts_ablation_informed_revision_packet(tmp_path):
     assert gate["final_gates_marked_passed"] == []
     assert gate["phase_shift_claim"] is False
     assert gate["not_human_validated"] is True
+
+
+def test_normalized_ablation_adapter_identifies_autonomous_revision_packet(tmp_path):
+    config, revision_payload = build_fake_revision_packet(tmp_path, with_rival=True)
+
+    with connect(config.db_path) as connection:
+        subject = _load_subject(connection, Path(str(revision_payload["packet_dir"])))
+
+    assert subject.subject_packet_kind == REVISION_PACKET_KIND_AUTONOMOUS
+    assert subject.normalized_subject_kind == REVISION_PACKET_KIND_AUTONOMOUS
+    assert subject.candidate_text
+    assert subject.candidate_text_sha256 == sha256_text(subject.candidate_text)
+    assert subject.target_scope == "revision_changed_spans"
+    assert subject.no_phase_shift_claim is True
+
+
+def test_normalized_ablation_adapter_identifies_ablation_informed_packet(tmp_path):
+    config, revision_payload = build_fake_ablation_informed_revision_packet(tmp_path)
+
+    with connect(config.db_path) as connection:
+        subject = _load_subject(connection, Path(str(revision_payload["packet_dir"])))
+
+    assert subject.subject_packet_kind == REVISION_PACKET_KIND_ABLATION_INFORMED
+    assert subject.normalized_subject_kind == REVISION_PACKET_KIND_ABLATION_INFORMED
+    assert subject.ready_for_executed_ablation is True
+    assert subject.target_scope == "cycle2_changed_spans"
+    assert subject.changed_region_refs
+    assert subject.no_phase_shift_claim is True
+
+
+def test_normalized_ablation_adapter_identifies_bounded_macro_packet(tmp_path):
+    config, macro_payload = build_fake_bounded_macro_recomposition_packet(tmp_path)
+
+    with connect(config.db_path) as connection:
+        subject = _load_subject(connection, Path(str(macro_payload["packet_dir"])))
+
+    assert subject.subject_packet_kind == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert subject.normalized_subject_kind == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert subject.ready_for_executed_ablation is True
+    assert subject.target_scope == "macro_target_movement"
+    assert subject.target_movement == "middle_and_return_movement"
+    assert subject.base_candidate_packet_id
+    assert subject.macro_target_coverage["macro_target_coverage_passed"] is True
+    assert subject.macro_target_coverage["macro_materiality_passed"] is True
+
+
+def test_executed_ablation_accepts_bounded_macro_recomposition_packet(tmp_path):
+    config, macro_payload = build_fake_bounded_macro_recomposition_packet(tmp_path)
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=macro_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["revision_packet_kind"] == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert result.payload["normalized_subject_kind"] == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert result.payload["counts"]["model_calls"] == 0
+
+    subject = read_payload(result.payload["artifact_paths"]["executed_ablation_subject_manifest"])
+    assert subject["subject_packet_kind"] == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert subject["normalized_subject_kind"] == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert subject["target_movement"] == "middle_and_return_movement"
+    assert subject["readiness"]["ready_for_executed_ablation"] is True
+    assert subject["readiness"]["no_phase_shift_claim"] is True
+    assert subject["readiness"]["finalization_eligible"] is False
+    assert subject["macro_target_coverage"]["macro_target_coverage_passed"] is True
+
+    variants = read_payload(result.payload["artifact_paths"]["actual_ablation_variant_set"])
+    assert variants["source_subject_packet_kind"] == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert variants["source_macro_packet_id"] == macro_payload["packet_id"]
+    assert variants["target_movement"] == "middle_and_return_movement"
+    assert variants["macro_changed_region_refs"]
+    macro_countable_ops = {
+        "operation_revert_full_macro_section_to_base",
+        "operation_isolate_proof_no_outside_answer_region",
+        "operation_flatten_macro_to_summary_or_restore_return_echo",
+    }
+    assert {
+        variant["operation_id"]
+        for variant in variants["variants"]
+        if variant["evidence_countable"]
+    } == macro_countable_ops
+    for variant in variants["variants"]:
+        assert variant["source_subject_packet_kind"] == REVISION_PACKET_KIND_BOUNDED_MACRO
+        assert variant["source_macro_packet_id"] == macro_payload["packet_id"]
+        assert variant["target_movement"] == "middle_and_return_movement"
+        assert variant["variant_text_sha256"]
+    controls = [
+        variant
+        for variant in variants["variants"]
+        if variant["operation_id"]
+        in {
+            "operation_no_op_control",
+            "operation_mismatch_control",
+            "operation_planned_probe_only",
+        }
+    ]
+    assert controls
+    assert all(not variant["evidence_countable"] for variant in controls)
+
+    gate = read_payload(result.payload["artifact_paths"]["executed_ablation_gate_report"])
+    assert gate["eligible"] is False
+    assert gate["final_gates_marked_passed"] == []
+    assert gate["phase_shift_claim"] is False
+
+    with connect(config.db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=result.payload["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+def test_executed_ablation_refuses_invalid_bounded_macro_packets(tmp_path):
+    config, macro_payload = build_fake_bounded_macro_recomposition_packet(tmp_path)
+    valid_packet_dir = Path(str(macro_payload["packet_dir"]))
+
+    def _remove(filename):
+        def _mutate(packet_dir: Path) -> None:
+            (packet_dir / filename).unlink()
+
+        return _mutate
+
+    def _rewrite(filename, mutator):
+        def _mutate(packet_dir: Path) -> None:
+            rewrite_payload(packet_dir / filename, mutator)
+
+        return _mutate
+
+    cases = [
+        (
+            "missing_packet",
+            _remove("macro_recomposition_packet.json"),
+            "missing macro_recomposition_packet.json",
+        ),
+        (
+            "missing_candidate",
+            _remove("macro_recomposed_candidate_text.json"),
+            "missing macro_recomposed_candidate_text.json",
+        ),
+        (
+            "missing_diff",
+            _remove("macro_recomposition_diff_report.json"),
+            "missing macro_recomposition_diff_report.json",
+        ),
+        (
+            "missing_gate",
+            _remove("macro_recomposition_gate_report.json"),
+            "missing macro_recomposition_gate_report.json",
+        ),
+        (
+            "not_bounded",
+            _rewrite(
+                "macro_recomposed_candidate_text.json",
+                lambda payload: payload.update({"bounded_macro_recomposition": False}),
+            ),
+            "bounded_macro_recomposition must be true",
+        ),
+        (
+            "full_rewrite",
+            _rewrite(
+                "macro_recomposed_candidate_text.json",
+                lambda payload: payload.update({"full_rewrite": True}),
+            ),
+            "full_rewrite must be false",
+        ),
+        (
+            "coverage_false",
+            _rewrite(
+                "macro_recomposition_diff_report.json",
+                lambda payload: payload["target_coverage_report"].update(
+                    {"macro_target_coverage_passed": False}
+                ),
+            ),
+            "target_coverage_report.macro_target_coverage_passed",
+        ),
+        (
+            "materiality_false",
+            _rewrite(
+                "macro_recomposition_diff_report.json",
+                lambda payload: payload["target_coverage_report"].update(
+                    {"macro_materiality_passed": False}
+                ),
+            ),
+            "target_coverage_report.macro_materiality_passed",
+        ),
+        (
+            "not_ready",
+            _rewrite(
+                "macro_recomposition_diff_report.json",
+                lambda payload: payload["target_coverage_report"].update(
+                    {"ready_for_executed_ablation": False}
+                ),
+            ),
+            "target_coverage_report.ready_for_executed_ablation",
+        ),
+    ]
+
+    for case_name, mutate, expected in cases:
+        invalid_packet = tmp_path / f"invalid_macro_{case_name}"
+        shutil.copytree(valid_packet_dir, invalid_packet)
+        mutate(invalid_packet)
+
+        result = run_executed_ablation(
+            config,
+            client_name="fake",
+            revision_packet=invalid_packet,
+        )
+
+        assert result.exit_code == 1, case_name
+        assert result.payload["refused"] is True, case_name
+        assert expected in result.payload["message"], case_name
+        assert result.payload["counts"]["model_calls"] == 0, case_name
+
+
+def test_executed_ablation_openai_guard_refuses_bounded_macro_packet(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    config, macro_payload = build_fake_bounded_macro_recomposition_packet(tmp_path)
+
+    result = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=macro_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "--allow-live-model" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
 
 
 def test_executed_ablation_refuses_ablation_informed_packet_missing_cycle2_packet(tmp_path):

@@ -50,13 +50,24 @@ EXECUTED_ABLATION_ARTIFACT_TYPES = (
     "executed_ablation_packet",
 )
 
+EXECUTED_ABLATION_MACRO_OPERATION_IDS = (
+    "operation_revert_full_macro_section_to_base",
+    "operation_isolate_proof_no_outside_answer_region",
+    "operation_flatten_macro_to_summary_or_restore_return_echo",
+)
+
+EXECUTED_ABLATION_CONTROL_OPERATION_IDS = (
+    "operation_no_op_control",
+    "operation_mismatch_control",
+    "operation_planned_probe_only",
+)
+
 EXECUTED_ABLATION_ALLOWED_OPERATION_IDS = (
     "operation_revert_applied_patch",
     "operation_embodiment_preserving_repair",
     "operation_record_label_compression",
-    "operation_no_op_control",
-    "operation_mismatch_control",
-    "operation_planned_probe_only",
+    *EXECUTED_ABLATION_MACRO_OPERATION_IDS,
+    *EXECUTED_ABLATION_CONTROL_OPERATION_IDS,
 )
 EXECUTED_ABLATION_ALLOWED_VARIANT_IDS = tuple(
     f"executed_ablation_variant_{index:03d}" for index in range(1, 7)
@@ -75,6 +86,7 @@ EXECUTED_ABLATION_PROVENANCE_TOKENS = (
 
 REVISION_PACKET_KIND_AUTONOMOUS = "autonomous_revision"
 REVISION_PACKET_KIND_ABLATION_INFORMED = "ablation_informed_revision"
+REVISION_PACKET_KIND_BOUNDED_MACRO = "bounded_macro_recomposition"
 
 ABLATION_INFORMED_REQUIRED_FILES = (
     "cycle2_packet.json",
@@ -82,6 +94,17 @@ ABLATION_INFORMED_REQUIRED_FILES = (
     "cycle2_revision_diff_report.json",
     "cycle2_applied_patch_ledger.json",
     "cycle2_gate_report.json",
+)
+
+BOUNDED_MACRO_REQUIRED_FILES = (
+    "macro_recomposition_packet.json",
+    "macro_recomposed_candidate_text.json",
+    "macro_recomposition_diff_report.json",
+    "macro_recomposition_gate_report.json",
+    "macro_patch_or_section_plan.json",
+    "macro_rival_pressure_check.json",
+    "protected_effects_and_forbidden_changes.json",
+    "macro_recomposition_work_order.json",
 )
 
 
@@ -116,6 +139,67 @@ class ExecutedAblationSubject:
     revision_artifacts: dict[str, ArtifactRecord]
     revision_payloads: dict[str, dict[str, Any]]
     source_texts: tuple[SourceText, ...]
+    base_candidate_text: str | None = None
+    base_candidate_text_sha256: str | None = None
+    base_candidate_packet_id: str | None = None
+    target_scope: str = "candidate_text"
+    target_movement: str | None = None
+    changed_region_refs: tuple[str, ...] = ()
+    changed_region_before_text: str = ""
+    changed_region_after_text: str = ""
+    readiness_payload: dict[str, Any] | None = None
+    strongest_rival_pressure_preserved: bool = True
+    finalization_eligible: bool = False
+    not_finalization_eligible: bool = True
+    source_fixture_only: bool = False
+    source_model_call_ids: tuple[str, ...] = ()
+    protected_effects: tuple[str, ...] = ()
+    forbidden_changes: tuple[str, ...] = ()
+    semantic_constraint_mapping: tuple[dict[str, Any], ...] = ()
+    macro_target_coverage: dict[str, Any] | None = None
+    source_packet_refs: dict[str, Any] | None = None
+
+    @property
+    def subject_packet_kind(self) -> str:
+        return self.revision_packet_kind
+
+    @property
+    def normalized_subject_kind(self) -> str:
+        return self.subject_packet_kind
+
+    @property
+    def subject_packet_dir(self) -> Path:
+        return self.revision_packet_dir
+
+    @property
+    def subject_packet_id(self) -> str:
+        return self.revision_packet_id
+
+    @property
+    def subject_artifact_id(self) -> str | None:
+        return self.revision_packet_artifact_id
+
+    @property
+    def candidate_text(self) -> str:
+        return self.revised_text
+
+    @property
+    def candidate_text_sha256(self) -> str:
+        payload_hash = self.revision_payloads["revised_candidate_text"].get("text_sha256")
+        return str(payload_hash or sha256_text(self.candidate_text))
+
+    @property
+    def diff_payload(self) -> dict[str, Any]:
+        return self.revision_payloads["revision_diff_report"]
+
+    @property
+    def gate_payload(self) -> dict[str, Any]:
+        return self.revision_payloads["autonomous_closed_loop_gate_report"]
+
+    @property
+    def no_phase_shift_claim(self) -> bool:
+        candidate = self.revision_payloads["revised_candidate_text"]
+        return candidate.get("no_phase_shift_claim") is True
 
     @property
     def original_candidate(self) -> SourceText:
@@ -149,6 +233,9 @@ class ExecutedAblationSubject:
 
 class ExecutedAblationError(ValueError):
     """Raised when executed ablation evidence is internally inconsistent."""
+
+
+NormalizedAblationSubject = ExecutedAblationSubject
 
 
 def run_executed_ablation(
@@ -708,6 +795,11 @@ def _build_subject_manifest(
     return {
         "worker": "executed_ablation_subject_manifest_v1",
         "run_id": subject.run_id,
+        "subject_packet_kind": subject.subject_packet_kind,
+        "normalized_subject_kind": subject.subject_packet_kind,
+        "subject_packet_id": subject.subject_packet_id,
+        "subject_packet_dir": str(subject.subject_packet_dir),
+        "subject_artifact_id": subject.subject_artifact_id,
         "revision_packet_kind": subject.revision_packet_kind,
         "revision_packet_id": subject.revision_packet_id,
         "revision_packet_dir": str(subject.revision_packet_dir),
@@ -717,6 +809,36 @@ def _build_subject_manifest(
         "ready_for_executed_ablation": subject.ready_for_executed_ablation,
         "source_packet_id": subject.source_packet_id,
         "source_packet_dir": str(subject.source_packet_dir),
+        "source_packet_refs": dict(subject.source_packet_refs or {}),
+        "candidate_text_sha256": subject.candidate_text_sha256,
+        "base_candidate_packet_id": subject.base_candidate_packet_id,
+        "base_candidate_text_sha256": subject.base_candidate_text_sha256,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "changed_region_refs": list(subject.changed_region_refs),
+        "changed_region_before_text_sha256": (
+            sha256_text(subject.changed_region_before_text)
+            if subject.changed_region_before_text
+            else None
+        ),
+        "changed_region_after_text_sha256": (
+            sha256_text(subject.changed_region_after_text)
+            if subject.changed_region_after_text
+            else None
+        ),
+        "readiness": {
+            "ready_for_executed_ablation": subject.ready_for_executed_ablation,
+            "strongest_rival_pressure_preserved": subject.strongest_rival_pressure_preserved,
+            "finalization_eligible": subject.finalization_eligible,
+            "not_finalization_eligible": subject.not_finalization_eligible,
+            "no_phase_shift_claim": subject.no_phase_shift_claim,
+            "fixture_only": subject.source_fixture_only,
+        },
+        "source_model_call_ids": list(subject.source_model_call_ids),
+        "protected_effects": list(subject.protected_effects),
+        "forbidden_changes": list(subject.forbidden_changes),
+        "semantic_constraint_mapping": list(subject.semantic_constraint_mapping),
+        "macro_target_coverage": subject.macro_target_coverage,
         "revision_artifact_ids": {
             artifact_type: artifact.id
             for artifact_type, artifact in subject.revision_artifacts.items()
@@ -763,6 +885,8 @@ def _build_subject_manifest(
 
 
 def _build_work_order(subject: ExecutedAblationSubject, *, fixture_only: bool) -> dict[str, Any]:
+    if subject.revision_packet_kind == REVISION_PACKET_KIND_BOUNDED_MACRO:
+        return _build_bounded_macro_work_order(subject, fixture_only=fixture_only)
     if subject.revision_packet_kind == REVISION_PACKET_KIND_ABLATION_INFORMED:
         return _build_ablation_informed_work_order(subject, fixture_only=fixture_only)
     work_order = subject.revision_payloads["autonomous_revision_work_order"]
@@ -773,6 +897,8 @@ def _build_work_order(subject: ExecutedAblationSubject, *, fixture_only: bool) -
     return {
         "worker": "executed_ablation_work_order_v1_controller",
         "controller_owned": True,
+        "subject_packet_kind": subject.subject_packet_kind,
+        "normalized_subject_kind": subject.subject_packet_kind,
         "source_revision_packet_kind": subject.revision_packet_kind,
         "source_revision_packet_dir": str(subject.revision_packet_dir),
         "source_revision_packet_id": subject.revision_packet_id,
@@ -834,6 +960,74 @@ def _build_work_order(subject: ExecutedAblationSubject, *, fixture_only: bool) -
     }
 
 
+def _build_bounded_macro_work_order(
+    subject: ExecutedAblationSubject,
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    diff = subject.revision_payloads["macro_recomposition_diff_report"]
+    changed_span_ids = [str(span["changed_span_id"]) for span in diff["changed_spans"]]
+    return {
+        "worker": "executed_ablation_work_order_v1_controller",
+        "controller_owned": True,
+        "subject_packet_kind": subject.subject_packet_kind,
+        "normalized_subject_kind": subject.subject_packet_kind,
+        "source_revision_packet_kind": subject.revision_packet_kind,
+        "source_subject_packet_kind": subject.subject_packet_kind,
+        "source_revision_packet_dir": str(subject.revision_packet_dir),
+        "source_revision_packet_id": subject.revision_packet_id,
+        "source_macro_packet_dir": str(subject.subject_packet_dir),
+        "source_macro_packet_id": subject.subject_packet_id,
+        "source_revision_artifact_ids": {
+            artifact_type: artifact.id
+            for artifact_type, artifact in subject.revision_artifacts.items()
+        },
+        "original_candidate_reference": _text_ref(subject.original_candidate),
+        "revised_candidate_reference": {
+            "artifact_id": subject.revision_artifacts["revised_candidate_text"].id,
+            "text_sha256": subject.candidate_text_sha256,
+        },
+        "base_candidate_reference": {
+            "base_candidate_packet_id": subject.base_candidate_packet_id,
+            "base_candidate_text_sha256": subject.base_candidate_text_sha256,
+        },
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "macro_changed_region_refs": list(subject.changed_region_refs),
+        "macro_diff_changed_span_ids": changed_span_ids,
+        "source_before_text_sha256": (
+            sha256_text(subject.changed_region_before_text)
+            if subject.changed_region_before_text
+            else None
+        ),
+        "source_after_text_sha256": (
+            sha256_text(subject.changed_region_after_text)
+            if subject.changed_region_after_text
+            else None
+        ),
+        "macro_target_coverage": subject.macro_target_coverage,
+        "protected_effects": list(subject.protected_effects),
+        "forbidden_changes": list(subject.forbidden_changes),
+        "semantic_constraint_mapping": list(subject.semantic_constraint_mapping),
+        "strongest_rival_reference": (
+            _text_ref(subject.strongest_rival) if subject.strongest_rival is not None else None
+        ),
+        "allowed_operation_ids": [
+            *EXECUTED_ABLATION_MACRO_OPERATION_IDS,
+            *EXECUTED_ABLATION_CONTROL_OPERATION_IDS,
+        ],
+        "allowed_variant_ids": list(EXECUTED_ABLATION_ALLOWED_VARIANT_IDS),
+        "allowed_changed_span_ids": changed_span_ids,
+        "allowed_comparison_provenance_tokens": list(EXECUTED_ABLATION_PROVENANCE_TOKENS),
+        "ready_for_executed_ablation": subject.ready_for_executed_ablation,
+        "does_not_create_main_candidate": True,
+        "non_final": True,
+        "not_human_data": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
 def _build_ablation_informed_work_order(
     subject: ExecutedAblationSubject,
     *,
@@ -850,6 +1044,8 @@ def _build_ablation_informed_work_order(
     return {
         "worker": "executed_ablation_work_order_v1_controller",
         "controller_owned": True,
+        "subject_packet_kind": subject.subject_packet_kind,
+        "normalized_subject_kind": subject.subject_packet_kind,
         "source_revision_packet_kind": subject.revision_packet_kind,
         "source_revision_packet_dir": str(subject.revision_packet_dir),
         "source_revision_packet_id": subject.revision_packet_id,
@@ -937,6 +1133,12 @@ def _build_actual_variant_set(
     *,
     fixture_only: bool,
 ) -> dict[str, Any]:
+    if subject.revision_packet_kind == REVISION_PACKET_KIND_BOUNDED_MACRO:
+        return _build_bounded_macro_variant_set(
+            subject,
+            work_order,
+            fixture_only=fixture_only,
+        )
     if subject.revision_packet_kind == REVISION_PACKET_KIND_ABLATION_INFORMED:
         return _build_ablation_informed_variant_set(
             subject,
@@ -1049,6 +1251,173 @@ def _build_actual_variant_set(
         "source_revised_candidate_artifact_id": subject.revision_artifacts[
             "revised_candidate_text"
         ].id,
+        "variants": validated,
+        "actual_variant_count": sum(
+            1 for variant in validated if not variant["planned_only"]
+        ),
+        "countable_evidence_variant_count": sum(
+            1 for variant in validated if variant["evidence_countable"]
+        ),
+        "planned_only_variant_count": sum(
+            1 for variant in validated if variant["planned_only"]
+        ),
+        "no_op_variant_count": sum(1 for variant in validated if variant["no_op"]),
+        "operation_mismatch_variant_count": sum(
+            1 for variant in validated if not variant["operation_matches_actual_change"]
+        ),
+        "does_not_select_winner": True,
+        "does_not_create_main_candidate": True,
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
+def _build_bounded_macro_variant_set(
+    subject: ExecutedAblationSubject,
+    work_order: dict[str, Any],
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    revised = subject.revised_text
+    before_section = subject.changed_region_before_text
+    after_section = subject.changed_region_after_text
+    changed_ref = (
+        subject.changed_region_refs[0]
+        if subject.changed_region_refs
+        else "macro_change_001"
+    )
+    base_candidate_packet_id = subject.base_candidate_packet_id or ""
+    variants = [
+        _macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[0],
+            operation_id="operation_revert_full_macro_section_to_base",
+            operation_type="revert_full_macro_section_to_base",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=_replace_once(revised, after_section, before_section),
+            before_text=after_section,
+            after_text=before_section,
+            rationale=(
+                "Replace the macro recomposed target movement with the base candidate's "
+                "original target movement to test whether the macro section carries value."
+            ),
+            expected_reader_state_effect=(
+                "If the macro recomposition matters, reverting the whole movement should "
+                "restore more abstraction and weaker return pressure."
+            ),
+            subject=subject,
+        ),
+        _macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[1],
+            operation_id="operation_isolate_proof_no_outside_answer_region",
+            operation_type="isolate_proof_no_outside_answer_region",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=_macro_isolate_proof_no_answer_region(
+                revised,
+                before_section,
+                after_section,
+            ),
+            before_text=_paragraph_slice(after_section, 1, 2),
+            after_text=_paragraph_slice(before_section, 1, 2),
+            rationale=(
+                "Revert the proof/no-outside-answer region while preserving the rest of "
+                "the macro section to test whether that local pressure carries the gain."
+            ),
+            expected_reader_state_effect=(
+                "Should weaken macro evidence if proof and no-outside-answer pressure are "
+                "causal rather than decorative."
+            ),
+            subject=subject,
+        ),
+        _macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[2],
+            operation_id="operation_flatten_macro_to_summary_or_restore_return_echo",
+            operation_type="flatten_macro_to_summary_or_restore_return_echo",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=_replace_once(
+                revised,
+                after_section,
+                _flattened_macro_summary(before_section, subject.target_movement),
+            ),
+            before_text=after_section,
+            after_text=_flattened_macro_summary(before_section, subject.target_movement),
+            rationale=(
+                "Flatten the macro movement into summary/old return echo to test whether "
+                "the bounded recomposition is doing more than explanatory closure."
+            ),
+            expected_reader_state_effect=(
+                "Should reduce embodied return if the macro section's object-event motion "
+                "is doing real work."
+            ),
+            subject=subject,
+        ),
+        _macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[3],
+            operation_id="operation_no_op_control",
+            operation_type="no_op_control",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=revised,
+            before_text="macro no-op control",
+            after_text="macro no-op control",
+            rationale="Diagnostic no-op control; it must not count as evidence.",
+            expected_reader_state_effect="No reader-state change should be inferred.",
+            subject=subject,
+            explicit_diagnostic_no_op=True,
+        ),
+        _macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[4],
+            operation_id="operation_mismatch_control",
+            operation_type="operation_mismatch_control",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=revised.replace("morning", "morning edge", 1),
+            before_text="almost weather",
+            after_text="almost weather at the edge",
+            rationale=(
+                "Intentional mismatch control: the executed change does not match the "
+                "claimed macro operation."
+            ),
+            expected_reader_state_effect="Unreliable diagnostic; must not count.",
+            subject=subject,
+            operation_matches_actual_change=False,
+        ),
+        _macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[5],
+            operation_id="operation_planned_probe_only",
+            operation_type="planned_only_probe",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=revised,
+            before_text="macro planned-only probe",
+            after_text="future macro probe",
+            rationale="Planned-only probe retained for ledger distinction.",
+            expected_reader_state_effect="Speculative only; not executed evidence.",
+            subject=subject,
+            planned_only=True,
+            controller_applied=False,
+        ),
+    ]
+    validated = [_validate_variant_operation(variant) for variant in variants]
+    return {
+        "worker": "actual_ablation_variant_set_v1_controller",
+        "controller_owned": True,
+        "source_revision_packet_kind": subject.revision_packet_kind,
+        "source_subject_packet_kind": subject.subject_packet_kind,
+        "source_macro_packet_id": subject.subject_packet_id,
+        "source_macro_packet_dir": str(subject.subject_packet_dir),
+        "source_revised_candidate_artifact_id": subject.revision_artifacts[
+            "revised_candidate_text"
+        ].id,
+        "target_movement": subject.target_movement,
+        "macro_changed_region_refs": list(subject.changed_region_refs),
+        "macro_diff_changed_span_ids": list(work_order["macro_diff_changed_span_ids"]),
+        "base_candidate_packet_id": base_candidate_packet_id,
         "variants": validated,
         "actual_variant_count": sum(
             1 for variant in validated if not variant["planned_only"]
@@ -1513,6 +1882,113 @@ def _record_compression_variant(
     )
 
 
+def _macro_variant_from_text(
+    *,
+    variant_id: str,
+    operation_id: str,
+    operation_type: str,
+    source_span_id: str,
+    base_text: str,
+    variant_text: str,
+    before_text: str,
+    after_text: str,
+    rationale: str,
+    expected_reader_state_effect: str,
+    subject: ExecutedAblationSubject,
+    operation_matches_actual_change: bool = True,
+    planned_only: bool = False,
+    controller_applied: bool = True,
+    explicit_diagnostic_no_op: bool = False,
+) -> dict[str, Any]:
+    variant = _variant_from_text(
+        variant_id=variant_id,
+        operation_id=operation_id,
+        operation_type=operation_type,
+        source_span_id=source_span_id,
+        source_span_ids=list(subject.changed_region_refs) or [source_span_id],
+        source_patch_span_id=None,
+        source_patch_span_ids=[],
+        base_text=base_text,
+        variant_text=variant_text,
+        before_text=before_text,
+        after_text=after_text,
+        rationale=rationale,
+        expected_reader_state_effect=expected_reader_state_effect,
+        operation_matches_actual_change=operation_matches_actual_change,
+        planned_only=planned_only,
+        controller_applied=controller_applied,
+        explicit_diagnostic_no_op=explicit_diagnostic_no_op,
+    )
+    variant.update(
+        {
+            "source_subject_packet_kind": subject.subject_packet_kind,
+            "source_macro_packet_id": subject.subject_packet_id,
+            "target_movement": subject.target_movement,
+            "macro_changed_region_refs": list(subject.changed_region_refs),
+            "macro_diff_changed_span_ids": list(subject.changed_region_refs),
+            "base_candidate_packet_id": subject.base_candidate_packet_id,
+            "variant_text_sha256": sha256_text(variant_text),
+            "source_before_text_sha256": (
+                sha256_text(subject.changed_region_before_text)
+                if subject.changed_region_before_text
+                else None
+            ),
+            "source_after_text_sha256": (
+                sha256_text(subject.changed_region_after_text)
+                if subject.changed_region_after_text
+                else None
+            ),
+        }
+    )
+    return variant
+
+
+def _replace_once(text: str, before: str, after: str) -> str:
+    if before and before in text:
+        return text.replace(before, after, 1)
+    return text
+
+
+def _macro_isolate_proof_no_answer_region(
+    revised: str,
+    before_section: str,
+    after_section: str,
+) -> str:
+    before_part = _paragraph_slice(before_section, 1, 2)
+    after_part = _paragraph_slice(after_section, 1, 2)
+    if after_part and before_part and after_part in revised:
+        candidate = revised.replace(after_part, before_part, 1)
+        if candidate != revised:
+            return candidate
+    before_paragraphs = _paragraphs(before_section)
+    after_paragraphs = _paragraphs(after_section)
+    if len(after_paragraphs) > 1 and len(before_paragraphs) > 1:
+        replacement = list(after_paragraphs)
+        replacement[1] = before_paragraphs[1]
+        candidate = _replace_once(revised, after_section, "\n\n".join(replacement))
+        if candidate != revised:
+            return candidate
+    candidate = _replace_once(revised, after_section, before_section)
+    if candidate != revised:
+        return candidate
+    return revised
+
+
+def _paragraph_slice(text: str, start: int, count: int) -> str:
+    paragraphs = _paragraphs(text)
+    return "\n\n".join(paragraphs[start : start + count]).strip()
+
+
+def _flattened_macro_summary(before_section: str, target_movement: str | None) -> str:
+    return (
+        "The middle movement explains its pattern directly: proof has to happen "
+        "inside the line, no outside answer rescues the room, and the return is "
+        f"changed rather than simple regression. This flattened {target_movement or 'macro'} "
+        "summary preserves the claim while removing the object-event pressure that "
+        "the bounded macro recomposition was meant to test."
+    )
+
+
 def _variant(
     *,
     variant_id: str,
@@ -1734,9 +2210,16 @@ def _build_old_new_rival_comparison(
         variant["variant_id"]: _score_text(str(variant["text"]))
         for variant in variant_set["variants"]
     }
-    revert = variants["operation_revert_applied_patch"]
-    embodiment = variants["operation_embodiment_preserving_repair"]
-    record_compression = variants["operation_record_label_compression"]
+    if subject.revision_packet_kind == REVISION_PACKET_KIND_BOUNDED_MACRO:
+        revert = variants["operation_revert_full_macro_section_to_base"]
+        embodiment = variants["operation_isolate_proof_no_outside_answer_region"]
+        record_compression = variants[
+            "operation_flatten_macro_to_summary_or_restore_return_echo"
+        ]
+    else:
+        revert = variants["operation_revert_applied_patch"]
+        embodiment = variants["operation_embodiment_preserving_repair"]
+        record_compression = variants["operation_record_label_compression"]
     revert_score = variant_scores[revert["variant_id"]]
     embodiment_score = variant_scores[embodiment["variant_id"]]
     record_score = variant_scores[record_compression["variant_id"]]
@@ -1748,11 +2231,15 @@ def _build_old_new_rival_comparison(
     revised_improves_over_original = revised_score["overexplanation_score"] <= original_score[
         "overexplanation_score"
     ]
-    revert_performs_same_or_better = _total_score(revert_score) >= _total_score(revised_score)
-    embodiment_variant_beats_current = _total_score(embodiment_score) > _total_score(revised_score)
-    record_compression_improves_discovery = record_score["overexplanation_score"] < revised_score[
+    revert_performs_same_or_better = _total_score(revert_score) >= _total_score(
+        revised_score
+    )
+    embodiment_variant_beats_current = _total_score(embodiment_score) > _total_score(
+        revised_score
+    )
+    record_compression_improves_discovery = record_score[
         "overexplanation_score"
-    ]
+    ] < revised_score["overexplanation_score"]
     strongest_rival_still_beats_candidate = (
         bool(rival_score and _total_score(rival_score) >= _total_score(revised_score))
         or subject.strongest_rival is not None
@@ -2020,6 +2507,8 @@ def _build_packet_summary(
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
+        "source_subject_packet_kind": subject.subject_packet_kind,
+        "normalized_subject_kind": subject.subject_packet_kind,
         "source_revision_packet_kind": subject.revision_packet_kind,
         "source_revision_packet_id": subject.revision_packet_id,
         "source_revision_packet_dir": str(subject.revision_packet_dir),
@@ -2063,13 +2552,19 @@ def _load_subject(connection, revision_packet_dir: Path) -> ExecutedAblationSubj
         return _load_autonomous_revision_subject(connection, revision_packet_dir)
     if (revision_packet_dir / "cycle2_packet.json").exists():
         return _load_ablation_informed_revision_subject(connection, revision_packet_dir)
+    if (revision_packet_dir / "macro_recomposition_packet.json").exists():
+        return _load_bounded_macro_recomposition_subject(connection, revision_packet_dir)
     if any((revision_packet_dir / filename).exists() for filename in ABLATION_INFORMED_REQUIRED_FILES[1:]):
         raise ValueError(
             "ablation_informed_revision packet is missing cycle2_packet.json"
         )
+    if any((revision_packet_dir / filename).exists() for filename in BOUNDED_MACRO_REQUIRED_FILES[1:]):
+        raise ValueError(
+            "bounded_macro_recomposition packet is missing macro_recomposition_packet.json"
+        )
     raise ValueError(
         "revision packet must contain autonomous_closed_loop_packet.json "
-        "or cycle2_packet.json"
+        "or cycle2_packet.json or macro_recomposition_packet.json"
     )
 
 
@@ -2122,6 +2617,12 @@ def _load_autonomous_revision_subject(
     source_texts = _load_source_texts(source_packet_dir)
     if not any(text.source_class == "abi_candidate" for text in source_texts):
         raise ValueError("source packet does not include an Abi candidate text")
+    source_candidate = next(
+        text for text in source_texts if text.source_class == "abi_candidate"
+    )
+    diff_payload = payloads["revision_diff_report"]
+    gate_payload = payloads["autonomous_closed_loop_gate_report"]
+    changed_spans = list(diff_payload.get("changed_spans", []))
     return ExecutedAblationSubject(
         run_id=run_id,
         revision_packet_kind=REVISION_PACKET_KIND_AUTONOMOUS,
@@ -2136,6 +2637,31 @@ def _load_autonomous_revision_subject(
         revision_artifacts=artifacts,
         revision_payloads=payloads,
         source_texts=tuple(source_texts),
+        base_candidate_text=source_candidate.text,
+        base_candidate_text_sha256=sha256_text(source_candidate.text),
+        base_candidate_packet_id=source_packet_id,
+        target_scope="revision_changed_spans",
+        changed_region_refs=tuple(
+            str(span.get("changed_span_id"))
+            for span in changed_spans
+            if span.get("changed_span_id")
+        ),
+        changed_region_before_text="\n\n".join(
+            str(span.get("before", "")) for span in changed_spans
+        ).strip(),
+        changed_region_after_text="\n\n".join(
+            str(span.get("after", "")) for span in changed_spans
+        ).strip(),
+        readiness_payload=gate_payload,
+        strongest_rival_pressure_preserved=True,
+        finalization_eligible=gate_payload.get("finalization_eligible") is True,
+        not_finalization_eligible=gate_payload.get("not_finalization_eligible") is True,
+        source_fixture_only=packet_envelope.get("fixture_only") is True,
+        source_model_call_ids=tuple(str(item) for item in packet_payload.get("model_call_ids", [])),
+        source_packet_refs={
+            "source_packet_dir": str(source_packet_dir),
+            "source_packet_id": source_packet_id,
+        },
     )
 
 
@@ -2233,6 +2759,19 @@ def _load_ablation_informed_revision_subject(
     source_texts = _load_source_texts(source_packet_dir)
     if not any(text.source_class == "abi_candidate" for text in source_texts):
         raise ValueError("source packet does not include an Abi candidate text")
+    source_candidate = next(
+        text for text in source_texts if text.source_class == "abi_candidate"
+    )
+    diff_payload = payloads["cycle2_revision_diff_report"]
+    gate_payload = payloads["cycle2_gate_report"]
+    changed_spans = list(diff_payload.get("changed_spans", []))
+    changed_region_refs = tuple(
+        str(span.get("changed_span_id"))
+        for span in changed_spans
+        if span.get("changed_span_id")
+    ) or tuple(str(item) for item in diff_payload.get("source_patch_span_ids", []))
+    if not changed_region_refs:
+        changed_region_refs = ("cycle2_candidate_text",)
 
     _alias_artifact(
         artifacts,
@@ -2290,6 +2829,233 @@ def _load_ablation_informed_revision_subject(
         revision_artifacts=artifacts,
         revision_payloads=payloads,
         source_texts=tuple(source_texts),
+        base_candidate_text=source_candidate.text,
+        base_candidate_text_sha256=sha256_text(source_candidate.text),
+        base_candidate_packet_id=source_packet_id,
+        target_scope="cycle2_changed_spans",
+        changed_region_refs=changed_region_refs,
+        changed_region_before_text="\n\n".join(
+            str(span.get("before", "")) for span in changed_spans
+        ).strip(),
+        changed_region_after_text="\n\n".join(
+            str(span.get("after", "")) for span in changed_spans
+        ).strip(),
+        readiness_payload=gate_payload,
+        strongest_rival_pressure_preserved=True,
+        finalization_eligible=gate_payload.get("finalization_eligible") is True,
+        not_finalization_eligible=gate_payload.get("not_finalization_eligible") is True,
+        source_fixture_only=packet_envelope.get("fixture_only") is True,
+        source_model_call_ids=tuple(str(item) for item in packet_payload.get("model_call_ids", [])),
+        source_packet_refs={
+            "source_packet_dir": str(source_packet_dir),
+            "source_packet_id": source_packet_id,
+            "source_executed_ablation_packet_id": str(
+                subject_manifest.get("executed_ablation_packet_id", "")
+            )
+            or str(packet_payload.get("source_executed_ablation_packet_id", ""))
+            or None,
+        },
+    )
+
+
+def _load_bounded_macro_recomposition_subject(
+    connection,
+    revision_packet_dir: Path,
+) -> ExecutedAblationSubject:
+    packet_envelope, packet_payload = _read_packet_payload_file(
+        revision_packet_dir,
+        "macro_recomposition_packet.json",
+        "macro_recomposition_packet",
+        packet_kind=REVISION_PACKET_KIND_BOUNDED_MACRO,
+    )
+    run_id = str(packet_envelope["run_id"])
+    revision_packet_id = str(packet_payload.get("packet_id", revision_packet_dir.name))
+    artifact_ids = dict(packet_payload["artifact_ids"])
+
+    file_map = {
+        "macro_recomposition_subject_manifest": (
+            "macro_recomposition_subject_manifest.json",
+            "macro_recomposition_subject_manifest",
+        ),
+        "macro_recomposed_candidate_text": (
+            "macro_recomposed_candidate_text.json",
+            "macro_recomposed_candidate_text",
+        ),
+        "macro_recomposition_diff_report": (
+            "macro_recomposition_diff_report.json",
+            "macro_recomposition_diff_report",
+        ),
+        "macro_recomposition_gate_report": (
+            "macro_recomposition_gate_report.json",
+            "macro_recomposition_gate_report",
+        ),
+        "macro_patch_or_section_plan": (
+            "macro_patch_or_section_plan.json",
+            "macro_patch_or_section_plan",
+        ),
+        "macro_rival_pressure_check": (
+            "macro_rival_pressure_check.json",
+            "macro_rival_pressure_check",
+        ),
+        "protected_effects_and_forbidden_changes": (
+            "protected_effects_and_forbidden_changes.json",
+            "protected_effects_and_forbidden_changes",
+        ),
+        "macro_recomposition_work_order": (
+            "macro_recomposition_work_order.json",
+            "macro_recomposition_work_order",
+        ),
+    }
+    optional_file_map = {
+        "macro_recomposition_brief_ref": (
+            "macro_recomposition_brief_ref.json",
+            "macro_recomposition_brief_ref",
+        ),
+        "macro_recomposition_plan": (
+            "macro_recomposition_plan.json",
+            "macro_recomposition_plan",
+        ),
+    }
+
+    artifacts: dict[str, ArtifactRecord] = {}
+    payloads: dict[str, dict[str, Any]] = {}
+    for artifact_type, (filename, expected_type) in file_map.items():
+        _, payload = _read_packet_payload_file(
+            revision_packet_dir,
+            filename,
+            expected_type,
+            packet_kind=REVISION_PACKET_KIND_BOUNDED_MACRO,
+        )
+        artifact = _artifact_from_packet(connection, artifact_ids, artifact_type)
+        artifacts[artifact_type] = artifact
+        payloads[artifact_type] = payload
+    for artifact_type, (filename, expected_type) in optional_file_map.items():
+        if not (revision_packet_dir / filename).exists():
+            continue
+        _, payload = _read_packet_payload_file(
+            revision_packet_dir,
+            filename,
+            expected_type,
+            packet_kind=REVISION_PACKET_KIND_BOUNDED_MACRO,
+        )
+        artifact = _artifact_from_packet(connection, artifact_ids, artifact_type)
+        artifacts[artifact_type] = artifact
+        payloads[artifact_type] = payload
+
+    packet_artifact = _artifact_by_path(
+        connection,
+        run_id=run_id,
+        artifact_path=revision_packet_dir / "macro_recomposition_packet.json",
+    )
+    if packet_artifact is not None:
+        artifacts["macro_recomposition_packet"] = packet_artifact
+        payloads["macro_recomposition_packet"] = packet_payload
+
+    _validate_bounded_macro_readiness(payloads, packet_payload)
+
+    subject_manifest = payloads["macro_recomposition_subject_manifest"]
+    candidate = payloads["macro_recomposed_candidate_text"]
+    diff = payloads["macro_recomposition_diff_report"]
+    gate = payloads["macro_recomposition_gate_report"]
+    patch_plan = payloads["macro_patch_or_section_plan"]
+    protected = payloads["protected_effects_and_forbidden_changes"]
+    rival = payloads["macro_rival_pressure_check"]
+    base_packet_dir = Path(str(subject_manifest["base_candidate_packet_dir"])).resolve()
+    base_candidate_text = _candidate_text_from_packet_dir(base_packet_dir)
+    source_packet_dir, source_packet_id = _source_packet_ref_from_candidate_packet(
+        base_packet_dir
+    )
+    source_texts = _load_source_texts(source_packet_dir)
+    if not any(text.source_class == "abi_candidate" for text in source_texts):
+        raise ValueError("source packet does not include an Abi candidate text")
+    changed_spans = list(diff.get("changed_spans", []))
+    source_model_call_ids = _source_model_call_ids(packet_payload, candidate, patch_plan)
+
+    _alias_artifact(
+        artifacts,
+        payloads,
+        alias="revised_candidate_text",
+        source="macro_recomposed_candidate_text",
+    )
+    _alias_artifact(
+        artifacts,
+        payloads,
+        alias="revision_diff_report",
+        source="macro_recomposition_diff_report",
+    )
+    _alias_artifact(
+        artifacts,
+        payloads,
+        alias="autonomous_closed_loop_gate_report",
+        source="macro_recomposition_gate_report",
+    )
+
+    return ExecutedAblationSubject(
+        run_id=run_id,
+        revision_packet_kind=REVISION_PACKET_KIND_BOUNDED_MACRO,
+        revision_packet_dir=revision_packet_dir,
+        revision_packet_id=revision_packet_id,
+        revision_packet_artifact_id=packet_artifact.id if packet_artifact is not None else None,
+        source_packet_dir=source_packet_dir,
+        source_packet_id=source_packet_id,
+        source_reader_lab_packet_id=None,
+        source_executed_ablation_packet_id=None,
+        ready_for_executed_ablation=True,
+        revision_artifacts=artifacts,
+        revision_payloads=payloads,
+        source_texts=tuple(source_texts),
+        base_candidate_text=base_candidate_text,
+        base_candidate_text_sha256=str(
+            subject_manifest.get("base_candidate_text_sha256")
+            or sha256_text(base_candidate_text or "")
+        ),
+        base_candidate_packet_id=str(subject_manifest["base_candidate_packet_id"]),
+        target_scope="macro_target_movement",
+        target_movement=str(candidate["target_movement"]),
+        changed_region_refs=tuple(
+            str(span.get("changed_span_id"))
+            for span in changed_spans
+            if span.get("changed_span_id")
+        ),
+        changed_region_before_text="\n\n".join(
+            str(span.get("before_text", span.get("before", ""))) for span in changed_spans
+        ).strip(),
+        changed_region_after_text="\n\n".join(
+            str(span.get("after_text", span.get("after", ""))) for span in changed_spans
+        ).strip(),
+        readiness_payload=gate,
+        strongest_rival_pressure_preserved=(
+            rival.get("strongest_rival_pressure_preserved") is True
+        ),
+        finalization_eligible=candidate.get("finalization_eligible") is True,
+        not_finalization_eligible=candidate.get("not_finalization_eligible") is True,
+        source_fixture_only=packet_envelope.get("fixture_only") is True,
+        source_model_call_ids=source_model_call_ids,
+        protected_effects=tuple(str(item) for item in protected.get("protected_effects", [])),
+        forbidden_changes=tuple(str(item) for item in protected.get("forbidden_changes", [])),
+        semantic_constraint_mapping=tuple(
+            dict(item)
+            for item in patch_plan.get("constraint_mapping", [])
+            if isinstance(item, dict)
+        ),
+        macro_target_coverage=dict(
+            diff.get("target_coverage_report")
+            or gate.get("target_coverage_report")
+            or patch_plan.get("target_coverage_report")
+            or {}
+        ),
+        source_packet_refs={
+            "source_packet_dir": str(source_packet_dir),
+            "source_packet_id": source_packet_id,
+            "base_candidate_packet_dir": str(base_packet_dir),
+            "base_candidate_packet_id": str(subject_manifest["base_candidate_packet_id"]),
+            "source_synthesis_packet_dir": str(
+                subject_manifest.get("source_synthesis_packet_dir", "")
+            ),
+            "source_synthesis_packet_id": str(
+                subject_manifest.get("source_synthesis_packet_id", "")
+            ),
+        },
     )
 
 
@@ -2297,10 +3063,12 @@ def _read_packet_payload_file(
     packet_dir: Path,
     filename: str,
     expected_artifact_type: str,
+    *,
+    packet_kind: str = REVISION_PACKET_KIND_ABLATION_INFORMED,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     path = packet_dir / filename
     if not path.exists():
-        raise ValueError(f"ablation_informed_revision packet is missing {filename}")
+        raise ValueError(f"{packet_kind} packet is missing {filename}")
     envelope = read_json_file(path)
     if envelope.get("artifact_type") != expected_artifact_type:
         raise ValueError(
@@ -2348,6 +3116,142 @@ def _validate_ablation_informed_readiness(
         raise ValueError(
             "cycle2_applied_patch_ledger all_applied_patches_reflected_in_text must be true"
         )
+
+
+def _validate_bounded_macro_readiness(
+    payloads: dict[str, dict[str, Any]],
+    packet_payload: dict[str, Any],
+) -> None:
+    candidate = payloads["macro_recomposed_candidate_text"]
+    diff = payloads["macro_recomposition_diff_report"]
+    gate = payloads["macro_recomposition_gate_report"]
+    patch_plan = payloads["macro_patch_or_section_plan"]
+    rival = payloads["macro_rival_pressure_check"]
+    protected = payloads["protected_effects_and_forbidden_changes"]
+
+    if not str(candidate.get("text", "")).strip():
+        raise ValueError("macro_recomposed_candidate_text text must not be empty")
+    if candidate.get("no_phase_shift_claim") is not True or gate.get("no_phase_shift_claim") is not True:
+        raise ValueError("bounded_macro_recomposition packet must not make a phase-shift claim")
+    if (
+        candidate.get("not_finalization_eligible") is not True
+        or candidate.get("finalization_eligible") is not False
+        or gate.get("not_finalization_eligible") is not True
+        or gate.get("finalization_eligible") is not False
+    ):
+        raise ValueError(
+            "bounded_macro_recomposition packet must remain not finalization eligible"
+        )
+    if candidate.get("non_final") is not True:
+        raise ValueError("bounded_macro_recomposition candidate must be non-final")
+    if rival.get("strongest_rival_pressure_preserved") is not True:
+        raise ValueError("macro_rival_pressure_check strongest_rival_pressure_preserved must be true")
+    for payload_name, payload in (
+        ("macro_recomposed_candidate_text", candidate),
+        ("macro_recomposition_diff_report", diff),
+        ("macro_patch_or_section_plan", patch_plan),
+        ("macro_recomposition_packet", packet_payload),
+    ):
+        if payload.get("bounded_macro_recomposition") is not True:
+            raise ValueError(f"{payload_name} bounded_macro_recomposition must be true")
+        if payload.get("full_rewrite") is not False:
+            raise ValueError(f"{payload_name} full_rewrite must be false")
+    if not str(candidate.get("base_candidate_packet_id", "")).strip():
+        raise ValueError("macro_recomposed_candidate_text base_candidate_packet_id is required")
+    if not str(candidate.get("target_movement", "")).strip():
+        raise ValueError("macro_recomposed_candidate_text target_movement is required")
+    if candidate.get("requires_executed_ablation_before_improvement_claim") is not True:
+        raise ValueError(
+            "macro_recomposed_candidate_text requires_executed_ablation_before_improvement_claim must be true"
+        )
+    if not protected.get("protected_effects") or not protected.get("forbidden_changes"):
+        raise ValueError("protected_effects_and_forbidden_changes must record both lists")
+    if (
+        gate.get("semantic_constraint_satisfaction_not_proven") is not True
+        and patch_plan.get("semantic_constraint_satisfaction_not_proven") is not True
+    ):
+        raise ValueError(
+            "bounded_macro_recomposition semantic constraint satisfaction must remain unproven"
+        )
+
+    coverage = (
+        diff.get("target_coverage_report")
+        or gate.get("target_coverage_report")
+        or patch_plan.get("target_coverage_report")
+    )
+    if not isinstance(coverage, dict):
+        raise ValueError(
+            "bounded_macro_recomposition packet is missing macro target coverage report"
+        )
+    required_true = {
+        "macro_target_coverage_passed": coverage.get("macro_target_coverage_passed"),
+        "macro_materiality_passed": coverage.get("macro_materiality_passed"),
+        "ready_for_executed_ablation": coverage.get("ready_for_executed_ablation"),
+    }
+    for field_name, value in required_true.items():
+        if value is not True:
+            raise ValueError(f"target_coverage_report.{field_name} must be true")
+    if gate.get("macro_target_coverage_passed") is not True:
+        raise ValueError("macro_recomposition_gate_report macro_target_coverage_passed must be true")
+    if gate.get("macro_materiality_passed") is not True:
+        raise ValueError("macro_recomposition_gate_report macro_materiality_passed must be true")
+    if gate.get("ready_for_executed_ablation") is not True:
+        raise ValueError("macro_recomposition_gate_report ready_for_executed_ablation must be true")
+
+
+def _candidate_text_from_packet_dir(packet_dir: Path) -> str | None:
+    candidates = (
+        ("cycle2_revised_candidate_text.json", "cycle2_revised_candidate_text"),
+        ("revised_candidate_text.json", "revised_candidate_text"),
+        ("macro_recomposed_candidate_text.json", "macro_recomposed_candidate_text"),
+    )
+    for filename, expected_type in candidates:
+        path = packet_dir / filename
+        if not path.exists():
+            continue
+        envelope = read_json_file(path)
+        if envelope.get("artifact_type") != expected_type:
+            continue
+        payload = envelope.get("payload", {})
+        if isinstance(payload, dict):
+            return str(payload.get("text", ""))
+    return None
+
+
+def _source_packet_ref_from_candidate_packet(packet_dir: Path) -> tuple[Path, str]:
+    cycle2_manifest = packet_dir / "ablation_informed_revision_subject_manifest.json"
+    if cycle2_manifest.exists():
+        payload = read_json_file(cycle2_manifest)["payload"]
+        return Path(str(payload["source_packet_dir"])).resolve(), str(
+            payload["source_packet_id"]
+        )
+    autonomous_packet = packet_dir / "autonomous_closed_loop_packet.json"
+    if autonomous_packet.exists():
+        payload = read_json_file(autonomous_packet)["payload"]
+        return Path(str(payload["source_packet_dir"])).resolve(), str(
+            payload["source_packet_id"]
+        )
+    macro_manifest = packet_dir / "macro_recomposition_subject_manifest.json"
+    if macro_manifest.exists():
+        payload = read_json_file(macro_manifest)["payload"]
+        base_dir = Path(str(payload["base_candidate_packet_dir"])).resolve()
+        return _source_packet_ref_from_candidate_packet(base_dir)
+    if (packet_dir / "pilot_blinded_reader_bundle.json").exists():
+        return packet_dir.resolve(), packet_dir.name
+    raise ValueError(
+        f"unable to resolve source packet for candidate-producing packet: {packet_dir}"
+    )
+
+
+def _source_model_call_ids(*payloads: dict[str, Any]) -> tuple[str, ...]:
+    ids: list[str] = []
+    for payload in payloads:
+        for item in payload.get("model_call_ids", []):
+            ids.append(str(item))
+        source_call = payload.get("source_model_call_id")
+        if source_call:
+            ids.append(str(source_call))
+    return tuple(dict.fromkeys(ids))
 
 
 def _alias_artifact(
@@ -2479,6 +3383,12 @@ def _variant_summary(variant: dict[str, Any]) -> str:
         return "Embodiment-preserving variant tests whether detail was overcut."
     if variant["operation_id"] == "operation_record_label_compression":
         return "Record-label compression tests whether interpretive labels are the stronger handle."
+    if variant["operation_id"] == "operation_revert_full_macro_section_to_base":
+        return "Macro revert tests whether the bounded recomposed movement carries causal weight."
+    if variant["operation_id"] == "operation_isolate_proof_no_outside_answer_region":
+        return "Macro isolation tests whether proof/no-outside-answer pressure carries the movement."
+    if variant["operation_id"] == "operation_flatten_macro_to_summary_or_restore_return_echo":
+        return "Macro flattening tests whether summary/return echo is weaker than embodied movement."
     return "Executed diagnostic variant."
 
 
@@ -2487,6 +3397,9 @@ def _variant_effect_estimate(variant: dict[str, Any]) -> str:
         "operation_revert_applied_patch": "likely restores some opening thesis pressure",
         "operation_embodiment_preserving_repair": "may improve local embodiment without restoring explicit framing",
         "operation_record_label_compression": "may improve discovery by delaying labels",
+        "operation_revert_full_macro_section_to_base": "may restore weaker abstraction if macro movement mattered",
+        "operation_isolate_proof_no_outside_answer_region": "may weaken proof/no-answer pressure if that region mattered",
+        "operation_flatten_macro_to_summary_or_restore_return_echo": "may flatten embodied return into summary",
         "operation_no_op_control": "no reliable effect",
         "operation_mismatch_control": "unreliable effect due to operation mismatch",
         "operation_planned_probe_only": "speculative only",
@@ -2616,6 +3529,8 @@ def _summary_payload(
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
+        "subject_packet_kind": subject.subject_packet_kind,
+        "normalized_subject_kind": subject.subject_packet_kind,
         "revision_packet_kind": subject.revision_packet_kind,
         "revision_packet_dir": str(subject.revision_packet_dir),
         "artifact_ids": {
@@ -2712,6 +3627,10 @@ def _canonical_json(payload: dict[str, Any]) -> str:
 
 def _words(text: str) -> list[str]:
     return [word.strip(".,;:!?()[]{}\"'").lower() for word in text.split() if word.strip()]
+
+
+def _paragraphs(text: str) -> list[str]:
+    return [paragraph.strip() for paragraph in text.split("\n\n") if paragraph.strip()]
 
 
 def _sentences(text: str) -> list[str]:
