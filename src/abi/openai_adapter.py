@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 import importlib
 import json
 from typing import Any
@@ -42,6 +43,7 @@ class OpenAIResponsesClient:
 
         try:
             client = openai_module.OpenAI()
+            response_format = openai_response_format_for_request(request)
             response = client.responses.create(
                 model=self.model,
                 input=[
@@ -58,12 +60,7 @@ class OpenAIResponsesClient:
                     },
                 ],
                 text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": request.schema.name,
-                        "schema": schema["json_schema"],
-                        "strict": True,
-                    }
+                    "format": response_format
                 },
             )
         except Exception as error:
@@ -79,10 +76,61 @@ def _schema_for_request(request: WorkerRequest) -> dict[str, Any] | None:
     if request.schema in LIVE_MODEL_WORKER_SCHEMAS:
         return {
             "label": request.schema.name,
-            "json_schema": json_schema_for_worker_schema(request.schema),
+            "json_schema": _openai_strict_json_schema(
+                json_schema_for_worker_schema(request.schema)
+            ),
             "prompt_builder": _prompt_builder_for_schema(request.schema),
         }
     return None
+
+
+def openai_response_format_for_request(request: WorkerRequest) -> dict[str, Any]:
+    schema = _schema_for_request(request)
+    if schema is None:
+        raise ModelClientError(f"unsupported live schema: {request.schema.name}")
+    return {
+        "type": "json_schema",
+        "name": request.schema.name,
+        "schema": schema["json_schema"],
+        "strict": True,
+    }
+
+
+def _openai_strict_json_schema(schema: object) -> object:
+    if isinstance(schema, list):
+        return [_openai_strict_json_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return deepcopy(schema)
+
+    strict_schema: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "properties" and isinstance(value, dict):
+            strict_schema[key] = {
+                property_name: _openai_strict_json_schema(property_schema)
+                for property_name, property_schema in value.items()
+            }
+        elif key == "items":
+            strict_schema[key] = _openai_strict_json_schema(value)
+        elif key in {"anyOf", "allOf", "oneOf"} and isinstance(value, list):
+            strict_schema[key] = [_openai_strict_json_schema(item) for item in value]
+        elif key in {"$defs", "definitions"} and isinstance(value, dict):
+            strict_schema[key] = {
+                definition_name: _openai_strict_json_schema(definition_schema)
+                for definition_name, definition_schema in value.items()
+            }
+        else:
+            strict_schema[key] = deepcopy(value)
+
+    if strict_schema.get("type") == "object":
+        properties = strict_schema.get("properties")
+        if isinstance(properties, dict):
+            strict_schema["additionalProperties"] = False
+            strict_schema["required"] = list(properties.keys())
+        else:
+            strict_schema["properties"] = {}
+            strict_schema["additionalProperties"] = False
+            strict_schema["required"] = []
+    return strict_schema
 
 
 def _prompt_builder_for_schema(schema: object) -> object:
@@ -221,7 +269,9 @@ def _build_bounded_macro_recomposition_prompt(input_text: str) -> str:
         "paragraphs unchanged, and include the controller before_text_sha256. If "
         "multiple active targets share a paragraph, the replacement must cover each "
         "one. You may also return replacement_section_text for compatibility, but "
-        "the controller owns final assembly from target refs. Include one semantic "
+        "the controller owns final assembly from target refs. For non-reader-state "
+        "macro recomposition, return target_paragraph_replacements as an empty array. "
+        "Include one semantic "
         "constraint mapping item for each controller-owned constraint_id plus one "
         "active_target_mapping item for each active transformation target. Active "
         "targets must describe what materially changed and cite before/replacement "
