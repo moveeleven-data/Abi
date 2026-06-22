@@ -21,12 +21,13 @@ from abi.controller.state import (
 from abi.db import connect, initialize_database
 from abi.hashing import sha256_text
 from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
-from abi.model_calls import link_model_call_parsed_artifact
+from abi.model_calls import MODEL_CALL_VALIDATION_FAILED, link_model_call_parsed_artifact
 from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
 from abi.model_schemas import (
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     ModelValidationError,
     WorkerRole,
+    parse_and_validate_structured_output,
 )
 from abi.packets import PacketWriter, create_packet_dir, read_json_file
 
@@ -182,6 +183,17 @@ class RecomposedText:
     replacement: list[str]
 
 
+@dataclass(frozen=True)
+class TargetAddressedRetryPlan:
+    retryable: bool
+    first_attempt_payload: dict[str, object] | None
+    retry_reason: str
+    failed_target_paragraph_refs: tuple[str, ...]
+    failure_reasons_by_ref: dict[str, str]
+    failed_material_target_ids_by_ref: dict[str, list[str]]
+    first_failure_message: str
+
+
 def run_bounded_macro_recomposition(
     config: AbiConfig,
     *,
@@ -273,6 +285,7 @@ def run_bounded_macro_recomposition(
         model_results: list[ModelDriverResult] = []
         model_payload: dict[str, object] | None = None
         model_call_id: str | None = None
+        retry_report: dict[str, object] = _target_addressed_retry_report_not_attempted()
 
         payloads["macro_recomposition_subject_manifest"] = _build_subject_manifest(
             subject,
@@ -321,11 +334,12 @@ def run_bounded_macro_recomposition(
         if client_name == "openai":
             connection.commit()
             factory = client_factory or _default_openai_client_factory
+            model_client = factory(configured_model)
             result = _run_live_macro_recomposition_model(
                 config=config,
                 subject=subject,
                 packet_dir=packet_dir,
-                model_client=factory(configured_model),
+                model_client=model_client,
                 work_order=payloads["macro_recomposition_work_order"],
                 protected_effects=payloads["protected_effects_and_forbidden_changes"],
                 parent_ids=[
@@ -335,6 +349,121 @@ def run_bounded_macro_recomposition(
             )
             model_results.append(result)
             if not result.accepted or result.parsed_payload is None:
+                retry_plan = _target_addressed_retry_plan_from_failure(
+                    subject=subject,
+                    result=result,
+                )
+                if retry_plan.retryable and len(model_results) < max_model_calls:
+                    retry_result = _run_live_macro_recomposition_retry_model(
+                        config=config,
+                        subject=subject,
+                        packet_dir=packet_dir,
+                        model_client=model_client,
+                        work_order=payloads["macro_recomposition_work_order"],
+                        protected_effects=payloads[
+                            "protected_effects_and_forbidden_changes"
+                        ],
+                        retry_plan=retry_plan,
+                        parent_ids=[
+                            artifacts["macro_recomposition_work_order"].id,
+                            artifacts["protected_effects_and_forbidden_changes"].id,
+                        ],
+                    )
+                    model_results.append(retry_result)
+                    retry_report = _target_addressed_retry_report(
+                        retry_plan=retry_plan,
+                        first_attempt_model_call_id=result.model_call.id,
+                        retry_model_call_id=retry_result.model_call.id,
+                        retry_payload=retry_result.parsed_payload,
+                        merged_payload=None,
+                        merged_validation_passed=False,
+                    )
+                    if retry_result.accepted and retry_result.parsed_payload is not None:
+                        merged_payload = _merge_target_addressed_retry_payload(
+                            subject=subject,
+                            first_payload=retry_plan.first_attempt_payload or {},
+                            retry_payload=retry_result.parsed_payload,
+                            failed_refs=retry_plan.failed_target_paragraph_refs,
+                        )
+                        try:
+                            _validate_live_macro_payload(
+                                subject=subject,
+                                payload=merged_payload,
+                            )
+                        except ModelValidationError as error:
+                            retry_report = _target_addressed_retry_report(
+                                retry_plan=retry_plan,
+                                first_attempt_model_call_id=result.model_call.id,
+                                retry_model_call_id=retry_result.model_call.id,
+                                retry_payload=retry_result.parsed_payload,
+                                merged_payload=merged_payload,
+                                merged_validation_passed=False,
+                                remaining_failure_message=str(error),
+                            )
+                            return _failure_result(
+                                subject=subject,
+                                packet_dir=packet_dir,
+                                client_name=client_name,
+                                model=configured_model,
+                                artifacts=artifacts,
+                                model_results=model_results,
+                                message=(
+                                    "Bounded macro recomposition refused after "
+                                    f"target-addressed corrective retry: {error}"
+                                ),
+                                retry_report=retry_report,
+                            )
+                        model_payload = merged_payload
+                        model_call_id = retry_result.model_call.id
+                        retry_report = _target_addressed_retry_report(
+                            retry_plan=retry_plan,
+                            first_attempt_model_call_id=result.model_call.id,
+                            retry_model_call_id=retry_result.model_call.id,
+                            retry_payload=retry_result.parsed_payload,
+                            merged_payload=merged_payload,
+                            merged_validation_passed=True,
+                        )
+                    else:
+                        return _failure_result(
+                            subject=subject,
+                            packet_dir=packet_dir,
+                            client_name=client_name,
+                            model=configured_model,
+                            artifacts=artifacts,
+                            model_results=model_results,
+                            message=_model_failure_message(retry_result),
+                            retry_report=retry_report,
+                        )
+                else:
+                    retry_report = _target_addressed_retry_report_not_attempted(
+                        retry_plan=retry_plan,
+                        first_attempt_model_call_id=result.model_call.id,
+                        budget_remaining=len(model_results) < max_model_calls,
+                    )
+                    retry_note = ""
+                    if retry_plan.retryable:
+                        retry_note = (
+                            " Corrective retry not attempted because remaining "
+                            "model-call budget is 0."
+                        )
+                    elif retry_plan.retry_reason:
+                        retry_note = f" Corrective retry not attempted: {retry_plan.retry_reason}."
+                    return _failure_result(
+                        subject=subject,
+                        packet_dir=packet_dir,
+                        client_name=client_name,
+                        model=configured_model,
+                        artifacts=artifacts,
+                        model_results=model_results,
+                        message=f"{_model_failure_message(result)}{retry_note}",
+                        retry_report=retry_report,
+                    )
+            if model_payload is not None:
+                pass
+            elif result.accepted and result.parsed_payload is not None:
+                model_payload = result.parsed_payload
+                model_call_id = result.model_call.id
+            else:
                 return _failure_result(
                     subject=subject,
                     packet_dir=packet_dir,
@@ -344,8 +473,6 @@ def run_bounded_macro_recomposition(
                     model_results=model_results,
                     message=_model_failure_message(result),
                 )
-            model_payload = result.parsed_payload
-            model_call_id = result.model_call.id
 
         payloads["macro_recomposition_plan"] = _build_recomposition_plan(
             subject,
@@ -383,6 +510,7 @@ def run_bounded_macro_recomposition(
             recomposed,
             model_payload=model_payload,
             model_call_id=model_call_id,
+            retry_report=retry_report,
         )
         patch_parent_ids = [
             artifacts["macro_recomposition_plan"].id,
@@ -429,6 +557,7 @@ def run_bounded_macro_recomposition(
             recomposed,
             payloads["macro_recomposed_candidate_text"],
             model_payload=model_payload,
+            retry_report=retry_report,
         )
         artifacts["macro_recomposition_diff_report"] = writer.write_artifact(
             "macro_recomposition_diff_report",
@@ -459,6 +588,7 @@ def run_bounded_macro_recomposition(
             diff_report=payloads["macro_recomposition_diff_report"],
             rival_check=payloads["macro_rival_pressure_check"],
             model_payload=model_payload,
+            retry_report=retry_report,
         )
         artifacts["macro_recomposition_gate_report"] = writer.write_artifact(
             "macro_recomposition_gate_report",
@@ -479,6 +609,7 @@ def run_bounded_macro_recomposition(
             client_name=client_name,
             model=configured_model if client_name == "openai" else None,
             model_results=model_results,
+            retry_report=retry_report,
         )
         artifacts["macro_recomposition_packet"] = writer.write_artifact(
             "macro_recomposition_packet",
@@ -530,6 +661,7 @@ def run_bounded_macro_recomposition(
         "model": configured_model if client_name == "openai" else None,
         "model_call_ids": [result.model_call.id for result in model_results],
         "model_calls": [result.model_call_to_dict() for result in model_results],
+        "target_addressed_retry_report": retry_report,
         "gate_report": payloads["macro_recomposition_gate_report"],
         "finalization_eligible": False,
         "not_finalization_eligible": True,
@@ -773,6 +905,47 @@ def _run_live_macro_recomposition_model(
     return driver.run(request)
 
 
+def _run_live_macro_recomposition_retry_model(
+    *,
+    config: AbiConfig,
+    subject: MacroSubject,
+    packet_dir: Path,
+    model_client: ModelClient,
+    work_order: dict[str, object],
+    protected_effects: dict[str, object],
+    retry_plan: TargetAddressedRetryPlan,
+    parent_ids: list[str],
+) -> ModelDriverResult:
+    driver = ModelDriver(config=config, client=model_client)
+    target = _target_window(subject.base_text)
+    request = WorkerRequest(
+        run_id=subject.run_id,
+        worker_role=WorkerRole.BOUNDED_MACRO_RECOMPOSER,
+        prompt_contract_id=f"{BOUNDED_MACRO_RECOMPOSITION_PROMPT_CONTRACT_ID}.retry",
+        schema=BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+        input_text=_prompt_for_live_macro_recomposition_retry(
+            subject=subject,
+            target=target,
+            work_order=work_order,
+            protected_effects=protected_effects,
+            retry_plan=retry_plan,
+        ),
+        input_artifact_ids=list(parent_ids),
+        input_packet_path=str(subject.synthesis_packet_dir),
+        lineage_id=BOUNDED_MACRO_RECOMPOSITION_LINEAGE_ID,
+        parent_ids=list(parent_ids),
+        fixture_only=False,
+        output_dir=str(packet_dir),
+        register_parsed_artifact=False,
+        parsed_payload_validator=lambda payload: _validate_live_macro_retry_payload(
+            subject=subject,
+            payload=payload,
+            failed_refs=retry_plan.failed_target_paragraph_refs,
+        ),
+    )
+    return driver.run(request)
+
+
 def _prompt_for_live_macro_recomposition(
     *,
     subject: MacroSubject,
@@ -870,6 +1043,175 @@ def _prompt_for_live_macro_recomposition(
     )
 
 
+def _prompt_for_live_macro_recomposition_retry(
+    *,
+    subject: MacroSubject,
+    target: RecomposedText,
+    work_order: dict[str, object],
+    protected_effects: dict[str, object],
+    retry_plan: TargetAddressedRetryPlan,
+) -> str:
+    failed_refs = set(retry_plan.failed_target_paragraph_refs)
+    target_specs = _target_paragraph_specs(subject, target)
+    failed_specs = [
+        _retry_failed_paragraph_spec(
+            spec,
+            retry_plan=retry_plan,
+        )
+        for spec in target_specs
+        if str(spec["target_paragraph_ref"]) in failed_refs
+    ]
+    return _canonical_json(
+        {
+            "task": "Correct failed target-addressed macro replacements only.",
+            "retry_kind": "target_addressed_corrective_retry",
+            "max_retry_count": 1,
+            "controller_owns": [
+                "failed target refs",
+                "successful first-attempt replacements",
+                "final text assembly",
+                "diff report",
+                "gates",
+                "source IDs",
+                "finalization",
+            ],
+            "model_must": [
+                "return target_paragraph_replacements keyed only by failed refs",
+                "replace failed paragraphs materially",
+                "preserve protected effects",
+                "avoid forbidden failures",
+                "avoid copied text",
+            ],
+            "model_must_not": [
+                "rewrite successful target paragraphs",
+                "return a full artifact",
+                "claim final success",
+                "claim phase shift",
+                "change source IDs or before hashes",
+            ],
+            "source_synthesis_packet_id": subject.synthesis_packet_id,
+            "base_candidate_packet_id": subject.base_packet_id,
+            "base_candidate_text_sha256": subject.base_text_sha256,
+            "target_movement": subject.normalized_brief.target_movement,
+            "target_scope": subject.normalized_brief.target_scope,
+            "target_submovement": list(subject.normalized_brief.target_submovement),
+            "target_paragraph_start_index": target.target_start_index,
+            "target_paragraph_end_index": target.target_end_index,
+            "before_section_text": "\n\n".join(target.original_target),
+            "work_order": _retry_work_order(
+                work_order,
+                failed_specs=failed_specs,
+            ),
+            "failed_target_paragraphs": failed_specs,
+            "successful_first_attempt_replacements": (
+                _successful_first_attempt_replacements(
+                    retry_plan.first_attempt_payload,
+                    failed_refs=failed_refs,
+                )
+            ),
+            "first_attempt_failure": {
+                "first_failure_message": retry_plan.first_failure_message,
+                "failed_target_paragraph_refs": list(
+                    retry_plan.failed_target_paragraph_refs
+                ),
+                "failure_reasons_by_ref": retry_plan.failure_reasons_by_ref,
+                "failed_material_target_ids_by_ref": (
+                    retry_plan.failed_material_target_ids_by_ref
+                ),
+            },
+            "protected_semantic_constraints": _semantic_constraints(),
+            "active_transformation_targets": _active_transformation_targets(
+                subject,
+                target,
+            ),
+            "protected_effects_and_forbidden_changes": protected_effects,
+            "output_rule": (
+                "Return strict BoundedMacroRecompositionOutput JSON. The "
+                "target_paragraph_replacements array must contain corrected "
+                "replacements for the failed target refs only. Do not rewrite "
+                "successful refs. The controller will merge successful first-attempt "
+                "replacements with retry replacements and rerun full validation."
+            ),
+        }
+    )
+
+
+def _retry_failed_paragraph_spec(
+    spec: dict[str, object],
+    *,
+    retry_plan: TargetAddressedRetryPlan,
+) -> dict[str, object]:
+    ref = str(spec["target_paragraph_ref"])
+    return {
+        "target_paragraph_ref": ref,
+        "before_text": spec["before_text"],
+        "before_text_sha256": spec["before_text_sha256"],
+        "word_count": spec["word_count"],
+        "active_target_ids": list(spec["active_target_ids"]),
+        "material_active_target_ids_failed": list(
+            retry_plan.failed_material_target_ids_by_ref.get(ref, [])
+        ),
+        "material_change_required": spec["material_change_required"],
+        "transformation_instruction": spec["transformation_instruction"],
+        "protected_effects": list(spec["protected_effects"]),
+        "forbidden_failures": list(spec["forbidden_failures"]),
+        "first_attempt_replacement_text": _first_attempt_replacement_text(
+            retry_plan.first_attempt_payload,
+            target_ref=ref,
+        ),
+        "failure_reason": retry_plan.failure_reasons_by_ref.get(ref, ""),
+    }
+
+
+def _retry_work_order(
+    work_order: dict[str, object],
+    *,
+    failed_specs: list[dict[str, object]],
+) -> dict[str, object]:
+    retry_work_order = dict(work_order)
+    retry_work_order["retry_scope"] = "failed_target_paragraph_refs_only"
+    retry_work_order["target_paragraphs"] = failed_specs
+    retry_work_order["model_must_not_touch_successful_refs"] = True
+    return retry_work_order
+
+
+def _successful_first_attempt_replacements(
+    payload: dict[str, object] | None,
+    *,
+    failed_refs: set[str],
+) -> list[dict[str, object]]:
+    if not payload:
+        return []
+    replacements = payload.get("target_paragraph_replacements")
+    if not isinstance(replacements, list):
+        return []
+    return [
+        dict(item)
+        for item in replacements
+        if isinstance(item, dict)
+        and str(item.get("target_paragraph_ref") or "") not in failed_refs
+    ]
+
+
+def _first_attempt_replacement_text(
+    payload: dict[str, object] | None,
+    *,
+    target_ref: str,
+) -> str | None:
+    if not payload:
+        return None
+    replacements = payload.get("target_paragraph_replacements")
+    if not isinstance(replacements, list):
+        return None
+    for item in replacements:
+        if (
+            isinstance(item, dict)
+            and str(item.get("target_paragraph_ref") or "") == target_ref
+        ):
+            return str(item.get("replacement_text") or "")
+    return None
+
+
 def _write_model_tagged_artifact(
     *,
     connection: sqlite3.Connection,
@@ -919,6 +1261,7 @@ def _failure_result(
     artifacts: dict[str, ArtifactRecord],
     model_results: list[ModelDriverResult],
     message: str,
+    retry_report: dict[str, object] | None = None,
 ) -> BoundedMacroRecompositionResult:
     payload = {
         "accepted": False,
@@ -950,6 +1293,8 @@ def _failure_result(
         "no_phase_shift_claim": True,
         "not_human_validated": True,
     }
+    if retry_report is not None:
+        payload["target_addressed_retry_report"] = retry_report
     return BoundedMacroRecompositionResult(
         exit_code=1,
         payload=payload,
@@ -1269,6 +1614,7 @@ def _build_patch_or_section_plan(
     *,
     model_payload: dict[str, object] | None = None,
     model_call_id: str | None = None,
+    retry_report: dict[str, object] | None = None,
 ) -> dict[str, object]:
     coverage_report = _build_target_coverage_report(
         subject,
@@ -1294,6 +1640,8 @@ def _build_patch_or_section_plan(
         "replacement_section_text": "\n\n".join(recomposed.replacement),
         "target_coverage_report": coverage_report,
         "source_base_text_sha256": subject.base_text_sha256,
+        "target_addressed_retry_report": retry_report
+        or _target_addressed_retry_report_not_attempted(),
         "rationale": (
             "Replace the middle/return movement as one adjacent bounded section, "
             "preserving the selected base opening and object field."
@@ -1410,6 +1758,7 @@ def _build_diff_report(
     candidate: dict[str, object],
     *,
     model_payload: dict[str, object] | None = None,
+    retry_report: dict[str, object] | None = None,
 ) -> dict[str, object]:
     coverage_report = _build_target_coverage_report(
         subject,
@@ -1431,6 +1780,8 @@ def _build_diff_report(
         "opening_scene_preserved": True,
         "unchanged_prefix_paragraph_count": len(recomposed.unchanged_prefix),
         "target_coverage_report": coverage_report,
+        "target_addressed_retry_report": retry_report
+        or _target_addressed_retry_report_not_attempted(),
         "changed_paragraph_start_index": recomposed.target_start_index,
         "changed_paragraph_end_index": recomposed.target_end_index,
         "changed_spans": [
@@ -1487,6 +1838,7 @@ def _build_gate_report(
     diff_report: dict[str, object],
     rival_check: dict[str, object],
     model_payload: dict[str, object] | None = None,
+    retry_report: dict[str, object] | None = None,
 ) -> dict[str, object]:
     constraint_mapping_complete = bool(model_payload) and _constraint_mapping_complete(
         model_payload
@@ -1594,6 +1946,8 @@ def _build_gate_report(
         "ready_for_executed_ablation": bool(
             coverage_report.get("ready_for_executed_ablation")
         ),
+        "target_addressed_retry_report": retry_report
+        or _target_addressed_retry_report_not_attempted(),
         "target_coverage_report": coverage_report,
         "requires_executed_ablation_before_improvement_claim": True,
         "operator_approval_absent": True,
@@ -1628,6 +1982,7 @@ def _build_packet_summary(
     client_name: str,
     model: str | None,
     model_results: list[ModelDriverResult],
+    retry_report: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "run_id": subject.run_id,
@@ -1664,6 +2019,8 @@ def _build_packet_summary(
         "target_coverage_report": payloads["macro_recomposition_diff_report"].get(
             "target_coverage_report"
         ),
+        "target_addressed_retry_report": retry_report
+        or _target_addressed_retry_report_not_attempted(),
         "bounded_macro_recomposition": True,
         "full_rewrite": False,
         "requires_executed_ablation_before_improvement_claim": True,
@@ -1881,6 +2238,431 @@ def _target_paragraph_specs(
             }
         )
     return specs
+
+
+def _target_addressed_retry_plan_from_failure(
+    *,
+    subject: MacroSubject,
+    result: ModelDriverResult,
+) -> TargetAddressedRetryPlan:
+    empty = TargetAddressedRetryPlan(
+        retryable=False,
+        first_attempt_payload=None,
+        retry_reason="not a retryable target-addressed macro-2 failure",
+        failed_target_paragraph_refs=(),
+        failure_reasons_by_ref={},
+        failed_material_target_ids_by_ref={},
+        first_failure_message=result.model_call.error_message or result.model_call.status,
+    )
+    if not subject.normalized_brief.reader_state_informed:
+        return empty
+    if result.model_call.status != MODEL_CALL_VALIDATION_FAILED:
+        return TargetAddressedRetryPlan(
+            **{
+                **empty.__dict__,
+                "retry_reason": "model call did not produce a controller validation failure",
+            }
+        )
+    error_message = result.model_call.error_message or ""
+    failed_refs = _retryable_failed_refs_from_error(subject, error_message)
+    if not failed_refs:
+        return TargetAddressedRetryPlan(
+            **{
+                **empty.__dict__,
+                "retry_reason": "failure was not target paragraph materiality or coverage",
+            }
+        )
+    first_payload = _schema_parsed_payload_from_model_result(result)
+    if first_payload is None:
+        return TargetAddressedRetryPlan(
+            **{
+                **empty.__dict__,
+                "retry_reason": "first attempt output was not schema-parseable",
+            }
+        )
+    if not isinstance(first_payload.get("target_paragraph_replacements"), list):
+        return TargetAddressedRetryPlan(
+            **{
+                **empty.__dict__,
+                "retry_reason": "first attempt had no target paragraph replacements",
+            }
+        )
+    failure_reasons = _failure_reasons_by_ref(
+        subject,
+        failed_refs=failed_refs,
+        error_message=error_message,
+    )
+    failed_material_ids = _failed_material_target_ids_by_ref(
+        subject,
+        failed_refs=failed_refs,
+        error_message=error_message,
+    )
+    return TargetAddressedRetryPlan(
+        retryable=True,
+        first_attempt_payload=first_payload,
+        retry_reason="target paragraph corrective retry",
+        failed_target_paragraph_refs=tuple(failed_refs),
+        failure_reasons_by_ref=failure_reasons,
+        failed_material_target_ids_by_ref=failed_material_ids,
+        first_failure_message=error_message,
+    )
+
+
+def _schema_parsed_payload_from_model_result(
+    result: ModelDriverResult,
+) -> dict[str, object] | None:
+    raw_output_path = Path(result.model_call.raw_output_path)
+    try:
+        raw_output = raw_output_path.read_text(encoding="utf-8")
+        return parse_and_validate_structured_output(
+            raw_output,
+            BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+        )
+    except (OSError, ModelValidationError):
+        return None
+
+
+def _retryable_failed_refs_from_error(
+    subject: MacroSubject,
+    error_message: str,
+) -> tuple[str, ...]:
+    target = _target_window(subject.base_text)
+    specs = _target_paragraph_specs(subject, target)
+    material_refs = {
+        str(spec["target_paragraph_ref"])
+        for spec in specs
+        if bool(spec["material_change_required"])
+    }
+    if error_message.startswith("missing target paragraph replacement: "):
+        return tuple(
+            ref
+            for ref in _split_suffix_values(
+                error_message,
+                "missing target paragraph replacement: ",
+            )
+            if ref in material_refs
+        )
+    if "copied or insufficiently changed" in error_message:
+        ref = _target_ref_from_bracketed_error(error_message)
+        return (ref,) if ref in material_refs else ()
+    if error_message.startswith(
+        "target paragraph replacements do not cover material active targets: "
+    ):
+        target_ids = _split_suffix_values(
+            error_message,
+            "target paragraph replacements do not cover material active targets: ",
+        )
+        return _refs_for_material_target_ids(subject, target_ids)
+    if error_message.startswith("macro target coverage failed: "):
+        target_ids = _split_suffix_values(error_message, "macro target coverage failed: ")
+        return _refs_for_material_target_ids(subject, target_ids)
+    if error_message.startswith("macro materiality failed: "):
+        return tuple(sorted(material_refs))
+    return ()
+
+
+def _target_ref_from_bracketed_error(error_message: str) -> str:
+    prefix = "target_paragraph_replacements["
+    start = error_message.find(prefix)
+    if start < 0:
+        return ""
+    start += len(prefix)
+    end = error_message.find("]", start)
+    if end < 0:
+        return ""
+    return error_message[start:end]
+
+
+def _split_suffix_values(error_message: str, prefix: str) -> tuple[str, ...]:
+    if not error_message.startswith(prefix):
+        return ()
+    return tuple(
+        value.strip()
+        for value in error_message[len(prefix) :].split(",")
+        if value.strip()
+    )
+
+
+def _refs_for_material_target_ids(
+    subject: MacroSubject,
+    target_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    target = _target_window(subject.base_text)
+    paragraph_refs = _target_paragraph_refs(target.original_target)
+    ref_by_id = _active_target_ref_map(
+        paragraph_refs,
+        subject.normalized_brief.active_transformation_target_ids,
+    )
+    refs: list[str] = []
+    for target_id in target_ids:
+        if target_id not in subject.normalized_brief.material_required_target_ids:
+            continue
+        target_ref = ref_by_id.get(target_id)
+        if target_ref == "target_section":
+            refs.extend(paragraph_refs)
+        elif target_ref:
+            refs.append(target_ref)
+    return tuple(_unique(refs))
+
+
+def _failure_reasons_by_ref(
+    subject: MacroSubject,
+    *,
+    failed_refs: tuple[str, ...],
+    error_message: str,
+) -> dict[str, str]:
+    material_ids_by_ref = _failed_material_target_ids_by_ref(
+        subject,
+        failed_refs=failed_refs,
+        error_message=error_message,
+    )
+    reasons: dict[str, str] = {}
+    for ref in failed_refs:
+        ids = material_ids_by_ref.get(ref, [])
+        if error_message.startswith("missing target paragraph replacement: "):
+            reasons[ref] = "missing target paragraph replacement"
+        elif "copied or insufficiently changed" in error_message:
+            reasons[ref] = "copied or insufficiently materially changed paragraph"
+        elif ids:
+            reasons[ref] = "material active targets not covered: " + ", ".join(ids)
+        else:
+            reasons[ref] = error_message
+    return reasons
+
+
+def _failed_material_target_ids_by_ref(
+    subject: MacroSubject,
+    *,
+    failed_refs: tuple[str, ...],
+    error_message: str,
+) -> dict[str, list[str]]:
+    target = _target_window(subject.base_text)
+    specs = _target_paragraph_specs(subject, target)
+    material_ids = set(subject.normalized_brief.material_required_target_ids)
+    explicit_ids: tuple[str, ...] = ()
+    if "material targets: " in error_message:
+        explicit_ids = _split_suffix_values(
+            error_message,
+            error_message.split("material targets: ", 1)[0] + "material targets: ",
+        )
+    elif "material active targets: " in error_message:
+        explicit_ids = _split_suffix_values(
+            error_message,
+            error_message.split("material active targets: ", 1)[0]
+            + "material active targets: ",
+        )
+    elif "macro target coverage failed: " in error_message:
+        explicit_ids = _split_suffix_values(error_message, "macro target coverage failed: ")
+
+    result: dict[str, list[str]] = {}
+    for spec in specs:
+        ref = str(spec["target_paragraph_ref"])
+        if ref not in failed_refs:
+            continue
+        active_ids = [
+            target_id
+            for target_id in _string_tuple(spec.get("active_target_ids"))
+            if target_id in material_ids
+        ]
+        if explicit_ids:
+            scoped = [target_id for target_id in active_ids if target_id in explicit_ids]
+            result[ref] = scoped or active_ids
+        else:
+            result[ref] = active_ids
+    return result
+
+
+def _validate_live_macro_retry_payload(
+    *,
+    subject: MacroSubject,
+    payload: dict[str, object],
+    failed_refs: tuple[str, ...],
+) -> None:
+    _validate_section_plan(subject, payload)
+    _validate_constraint_mapping(payload)
+    _validate_active_target_mapping(
+        payload,
+        subject.normalized_brief.active_transformation_target_ids,
+    )
+    _validate_forbidden_live_macro_claims(payload)
+    _validate_retry_target_replacements(
+        subject=subject,
+        payload=payload,
+        failed_refs=failed_refs,
+    )
+
+
+def _validate_retry_target_replacements(
+    *,
+    subject: MacroSubject,
+    payload: dict[str, object],
+    failed_refs: tuple[str, ...],
+) -> None:
+    target = _target_window(subject.base_text)
+    specs = _target_paragraph_specs(subject, target)
+    spec_by_ref = {str(spec["target_paragraph_ref"]): spec for spec in specs}
+    failed_ref_set = set(failed_refs)
+    replacements = payload.get("target_paragraph_replacements")
+    if not isinstance(replacements, list):
+        raise ModelValidationError(
+            "target_paragraph_replacements is required for corrective retry"
+        )
+    retry_by_ref = {
+        str(item.get("target_paragraph_ref") or ""): item
+        for item in replacements
+        if isinstance(item, dict)
+        and str(item.get("target_paragraph_ref") or "") in failed_ref_set
+    }
+    missing = sorted(failed_ref_set - set(retry_by_ref))
+    if missing:
+        raise ModelValidationError(
+            "corrective retry missing target paragraph replacement: "
+            + ", ".join(missing)
+        )
+    material_ids = set(subject.normalized_brief.material_required_target_ids)
+    for ref in failed_refs:
+        item = retry_by_ref[ref]
+        spec = spec_by_ref[ref]
+        before_hash = str(item.get("before_text_sha256") or "")
+        if before_hash != spec["before_text_sha256"]:
+            raise ModelValidationError(
+                f"corrective retry target_paragraph_replacements[{ref}] "
+                "before_text_sha256 mismatch"
+            )
+        replacement_text = str(item.get("replacement_text") or "").strip()
+        if not replacement_text:
+            raise ModelValidationError(
+                f"corrective retry target_paragraph_replacements[{ref}] "
+                "replacement_text is empty"
+            )
+        covered_ids = set(_string_tuple(item.get("active_target_ids_covered")))
+        allowed_ids = set(_string_tuple(spec.get("active_target_ids")))
+        unsupported = sorted(covered_ids - allowed_ids)
+        if unsupported:
+            raise ModelValidationError(
+                f"corrective retry target_paragraph_replacements[{ref}] covers "
+                "unassigned active target IDs: " + ", ".join(unsupported)
+            )
+        required_ids = sorted(allowed_ids & material_ids)
+        missing_ids = sorted(set(required_ids) - covered_ids)
+        if missing_ids:
+            raise ModelValidationError(
+                f"corrective retry target_paragraph_replacements[{ref}] does not "
+                "cover material active targets: " + ", ".join(missing_ids)
+            )
+        if not _materially_changed_words(
+            _normalized_words(str(spec["before_text"])),
+            _normalized_words(replacement_text),
+        ):
+            raise ModelValidationError(
+                f"corrective retry target_paragraph_replacements[{ref}] copied "
+                "or insufficiently changed for material targets: "
+                + ", ".join(required_ids)
+            )
+
+
+def _merge_target_addressed_retry_payload(
+    *,
+    subject: MacroSubject,
+    first_payload: dict[str, object],
+    retry_payload: dict[str, object],
+    failed_refs: tuple[str, ...],
+) -> dict[str, object]:
+    target = _target_window(subject.base_text)
+    refs = _target_paragraph_refs(target.original_target)
+    failed_ref_set = set(failed_refs)
+    first_by_ref = _replacement_map(first_payload)
+    retry_by_ref = _replacement_map(retry_payload)
+    merged_replacements: list[dict[str, object]] = []
+    for ref in refs:
+        if ref in failed_ref_set and ref in retry_by_ref:
+            merged_replacements.append(dict(retry_by_ref[ref]))
+        elif ref in first_by_ref:
+            merged_replacements.append(dict(first_by_ref[ref]))
+    merged = dict(first_payload)
+    merged["target_paragraph_replacements"] = merged_replacements
+    return merged
+
+
+def _replacement_map(payload: dict[str, object]) -> dict[str, dict[str, object]]:
+    replacements = payload.get("target_paragraph_replacements")
+    if not isinstance(replacements, list):
+        return {}
+    result: dict[str, dict[str, object]] = {}
+    for item in replacements:
+        if not isinstance(item, dict):
+            continue
+        ref = str(item.get("target_paragraph_ref") or "")
+        if ref:
+            result[ref] = item
+    return result
+
+
+def _target_addressed_retry_report_not_attempted(
+    *,
+    retry_plan: TargetAddressedRetryPlan | None = None,
+    first_attempt_model_call_id: str | None = None,
+    budget_remaining: bool = False,
+) -> dict[str, object]:
+    return {
+        "retry_attempted": False,
+        "retry_reason": retry_plan.retry_reason if retry_plan else "",
+        "first_attempt_model_call_id": first_attempt_model_call_id,
+        "retry_model_call_id": None,
+        "failed_target_paragraph_refs": list(
+            retry_plan.failed_target_paragraph_refs if retry_plan else []
+        ),
+        "failure_reasons_by_ref": retry_plan.failure_reasons_by_ref if retry_plan else {},
+        "preserved_first_attempt_refs": [],
+        "retry_replaced_refs": [],
+        "ignored_retry_refs": [],
+        "merged_validation_passed": False,
+        "retry_count": 0,
+        "max_retry_count": 1,
+        "budget_remaining_after_first_attempt": budget_remaining,
+        "no_phase_shift_claim": True,
+        "finalization_eligible": False,
+    }
+
+
+def _target_addressed_retry_report(
+    *,
+    retry_plan: TargetAddressedRetryPlan,
+    first_attempt_model_call_id: str,
+    retry_model_call_id: str,
+    retry_payload: dict[str, object] | None,
+    merged_payload: dict[str, object] | None,
+    merged_validation_passed: bool,
+    remaining_failure_message: str | None = None,
+) -> dict[str, object]:
+    failed_refs = set(retry_plan.failed_target_paragraph_refs)
+    first_refs = set(_replacement_map(retry_plan.first_attempt_payload or {}))
+    retry_refs = set(_replacement_map(retry_payload or {}))
+    preserved_refs = sorted(first_refs - failed_refs)
+    retry_replaced_refs = sorted(ref for ref in retry_refs if ref in failed_refs)
+    ignored_retry_refs = sorted(retry_refs - failed_refs)
+    report = {
+        "retry_attempted": True,
+        "retry_reason": retry_plan.retry_reason,
+        "first_attempt_model_call_id": first_attempt_model_call_id,
+        "retry_model_call_id": retry_model_call_id,
+        "failed_target_paragraph_refs": list(retry_plan.failed_target_paragraph_refs),
+        "failure_reasons_by_ref": retry_plan.failure_reasons_by_ref,
+        "failed_material_target_ids_by_ref": retry_plan.failed_material_target_ids_by_ref,
+        "preserved_first_attempt_refs": preserved_refs,
+        "retry_replaced_refs": retry_replaced_refs,
+        "ignored_retry_refs": ignored_retry_refs,
+        "merged_validation_passed": merged_validation_passed,
+        "retry_count": 1,
+        "max_retry_count": 1,
+        "no_phase_shift_claim": True,
+        "finalization_eligible": False,
+    }
+    if remaining_failure_message:
+        report["remaining_failure_message"] = remaining_failure_message
+    if merged_payload is not None:
+        report["merged_target_paragraph_refs"] = list(_replacement_map(merged_payload))
+    return report
 
 
 def _validate_live_macro_payload(

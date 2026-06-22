@@ -1103,6 +1103,7 @@ class StubBoundedMacroRecompositionClient:
         if request.schema != BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
             raise AssertionError(f"unexpected schema: {request.schema.name}")
         prompt = json.loads(request.input_text)
+        is_retry = prompt.get("retry_kind") == "target_addressed_corrective_retry"
         work_order = prompt.get("work_order", {})
         target_paragraphs = (
             work_order.get("target_paragraphs", [])
@@ -1149,12 +1150,29 @@ class StubBoundedMacroRecompositionClient:
                 for item in payload.get("target_paragraph_replacements", [])
                 if item["target_paragraph_ref"] != "target_p002"
             ]
+        elif self.mode == "missing_target_p002_then_correct" and not is_retry:
+            payload["target_paragraph_replacements"] = [
+                item
+                for item in payload.get("target_paragraph_replacements", [])
+                if item["target_paragraph_ref"] != "target_p002"
+            ]
         elif self.mode == "copied_target_p002":
             _copy_target_paragraph(payload, target_paragraphs, "target_p002")
         elif self.mode == "copied_target_p003":
             _copy_target_paragraph(payload, target_paragraphs, "target_p003")
         elif self.mode == "copied_target_p004":
             _copy_target_paragraph(payload, target_paragraphs, "target_p004")
+        elif self.mode == "copied_target_p004_then_correct" and not is_retry:
+            _copy_target_paragraph(payload, target_paragraphs, "target_p004")
+        elif self.mode == "copied_target_p004_retry_copies":
+            _copy_target_paragraph(payload, target_paragraphs, "target_p004")
+        elif self.mode == "retry_extra_override":
+            if not is_retry:
+                _copy_target_paragraph(payload, target_paragraphs, "target_p004")
+            else:
+                extra = _successful_retry_override(prompt, "target_p001")
+                if extra is not None:
+                    payload["target_paragraph_replacements"].append(extra)
         elif self.mode == "mismatched_target_hash":
             payload["target_paragraph_replacements"][0]["before_text_sha256"] = "bad-hash"
         elif self.mode == "duplicate_target_ref":
@@ -1352,6 +1370,22 @@ def _copy_target_paragraph(
     for item in payload.get("target_paragraph_replacements", []):
         if item["target_paragraph_ref"] == target_ref:
             item["replacement_text"] = before_by_ref[target_ref]
+
+
+def _successful_retry_override(
+    prompt: dict[str, object],
+    target_ref: str,
+) -> dict[str, object] | None:
+    for item in prompt.get("successful_first_attempt_replacements", []):
+        if isinstance(item, dict) and item.get("target_paragraph_ref") == target_ref:
+            override = dict(item)
+            override["replacement_text"] = (
+                "This attempted retry override should never replace the successful "
+                "first-attempt target paragraph."
+            )
+            override["material_change_summary"] = "attempted override of a passed ref"
+            return override
+    return None
 
 
 def active_target_mapping_payload(
@@ -5914,6 +5948,242 @@ def test_bounded_macro_recomposition_reader_state_macro_2_controller_assembly_ov
     assert "No answer enters from outside the kitchen." in candidate["text"]
 
 
+def test_bounded_macro_recomposition_reader_state_macro_2_corrective_retry_accepts(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            clients,
+            mode="copied_target_p004_then_correct",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 2
+    assert len(result.payload["model_call_ids"]) == 2
+    assert len(clients) == 1
+    assert len(clients[0].requests) == 2
+    retry_prompt = json.loads(clients[0].requests[1].input_text)
+    assert retry_prompt["retry_kind"] == "target_addressed_corrective_retry"
+    assert [
+        item["target_paragraph_ref"]
+        for item in retry_prompt["failed_target_paragraphs"]
+    ] == ["target_p004"]
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    report = section["target_addressed_retry_report"]
+    assert report["retry_attempted"] is True
+    assert report["retry_count"] == 1
+    assert report["max_retry_count"] == 1
+    assert report["failed_target_paragraph_refs"] == ["target_p004"]
+    assert report["retry_replaced_refs"] == ["target_p004"]
+    assert "target_p001" in report["preserved_first_attempt_refs"]
+    assert "target_p002" in report["preserved_first_attempt_refs"]
+    assert report["merged_validation_passed"] is True
+    assert report["first_attempt_model_call_id"] == result.payload["model_call_ids"][0]
+    assert report["retry_model_call_id"] == result.payload["model_call_ids"][1]
+    replacements = {
+        item["target_paragraph_ref"]: item["replacement_text"]
+        for item in section["target_paragraph_replacements"]
+    }
+    assert "The room does not need a witness above it." in replacements["target_p001"]
+    assert "The final return keeps the table ordinary" in replacements["target_p004"]
+    assert section["target_coverage_report"]["macro_target_coverage_passed"] is True
+    assert section["target_coverage_report"]["macro_materiality_passed"] is True
+    assert section["source_model_call_id"] == result.payload["model_call_ids"][1]
+    gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
+    assert gate["target_addressed_retry_report"]["retry_attempted"] is True
+    assert gate["passed"] is False
+
+    with connect(chain["config"].db_path) as connection:
+        model_calls = [
+            call
+            for call in list_model_calls(connection, run_id=chain["run_id"])
+            if call.schema_name == BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name
+        ]
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert model_calls[-2].status == MODEL_CALL_VALIDATION_FAILED
+    assert model_calls[-1].status == MODEL_CALL_SUCCESS
+    assert final_report.refused is True
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_retry_preserves_passed_refs(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode="retry_extra_override"),
+    )
+
+    assert result.exit_code == 0
+    section = read_payload(
+        Path(str(result.payload["packet_dir"])) / "macro_patch_or_section_plan.json"
+    )
+    report = section["target_addressed_retry_report"]
+    assert report["ignored_retry_refs"] == ["target_p001"]
+    replacements = {
+        item["target_paragraph_ref"]: item["replacement_text"]
+        for item in section["target_paragraph_replacements"]
+    }
+    assert "attempted retry override" not in replacements["target_p001"]
+    assert "The room does not need a witness above it." in replacements["target_p001"]
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_retry_budget_one_refuses(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="copied_target_p004_then_correct",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "Corrective retry not attempted" in result.payload["message"]
+    report = result.payload["target_addressed_retry_report"]
+    assert report["retry_attempted"] is False
+    assert report["failed_target_paragraph_refs"] == ["target_p004"]
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_failed_retry_refuses(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="copied_target_p004_retry_copies",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 2
+    report = result.payload["target_addressed_retry_report"]
+    assert report["retry_attempted"] is True
+    assert report["failed_target_paragraph_refs"] == ["target_p004"]
+    assert report["merged_validation_passed"] is False
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_missing_ref_retry_accepts(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="missing_target_p002_then_correct",
+        ),
+    )
+
+    assert result.exit_code == 0
+    section = read_payload(
+        Path(str(result.payload["packet_dir"])) / "macro_patch_or_section_plan.json"
+    )
+    report = section["target_addressed_retry_report"]
+    assert report["retry_attempted"] is True
+    assert report["failed_target_paragraph_refs"] == ["target_p002"]
+    assert report["retry_replaced_refs"] == ["target_p002"]
+    assert section["target_coverage_report"]["macro_target_coverage_passed"] is True
+
+
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
+        ("invalid_json", "Corrective retry not attempted"),
+        ("final_claim", "Corrective retry not attempted"),
+    ],
+)
+def test_bounded_macro_recomposition_does_not_retry_schema_or_final_claim_failures(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    assert expected in result.payload["message"]
+    assert result.payload["target_addressed_retry_report"]["retry_attempted"] is False
+
+
 @pytest.mark.parametrize(
     "mode, expected",
     [
@@ -5939,6 +6209,7 @@ def test_bounded_macro_recomposition_reader_state_macro_2_live_validation_failur
         client_name="openai",
         synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
         allow_live_model=True,
+        max_model_calls=1,
         api_key="stub-key",
         model="stub-live-macro",
         client_factory=bounded_macro_stub_factory([], mode=mode),
