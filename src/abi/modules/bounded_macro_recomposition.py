@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
 
@@ -195,6 +196,14 @@ class TargetAddressedRetryPlan:
     failed_material_target_ids_by_ref: dict[str, list[str]]
     failed_active_targets_by_span: dict[str, list[str]]
     first_failure_message: str
+
+
+@dataclass(frozen=True)
+class ForbiddenClaimFinding:
+    path: str
+    excerpt: str
+    claim_type: str
+    reason: str
 
 
 def run_bounded_macro_recomposition(
@@ -4024,15 +4033,59 @@ def _validate_replacement_text(subject: MacroSubject, replacement_text: str) -> 
 
 
 def _validate_forbidden_live_macro_claims(payload: dict[str, object]) -> None:
-    text = _flatten_strings(payload).lower()
-    forbidden_markers = {
-        "final artifact": "final artifact claim",
-        "finalization eligible": "finalization claim",
-        "finalisation eligible": "finalization claim",
-        "human validated": "human-validation claim",
-        "phase-shift": "phase-shift claim",
-        "phase shift": "phase-shift claim",
-        "paper-ready": "paper-readiness claim",
+    for path, value in _iter_string_fields(payload):
+        finding = _classify_forbidden_live_macro_claim(path, value)
+        if finding is not None:
+            raise ModelValidationError(
+                f"{finding.claim_type} in {finding.path}: "
+                f"{_quoted_excerpt(finding.excerpt)}"
+            )
+
+
+def _iter_string_fields(value: object, path: str = "$") -> list[tuple[str, str]]:
+    if isinstance(value, str):
+        return [(path, value)]
+    if isinstance(value, dict):
+        fields: list[tuple[str, str]] = []
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path != "$" else str(key)
+            fields.extend(_iter_string_fields(child, child_path))
+        return fields
+    if isinstance(value, list):
+        fields: list[tuple[str, str]] = []
+        for index, child in enumerate(value):
+            fields.extend(_iter_string_fields(child, f"{path}[{index}]"))
+        return fields
+    return []
+
+
+def _classify_forbidden_live_macro_claim(
+    path: str,
+    value: str,
+) -> ForbiddenClaimFinding | None:
+    lower = _normalized_claim_text(value)
+    for marker, claim_type in _hard_forbidden_live_macro_markers().items():
+        if marker in lower:
+            return ForbiddenClaimFinding(
+                path=path,
+                excerpt=_sentence_excerpt(value, marker),
+                claim_type=claim_type,
+                reason="hard_forbidden_marker",
+            )
+    for pattern, claim_type in _affirmative_finality_patterns():
+        match = pattern.search(lower)
+        if match and not _is_allowed_nonclaim_context(lower, match.start(), match.end()):
+            return ForbiddenClaimFinding(
+                path=path,
+                excerpt=_sentence_excerpt(value, match.group(0)),
+                claim_type=claim_type,
+                reason=_field_claim_context(path),
+            )
+    return None
+
+
+def _hard_forbidden_live_macro_markers() -> dict[str, str]:
+    return {
         "outside rescue arrives": "outside-rescue violation",
         "rescued from outside": "outside-rescue violation",
         "answer arrives from outside": "outside-answer violation",
@@ -4046,20 +4099,110 @@ def _validate_forbidden_live_macro_claims(payload: dict[str, object]) -> None:
         "discard the dust": "local-field discard violation",
         "discard the spoon": "local-field discard violation",
         "discard the saucer": "local-field discard violation",
+        "human validated": "human-validation claim",
+        "paper-ready": "paper-readiness claim",
     }
-    for marker, reason in forbidden_markers.items():
-        if marker in text:
-            raise ModelValidationError(f"{reason}: {marker}")
 
 
-def _flatten_strings(value: object) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        return "\n".join(_flatten_strings(child) for child in value.values())
-    if isinstance(value, list):
-        return "\n".join(_flatten_strings(child) for child in value)
-    return ""
+def _affirmative_finality_patterns() -> tuple[tuple[re.Pattern[str], str], ...]:
+    return (
+        (
+            re.compile(r"\b(?:this|the|candidate|artifact|output|text)\s+is\s+the\s+final\s+artifact\b"),
+            "finality claim",
+        ),
+        (re.compile(r"\b(?:the\s+)?candidate\s+is\s+final\b"), "finality claim"),
+        (re.compile(r"\bfinal\s+artifact\s+(?:ready|complete|completed|accepted|approved|achieved|proven)\b"), "finality claim"),
+        (re.compile(r"\bfinal\s+version\b"), "finality claim"),
+        (re.compile(r"\bfinali[sz]ation\s+eligible\b"), "finality claim"),
+        (re.compile(r"\bready\s+for\s+finali[sz]ation\b"), "finality claim"),
+        (re.compile(r"\bphase[- ]shift\s+(?:achieved|proven|complete|completed|succeeds|succeeded)\b"), "phase-shift claim"),
+        (re.compile(r"\bcreative\s+phase[- ]shift\s+(?:achieved|proven|complete|completed)\b"), "phase-shift claim"),
+        (re.compile(r"\brival\s+defeated\b"), "rival-defeat claim"),
+        (re.compile(r"\bstrongest\s+rival\s+defeated\b"), "rival-defeat claim"),
+        (re.compile(r"\bartifact\s+success\s+proven\b"), "artifact-success claim"),
+    )
+
+
+def _is_allowed_nonclaim_context(text: str, start: int, end: int) -> bool:
+    sentence = _sentence_around(text, start, end)
+    allowed_markers = (
+        "not final",
+        "non-final",
+        "not a final artifact",
+        "does not claim",
+        "doesn't claim",
+        "avoid finality",
+        "avoids claim-language",
+        "avoid claim-language",
+        "no final claim",
+        "no phase-shift claim",
+        "not phase-shift evidence",
+        "requires ablation before any improvement claim",
+        "controller still needs to assemble the final artifact",
+        "controller owns final assembly",
+        "controller owns finalization",
+        "controller owns finalisation",
+        "controller still owns final assembly",
+        "finalization remains false",
+        "finalisation remains false",
+        "without claiming closure",
+        "without claiming finality",
+        "without asserting final closure",
+        "not claiming victory",
+        "rather than claiming victory",
+        "does not claim closure",
+        "does not claim finality",
+        "does not claim closure finality or defeat",
+    )
+    return any(marker in sentence for marker in allowed_markers)
+
+
+def _field_claim_context(path: str) -> str:
+    artifact_facing_suffixes = (
+        "replacement_section_text",
+        "replacement_text",
+        "replacement_excerpt",
+    )
+    if path.endswith(artifact_facing_suffixes):
+        return "artifact_facing_field"
+    return "model_metadata_field"
+
+
+def _normalized_claim_text(value: str) -> str:
+    lowered = value.lower().replace("\u2011", "-").replace("\u2010", "-")
+    lowered = lowered.replace("\u2013", "-").replace("\u2014", "-")
+    lowered = lowered.replace("'", "'").replace("\u2019", "'")
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def _sentence_excerpt(value: str, marker: str) -> str:
+    lower = _normalized_claim_text(value)
+    normalized_marker = _normalized_claim_text(marker)
+    marker_index = lower.find(normalized_marker)
+    if marker_index < 0:
+        return value.strip()[:160]
+    return _sentence_around(value, marker_index, marker_index + len(normalized_marker))[
+        :160
+    ]
+
+
+def _sentence_around(value: str, start: int, end: int) -> str:
+    normalized = _normalized_claim_text(value)
+    start = min(start, len(normalized))
+    end = min(max(end, start), len(normalized))
+    left_candidates = [normalized.rfind(mark, 0, start) for mark in (".", "!", "?")]
+    left = max(left_candidates)
+    right_candidates = [
+        index
+        for index in (normalized.find(mark, end) for mark in (".", "!", "?"))
+        if index >= 0
+    ]
+    right = min(right_candidates) if right_candidates else len(normalized)
+    return normalized[left + 1 : right].strip()
+
+
+def _quoted_excerpt(value: str) -> str:
+    return f'"{value.strip()[:160]}"'
 
 
 def _load_base_candidate_payload(packet_dir: Path, packet_kind: str) -> dict[str, Any]:

@@ -1135,7 +1135,38 @@ class StubBoundedMacroRecompositionClient:
         elif self.mode == "proof_from_outside":
             payload["replacement_section_text"] += "\n\nHere proof comes from outside."
         elif self.mode == "final_claim":
-            payload["rationale"] = "This achieves phase-shift success."
+            payload["rationale"] = "phase shift achieved"
+        elif self.mode == "artifact_final_claim":
+            payload["target_paragraph_replacements"][0]["replacement_text"] = (
+                "This is the final artifact."
+            )
+        elif self.mode == "metadata_final_artifact_claim":
+            payload["rationale"] = "This is the final artifact."
+        elif self.mode == "rival_defeated_claim":
+            payload["rationale"] = "strongest rival defeated"
+        elif self.mode == "metadata_controller_final_artifact_phrase":
+            payload["constraint_mapping"][0]["uncertainty"] = (
+                "Medium, because the controller still needs to assemble the final artifact "
+                "and verify span coverage."
+            )
+        elif self.mode == "metadata_does_not_claim_finality":
+            payload["predicted_reader_state_effect"] = (
+                "The strongest-rival pressure should remain active because the text does "
+                "not claim closure, finality, or defeat."
+            )
+        elif self.mode == "metadata_avoid_finality":
+            payload["constraint_mapping"][4]["supporting_replacement_excerpt"] = (
+                "The replacement preserves a concrete object sequence and avoids "
+                "claim-language of victory or finality."
+            )
+        elif self.mode == "metadata_finalization_false":
+            payload["uncertainty"] = "Finalization remains false until the controller acts."
+        elif self.mode == "metadata_final_artifact_plus_copied_target_p003":
+            payload["constraint_mapping"][0]["uncertainty"] = (
+                "Medium, because the controller still needs to assemble the final artifact "
+                "and verify span coverage."
+            )
+            _copy_target_paragraph(payload, target_paragraphs, "target_p003")
         elif self.mode == "prefix_rewrite":
             payload["replacement_section_text"] = (
                 f"{prompt['unchanged_prefix_text']}\n\n{payload['replacement_section_text']}"
@@ -6424,6 +6455,116 @@ def test_bounded_macro_recomposition_reader_state_macro_2_missing_ref_retry_acce
     assert report["failed_target_paragraph_refs"] == ["target_p002"]
     assert report["retry_replaced_refs"] == ["target_p002"]
     assert section["target_coverage_report"]["macro_target_coverage_passed"] is True
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "metadata_controller_final_artifact_phrase",
+        "metadata_does_not_claim_finality",
+        "metadata_avoid_finality",
+        "metadata_finalization_false",
+    ],
+)
+def test_bounded_macro_recomposition_allows_nonclaim_finality_metadata(
+    tmp_path,
+    monkeypatch,
+    mode,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode=mode),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
+        (
+            "artifact_final_claim",
+            "finality claim in target_paragraph_replacements[0].replacement_text",
+        ),
+        ("metadata_final_artifact_claim", "finality claim in rationale"),
+        ("final_claim", "phase-shift claim in rationale"),
+        ("rival_defeated_claim", "rival-defeat claim in rationale"),
+    ],
+)
+def test_bounded_macro_recomposition_rejects_affirmative_finality_claims_with_path(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["target_addressed_retry_report"]["retry_attempted"] is False
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
+
+
+def test_bounded_macro_recomposition_finality_metadata_false_positive_reaches_target_failure(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="metadata_final_artifact_plus_copied_target_p003",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "finality claim" not in result.payload["message"]
+    assert "target_paragraph_replacements[target_p003] copied" in result.payload[
+        "message"
+    ]
+    assert result.payload["target_addressed_retry_report"]["retry_attempted"] is False
+    assert result.payload["target_addressed_retry_report"][
+        "failed_target_paragraph_refs"
+    ] == ["target_p003"]
 
 
 @pytest.mark.parametrize(
