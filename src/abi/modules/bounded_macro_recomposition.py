@@ -189,8 +189,11 @@ class TargetAddressedRetryPlan:
     first_attempt_payload: dict[str, object] | None
     retry_reason: str
     failed_target_paragraph_refs: tuple[str, ...]
+    failed_target_span_refs: tuple[str, ...]
     failure_reasons_by_ref: dict[str, str]
+    failure_reasons_by_span: dict[str, str]
     failed_material_target_ids_by_ref: dict[str, list[str]]
+    failed_active_targets_by_span: dict[str, list[str]]
     first_failure_message: str
 
 
@@ -969,6 +972,8 @@ def _prompt_for_live_macro_recomposition(
                 "target_paragraph_indices",
                 "target_paragraph_refs",
                 "target_paragraph_before_text_hashes",
+                "target_span_refs",
+                "target_span_before_text_hashes",
                 "before_section_text",
                 "protected_semantic_constraints",
                 "active_transformation_targets",
@@ -981,6 +986,7 @@ def _prompt_for_live_macro_recomposition(
             "model_may_own": [
                 "replacement_section_text",
                 "target_paragraph_replacements",
+                "target_span_replacements",
                 "plan wording",
                 "section plan wording",
                 "rationale",
@@ -1030,14 +1036,19 @@ def _prompt_for_live_macro_recomposition(
                 "constraint_id and exactly one active_target_mapping item for "
                 "every active target_id. For reader_state_informed_macro_2, you "
                 "must also return target_paragraph_replacements keyed by the "
-                "controller target_paragraph_ref values. Replace every target "
-                "paragraph marked material_change_required; do not copy target "
-                "paragraphs unchanged. If two active targets share a paragraph, "
-                "the paragraph replacement must satisfy both. The controller will "
-                "assemble final text and reject copied paragraphs, hash mismatches, "
-                "missing target refs, and unsupported target coverage claims. For "
-                "non-reader-state macro recomposition, return "
-                "target_paragraph_replacements as an empty array."
+                "controller target_paragraph_ref values and target_span_replacements "
+                "for every target span marked material_change_required. Replace "
+                "every target paragraph marked material_change_required; do not "
+                "copy target paragraphs or required target spans unchanged. If two "
+                "active targets share a paragraph, the paragraph replacement must "
+                "satisfy both. For thesis_visible_proof_language_reduction, "
+                "changing only the final proof sentence is insufficient if "
+                "thesis-framing spans remain intact. The controller will assemble "
+                "final text and reject copied paragraphs, copied required spans, "
+                "hash mismatches, missing target refs, missing span refs, and "
+                "unsupported target coverage claims. For non-reader-state macro "
+                "recomposition, return target_paragraph_replacements and "
+                "target_span_replacements as empty arrays."
             ),
         }
     )
@@ -1053,9 +1064,11 @@ def _prompt_for_live_macro_recomposition_retry(
 ) -> str:
     failed_refs = set(retry_plan.failed_target_paragraph_refs)
     target_specs = _target_paragraph_specs(subject, target)
+    target_span_specs = _target_span_specs(subject, target, target_specs)
     failed_specs = [
         _retry_failed_paragraph_spec(
             spec,
+            target_span_specs=target_span_specs,
             retry_plan=retry_plan,
         )
         for spec in target_specs
@@ -1077,6 +1090,7 @@ def _prompt_for_live_macro_recomposition_retry(
             ],
             "model_must": [
                 "return target_paragraph_replacements keyed only by failed refs",
+                "return target_span_replacements for failed required span refs",
                 "replace failed paragraphs materially",
                 "preserve protected effects",
                 "avoid forbidden failures",
@@ -1114,9 +1128,20 @@ def _prompt_for_live_macro_recomposition_retry(
                 "failed_target_paragraph_refs": list(
                     retry_plan.failed_target_paragraph_refs
                 ),
+                "failed_target_span_refs": list(retry_plan.failed_target_span_refs),
                 "failure_reasons_by_ref": retry_plan.failure_reasons_by_ref,
+                "failure_reasons_by_span": retry_plan.failure_reasons_by_span,
                 "failed_material_target_ids_by_ref": (
                     retry_plan.failed_material_target_ids_by_ref
+                ),
+                "failed_active_targets_by_span": (
+                    retry_plan.failed_active_targets_by_span
+                ),
+                "span_level_instruction": (
+                    "Changing only the final proof sentence is insufficient when "
+                    "required thesis-framing spans remain intact. Return a new "
+                    "target paragraph replacement and span mappings for every "
+                    "failed required span."
                 ),
             },
             "protected_semantic_constraints": _semantic_constraints(),
@@ -1129,8 +1154,11 @@ def _prompt_for_live_macro_recomposition_retry(
                 "Return strict BoundedMacroRecompositionOutput JSON. The "
                 "target_paragraph_replacements array must contain corrected "
                 "replacements for the failed target refs only. Do not rewrite "
-                "successful refs. The controller will merge successful first-attempt "
-                "replacements with retry replacements and rerun full validation."
+                "successful refs. For failed required target spans, also return "
+                "target_span_replacements keyed by target_span_ref with non-empty "
+                "replacement_excerpt and matching before_text_sha256. The controller "
+                "will merge successful first-attempt replacements with retry "
+                "replacements and rerun full validation."
             ),
         }
     )
@@ -1139,9 +1167,11 @@ def _prompt_for_live_macro_recomposition_retry(
 def _retry_failed_paragraph_spec(
     spec: dict[str, object],
     *,
+    target_span_specs: list[dict[str, object]],
     retry_plan: TargetAddressedRetryPlan,
 ) -> dict[str, object]:
     ref = str(spec["target_paragraph_ref"])
+    failed_span_set = set(retry_plan.failed_target_span_refs)
     return {
         "target_paragraph_ref": ref,
         "before_text": spec["before_text"],
@@ -1159,7 +1189,40 @@ def _retry_failed_paragraph_spec(
             retry_plan.first_attempt_payload,
             target_ref=ref,
         ),
+        "failed_target_spans": [
+            _retry_failed_span_spec(span_spec, retry_plan=retry_plan)
+            for span_spec in target_span_specs
+            if str(span_spec["parent_target_paragraph_ref"]) == ref
+            and str(span_spec["target_span_ref"]) in failed_span_set
+        ],
         "failure_reason": retry_plan.failure_reasons_by_ref.get(ref, ""),
+    }
+
+
+def _retry_failed_span_spec(
+    spec: dict[str, object],
+    *,
+    retry_plan: TargetAddressedRetryPlan,
+) -> dict[str, object]:
+    span_ref = str(spec["target_span_ref"])
+    return {
+        "target_span_ref": span_ref,
+        "parent_target_paragraph_ref": spec["parent_target_paragraph_ref"],
+        "before_text": spec["before_text"],
+        "before_text_sha256": spec["before_text_sha256"],
+        "active_target_ids": list(spec["active_target_ids"]),
+        "material_change_required": spec["material_change_required"],
+        "allowed_operation": spec["allowed_operation"],
+        "transformation_instruction": spec["transformation_instruction"],
+        "first_attempt_replacement_paragraph": _first_attempt_replacement_text(
+            retry_plan.first_attempt_payload,
+            target_ref=str(spec["parent_target_paragraph_ref"]),
+        ),
+        "failure_reason": retry_plan.failure_reasons_by_span.get(span_ref, ""),
+        "failed_active_targets": retry_plan.failed_active_targets_by_span.get(
+            span_ref,
+            [],
+        ),
     }
 
 
@@ -1393,6 +1456,7 @@ def _build_brief_ref(subject: MacroSubject) -> dict[str, object]:
 def _build_work_order(subject: MacroSubject) -> dict[str, object]:
     target = _target_window(subject.base_text)
     target_paragraphs = _target_paragraph_specs(subject, target)
+    target_spans = _target_span_specs(subject, target, target_paragraphs)
     return {
         "work_order_id": f"macro_recomposition_{subject.synthesis_packet_id}",
         "source_synthesis_packet_id": subject.synthesis_packet_id,
@@ -1407,6 +1471,8 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
         "target_paragraph_start_index": target.target_start_index,
         "target_paragraph_end_index": target.target_end_index,
         "target_paragraphs": target_paragraphs,
+        "target_spans": target_spans,
+        "active_target_units": target_spans,
         "before_section_text": "\n\n".join(target.original_target),
         "selected_candidate_text": subject.base_text,
         "bounded_macro_recomposition": True,
@@ -1656,6 +1722,11 @@ def _build_patch_or_section_plan(
                     if model_payload is not None
                     else _controller_target_paragraph_replacements(subject, recomposed)
                 ),
+                "target_span_replacements": (
+                    list(model_payload["target_span_replacements"])
+                    if model_payload is not None
+                    else _controller_target_span_replacements(subject, recomposed)
+                ),
                 "controller_assembled_from_target_paragraph_replacements": (
                     model_payload is not None
                 ),
@@ -1709,6 +1780,36 @@ def _controller_target_paragraph_replacements(
                 ),
                 "preserved_effects": list(spec["protected_effects"]),
                 "risk_notes": "fixture/fake target-addressed replacement; no improvement claim",
+                "uncertainty": "requires executed ablation or internal reader-state testing",
+            }
+        )
+    return replacements
+
+
+def _controller_target_span_replacements(
+    subject: MacroSubject,
+    recomposed: RecomposedText,
+) -> list[dict[str, object]]:
+    target = _target_window(subject.base_text)
+    paragraph_specs = _target_paragraph_specs(subject, target)
+    span_specs = _target_span_specs(subject, target, paragraph_specs)
+    replacement_by_parent = _replacement_paragraphs_by_ref(target, recomposed.replacement)
+    replacements: list[dict[str, object]] = []
+    for spec in span_specs:
+        if not bool(spec["material_change_required"]):
+            continue
+        parent_ref = str(spec["parent_target_paragraph_ref"])
+        replacements.append(
+            {
+                "target_span_ref": spec["target_span_ref"],
+                "parent_target_paragraph_ref": parent_ref,
+                "before_text_sha256": spec["before_text_sha256"],
+                "replacement_excerpt": replacement_by_parent.get(parent_ref, ""),
+                "active_target_ids_covered": list(spec["active_target_ids"]),
+                "material_change_summary": (
+                    "controller-authored deterministic span materiality mapping"
+                ),
+                "risk_notes": "fixture/fake span mapping; no improvement claim",
                 "uncertainty": "requires executed ablation or internal reader-state testing",
             }
         )
@@ -2240,6 +2341,219 @@ def _target_paragraph_specs(
     return specs
 
 
+def _target_span_specs(
+    subject: MacroSubject,
+    target: RecomposedText,
+    paragraph_specs: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    if not subject.normalized_brief.reader_state_informed:
+        return []
+    specs = paragraph_specs or _target_paragraph_specs(subject, target)
+    descriptions = _active_target_descriptions()
+    span_specs: list[dict[str, object]] = []
+    for paragraph_spec in specs:
+        parent_ref = str(paragraph_spec["target_paragraph_ref"])
+        sentences = _sentence_like_spans(str(paragraph_spec["before_text"]))
+        material_indexes = _material_span_indexes_for_paragraph(
+            subject,
+            parent_ref=parent_ref,
+            sentences=sentences,
+        )
+        for index, before_text in enumerate(sentences):
+            role = _target_span_role(
+                subject,
+                parent_ref=parent_ref,
+                span_index=index,
+                before_text=before_text,
+                material_indexes=material_indexes,
+            )
+            active_ids = _target_span_active_ids(
+                subject,
+                parent_ref=parent_ref,
+                role=role,
+                paragraph_active_ids=_string_tuple(
+                    paragraph_spec.get("active_target_ids")
+                ),
+            )
+            material = index in material_indexes
+            span_ref = _target_span_ref(parent_ref, index)
+            span_specs.append(
+                {
+                    "target_span_ref": span_ref,
+                    "parent_target_paragraph_ref": parent_ref,
+                    "before_text": before_text,
+                    "before_text_sha256": sha256_text(before_text),
+                    "active_target_ids": list(active_ids),
+                    "material_change_required": material,
+                    "transformation_instruction": _target_span_instruction(
+                        role=role,
+                        active_ids=active_ids,
+                        descriptions=descriptions,
+                    ),
+                    "protected_effects": list(paragraph_spec["protected_effects"]),
+                    "forbidden_failures": list(paragraph_spec["forbidden_failures"]),
+                    "allowed_operation": _target_span_allowed_operation(role, material),
+                    "span_role": role,
+                }
+            )
+    return span_specs
+
+
+def _sentence_like_spans(text: str) -> list[str]:
+    sentences: list[str] = []
+    current: list[str] = []
+    for character in text.strip():
+        current.append(character)
+        if character in ".!?":
+            sentence = "".join(current).strip()
+            if sentence:
+                sentences.append(sentence)
+            current = []
+    remainder = "".join(current).strip()
+    if remainder:
+        sentences.append(remainder)
+    if not sentences and text.strip():
+        sentences.append(text.strip())
+    return _combine_proof_sentence_pair(sentences)
+
+
+def _combine_proof_sentence_pair(sentences: list[str]) -> list[str]:
+    combined: list[str] = []
+    index = 0
+    while index < len(sentences):
+        sentence = sentences[index]
+        next_sentence = sentences[index + 1] if index + 1 < len(sentences) else ""
+        if (
+            "if proof comes" in sentence.lower()
+            and next_sentence.lower().startswith("it shows itself")
+        ):
+            combined.append(f"{sentence} {next_sentence}")
+            index += 2
+        else:
+            combined.append(sentence)
+            index += 1
+    return combined
+
+
+def _material_span_indexes_for_paragraph(
+    subject: MacroSubject,
+    *,
+    parent_ref: str,
+    sentences: list[str],
+) -> set[int]:
+    if (
+        parent_ref != "target_p001"
+        or "thesis_visible_proof_language_reduction"
+        not in subject.normalized_brief.active_transformation_target_ids
+    ):
+        return set()
+    thesis_indexes = [
+        index
+        for index, sentence in enumerate(sentences)
+        if _is_thesis_framing_sentence(sentence)
+    ]
+    proof_indexes = [
+        index for index, sentence in enumerate(sentences) if _is_proof_sentence(sentence)
+    ]
+    if not thesis_indexes:
+        thesis_indexes = [
+            index
+            for index, sentence in enumerate(sentences)
+            if not _is_proof_sentence(sentence)
+        ][:1]
+    if not proof_indexes and sentences:
+        proof_indexes = [len(sentences) - 1]
+    return set(thesis_indexes[:1] + proof_indexes[:1])
+
+
+def _is_thesis_framing_sentence(sentence: str) -> bool:
+    normalized = " ".join(_normalized_words(sentence))
+    markers = (
+        "deeper pattern",
+        "easy to miss",
+        "world does not become legible",
+        "becomes legible",
+        "carrying its own contradiction",
+        "strain works through",
+        "named as record law proof answer",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _is_proof_sentence(sentence: str) -> bool:
+    normalized = " ".join(_normalized_words(sentence))
+    return "proof" in normalized or "proves" in normalized
+
+
+def _target_span_role(
+    subject: MacroSubject,
+    *,
+    parent_ref: str,
+    span_index: int,
+    before_text: str,
+    material_indexes: set[int],
+) -> str:
+    if (
+        subject.normalized_brief.reader_state_informed
+        and parent_ref == "target_p001"
+        and span_index in material_indexes
+    ):
+        if _is_proof_sentence(before_text):
+            return "proof_sentence"
+        return "thesis_frame"
+    return "context_or_preserve"
+
+
+def _target_span_active_ids(
+    subject: MacroSubject,
+    *,
+    parent_ref: str,
+    role: str,
+    paragraph_active_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    if (
+        subject.normalized_brief.reader_state_informed
+        and parent_ref == "target_p001"
+        and role in {"thesis_frame", "proof_sentence", "context_or_preserve"}
+        and "thesis_visible_proof_language_reduction"
+        in subject.normalized_brief.active_transformation_target_ids
+    ):
+        return ("thesis_visible_proof_language_reduction",)
+    return paragraph_active_ids
+
+
+def _target_span_instruction(
+    *,
+    role: str,
+    active_ids: tuple[str, ...],
+    descriptions: dict[str, str],
+) -> str:
+    if role == "thesis_frame":
+        return (
+            "Remove or compress visible thesis framing into a local object/event "
+            "sequence; do not preserve this sentence unchanged."
+        )
+    if role == "proof_sentence":
+        return (
+            "Tighten or relocate proof language so proof occurs through the object "
+            "sequence rather than commentary over the scene."
+        )
+    parts = [descriptions[target_id] for target_id in active_ids if target_id in descriptions]
+    return " ".join(parts) or "Preserve unless another controller target requires change."
+
+
+def _target_span_allowed_operation(role: str, material: bool) -> str:
+    if role == "thesis_frame":
+        return "remove_thesis_frame"
+    if role == "proof_sentence":
+        return "relocate_to_object_sequence"
+    return "compress" if material else "preserve_only"
+
+
+def _target_span_ref(parent_ref: str, index: int) -> str:
+    return f"{parent_ref}_s{index + 1:03d}"
+
+
 def _target_addressed_retry_plan_from_failure(
     *,
     subject: MacroSubject,
@@ -2250,8 +2564,11 @@ def _target_addressed_retry_plan_from_failure(
         first_attempt_payload=None,
         retry_reason="not a retryable target-addressed macro-2 failure",
         failed_target_paragraph_refs=(),
+        failed_target_span_refs=(),
         failure_reasons_by_ref={},
+        failure_reasons_by_span={},
         failed_material_target_ids_by_ref={},
+        failed_active_targets_by_span={},
         first_failure_message=result.model_call.error_message or result.model_call.status,
     )
     if not subject.normalized_brief.reader_state_informed:
@@ -2292,18 +2609,31 @@ def _target_addressed_retry_plan_from_failure(
         failed_refs=failed_refs,
         error_message=error_message,
     )
+    failed_span_refs = _failed_target_span_refs_from_error(subject, error_message)
+    failure_reasons_by_span = _failure_reasons_by_span(
+        subject,
+        failed_span_refs=failed_span_refs,
+        error_message=error_message,
+    )
     failed_material_ids = _failed_material_target_ids_by_ref(
         subject,
         failed_refs=failed_refs,
         error_message=error_message,
+    )
+    failed_active_targets_by_span = _failed_active_targets_by_span(
+        subject,
+        failed_span_refs=failed_span_refs,
     )
     return TargetAddressedRetryPlan(
         retryable=True,
         first_attempt_payload=first_payload,
         retry_reason="target paragraph corrective retry",
         failed_target_paragraph_refs=tuple(failed_refs),
+        failed_target_span_refs=failed_span_refs,
         failure_reasons_by_ref=failure_reasons,
+        failure_reasons_by_span=failure_reasons_by_span,
         failed_material_target_ids_by_ref=failed_material_ids,
+        failed_active_targets_by_span=failed_active_targets_by_span,
         first_failure_message=error_message,
     )
 
@@ -2356,13 +2686,31 @@ def _retryable_failed_refs_from_error(
     if error_message.startswith("macro target coverage failed: "):
         target_ids = _split_suffix_values(error_message, "macro target coverage failed: ")
         return _refs_for_material_target_ids(subject, target_ids)
+    if error_message.startswith("target span coverage failed: "):
+        span_refs = _split_suffix_values(error_message, "target span coverage failed: ")
+        return _parent_refs_for_target_span_refs(subject, span_refs)
+    if error_message.startswith("missing target span replacement: "):
+        span_refs = _split_suffix_values(
+            error_message,
+            "missing target span replacement: ",
+        )
+        return _parent_refs_for_target_span_refs(subject, span_refs)
+    if error_message.startswith("target_span_replacements["):
+        span_ref = _target_ref_from_bracketed_error(
+            error_message,
+            prefix="target_span_replacements[",
+        )
+        return _parent_refs_for_target_span_refs(subject, (span_ref,))
     if error_message.startswith("macro materiality failed: "):
         return tuple(sorted(material_refs))
     return ()
 
 
-def _target_ref_from_bracketed_error(error_message: str) -> str:
-    prefix = "target_paragraph_replacements["
+def _target_ref_from_bracketed_error(
+    error_message: str,
+    *,
+    prefix: str = "target_paragraph_replacements[",
+) -> str:
     start = error_message.find(prefix)
     if start < 0:
         return ""
@@ -2405,6 +2753,61 @@ def _refs_for_material_target_ids(
     return tuple(_unique(refs))
 
 
+def _parent_refs_for_target_span_refs(
+    subject: MacroSubject,
+    span_refs: tuple[str, ...],
+) -> tuple[str, ...]:
+    target = _target_window(subject.base_text)
+    span_specs = _target_span_specs(subject, target)
+    parent_by_span = {
+        str(spec["target_span_ref"]): str(spec["parent_target_paragraph_ref"])
+        for spec in span_specs
+    }
+    refs = [
+        parent_by_span[span_ref]
+        for span_ref in span_refs
+        if span_ref in parent_by_span
+    ]
+    return tuple(_unique(refs))
+
+
+def _failed_target_span_refs_from_error(
+    subject: MacroSubject,
+    error_message: str,
+) -> tuple[str, ...]:
+    target = _target_window(subject.base_text)
+    valid_refs = {
+        str(spec["target_span_ref"])
+        for spec in _target_span_specs(subject, target)
+        if bool(spec["material_change_required"])
+    }
+    if error_message.startswith("target span coverage failed: "):
+        return tuple(
+            ref
+            for ref in _split_suffix_values(
+                error_message,
+                "target span coverage failed: ",
+            )
+            if ref in valid_refs
+        )
+    if error_message.startswith("missing target span replacement: "):
+        return tuple(
+            ref
+            for ref in _split_suffix_values(
+                error_message,
+                "missing target span replacement: ",
+            )
+            if ref in valid_refs
+        )
+    if error_message.startswith("target_span_replacements["):
+        ref = _target_ref_from_bracketed_error(
+            error_message,
+            prefix="target_span_replacements[",
+        )
+        return (ref,) if ref in valid_refs else ()
+    return ()
+
+
 def _failure_reasons_by_ref(
     subject: MacroSubject,
     *,
@@ -2428,6 +2831,43 @@ def _failure_reasons_by_ref(
         else:
             reasons[ref] = error_message
     return reasons
+
+
+def _failure_reasons_by_span(
+    subject: MacroSubject,
+    *,
+    failed_span_refs: tuple[str, ...],
+    error_message: str,
+) -> dict[str, str]:
+    _ = subject
+    reasons: dict[str, str] = {}
+    for span_ref in failed_span_refs:
+        if error_message.startswith("missing target span replacement: "):
+            reasons[span_ref] = "missing target span replacement"
+        elif "before_text_sha256 mismatch" in error_message:
+            reasons[span_ref] = "target span before_text_sha256 mismatch"
+        elif "target span coverage failed" in error_message:
+            reasons[span_ref] = (
+                "required target span was copied or insufficiently mapped"
+            )
+        else:
+            reasons[span_ref] = error_message
+    return reasons
+
+
+def _failed_active_targets_by_span(
+    subject: MacroSubject,
+    *,
+    failed_span_refs: tuple[str, ...],
+) -> dict[str, list[str]]:
+    target = _target_window(subject.base_text)
+    span_specs = _target_span_specs(subject, target)
+    result: dict[str, list[str]] = {}
+    for spec in span_specs:
+        span_ref = str(spec["target_span_ref"])
+        if span_ref in failed_span_refs:
+            result[span_ref] = list(_string_tuple(spec.get("active_target_ids")))
+    return result
 
 
 def _failed_material_target_ids_by_ref(
@@ -2559,6 +2999,19 @@ def _validate_retry_target_replacements(
                 "or insufficiently changed for material targets: "
                 + ", ".join(required_ids)
             )
+    replacement_paragraphs = [
+        str(retry_by_ref[ref]["replacement_text"]).strip()
+        if ref in retry_by_ref
+        else str(spec_by_ref[ref]["before_text"])
+        for ref in _target_paragraph_refs(target.original_target)
+    ]
+    _validate_required_target_span_replacements(
+        subject=subject,
+        payload=payload,
+        replacement_paragraphs=replacement_paragraphs,
+        required_parent_refs=failed_refs,
+        error_prefix="corrective retry ",
+    )
 
 
 def _merge_target_addressed_retry_payload(
@@ -2573,14 +3026,26 @@ def _merge_target_addressed_retry_payload(
     failed_ref_set = set(failed_refs)
     first_by_ref = _replacement_map(first_payload)
     retry_by_ref = _replacement_map(retry_payload)
+    first_spans_by_ref = _target_span_replacement_map(first_payload)
+    retry_spans_by_ref = _target_span_replacement_map(retry_payload)
     merged_replacements: list[dict[str, object]] = []
     for ref in refs:
         if ref in failed_ref_set and ref in retry_by_ref:
             merged_replacements.append(dict(retry_by_ref[ref]))
         elif ref in first_by_ref:
             merged_replacements.append(dict(first_by_ref[ref]))
+    target_spans = _target_span_specs(subject, target)
+    merged_span_replacements: list[dict[str, object]] = []
+    for span_spec in target_spans:
+        span_ref = str(span_spec["target_span_ref"])
+        parent_ref = str(span_spec["parent_target_paragraph_ref"])
+        if parent_ref in failed_ref_set and span_ref in retry_spans_by_ref:
+            merged_span_replacements.append(dict(retry_spans_by_ref[span_ref]))
+        elif span_ref in first_spans_by_ref:
+            merged_span_replacements.append(dict(first_spans_by_ref[span_ref]))
     merged = dict(first_payload)
     merged["target_paragraph_replacements"] = merged_replacements
+    merged["target_span_replacements"] = merged_span_replacements
     return merged
 
 
@@ -2612,7 +3077,16 @@ def _target_addressed_retry_report_not_attempted(
         "failed_target_paragraph_refs": list(
             retry_plan.failed_target_paragraph_refs if retry_plan else []
         ),
+        "failed_target_span_refs": list(
+            retry_plan.failed_target_span_refs if retry_plan else []
+        ),
         "failure_reasons_by_ref": retry_plan.failure_reasons_by_ref if retry_plan else {},
+        "failure_reasons_by_span": (
+            retry_plan.failure_reasons_by_span if retry_plan else {}
+        ),
+        "failed_active_targets_by_span": (
+            retry_plan.failed_active_targets_by_span if retry_plan else {}
+        ),
         "preserved_first_attempt_refs": [],
         "retry_replaced_refs": [],
         "ignored_retry_refs": [],
@@ -2647,8 +3121,11 @@ def _target_addressed_retry_report(
         "first_attempt_model_call_id": first_attempt_model_call_id,
         "retry_model_call_id": retry_model_call_id,
         "failed_target_paragraph_refs": list(retry_plan.failed_target_paragraph_refs),
+        "failed_target_span_refs": list(retry_plan.failed_target_span_refs),
         "failure_reasons_by_ref": retry_plan.failure_reasons_by_ref,
+        "failure_reasons_by_span": retry_plan.failure_reasons_by_span,
         "failed_material_target_ids_by_ref": retry_plan.failed_material_target_ids_by_ref,
+        "failed_active_targets_by_span": retry_plan.failed_active_targets_by_span,
         "preserved_first_attempt_refs": preserved_refs,
         "retry_replaced_refs": retry_replaced_refs,
         "ignored_retry_refs": ignored_retry_refs,
@@ -2692,6 +3169,9 @@ def _validate_live_macro_payload(
         replacement_paragraphs,
         model_payload=payload,
     )
+    if not coverage_report["span_level_coverage_passed"]:
+        failed_spans = ", ".join(coverage_report["failed_target_span_refs"])
+        raise ModelValidationError(f"target span coverage failed: {failed_spans}")
     if not coverage_report["macro_target_coverage_passed"]:
         missing = ", ".join(coverage_report["active_targets_missing"])
         raise ModelValidationError(f"macro target coverage failed: {missing}")
@@ -2898,6 +3378,293 @@ def _active_target_mapping_complete_for_subject(
     return True
 
 
+def _validate_required_target_span_replacements(
+    *,
+    subject: MacroSubject,
+    payload: dict[str, object],
+    replacement_paragraphs: list[str],
+    required_parent_refs: tuple[str, ...] | None = None,
+    error_prefix: str = "",
+) -> None:
+    target = _target_window(subject.base_text)
+    report = _build_target_span_coverage_report(
+        subject,
+        target,
+        replacement_paragraphs,
+        model_payload=payload,
+        required_parent_refs=required_parent_refs,
+    )
+    if report["target_span_count"] == 0:
+        return
+    missing = list(report.get("missing_target_span_replacements", []))
+    if missing:
+        raise ModelValidationError(
+            f"{error_prefix}missing target span replacement: " + ", ".join(missing)
+        )
+    mismatched = list(report.get("hash_mismatched_target_span_replacements", []))
+    if mismatched:
+        raise ModelValidationError(
+            f"{error_prefix}target_span_replacements[{mismatched[0]}] "
+            "before_text_sha256 mismatch"
+        )
+    empty = list(report.get("empty_target_span_replacement_excerpts", []))
+    if empty:
+        raise ModelValidationError(
+            f"{error_prefix}target_span_replacements[{empty[0]}] "
+            "replacement_excerpt is empty"
+        )
+    unsupported = dict(report.get("unsupported_active_targets_by_span", {}))
+    if unsupported:
+        span_ref = sorted(unsupported)[0]
+        raise ModelValidationError(
+            f"{error_prefix}target_span_replacements[{span_ref}] covers "
+            "unassigned active target IDs: " + ", ".join(unsupported[span_ref])
+        )
+    missing_ids = dict(report.get("missing_active_targets_by_span", {}))
+    if missing_ids:
+        span_ref = sorted(missing_ids)[0]
+        raise ModelValidationError(
+            f"{error_prefix}target_span_replacements[{span_ref}] does not cover "
+            "material active targets: " + ", ".join(missing_ids[span_ref])
+        )
+    if not report["span_level_coverage_passed"]:
+        failed = list(report["failed_target_span_refs"])
+        raise ModelValidationError(
+            f"{error_prefix}target span coverage failed: " + ", ".join(failed)
+        )
+
+
+def _build_target_span_coverage_report(
+    subject: MacroSubject,
+    target: RecomposedText,
+    replacement_paragraphs: list[str],
+    *,
+    model_payload: dict[str, object] | None,
+    required_parent_refs: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    span_specs = _target_span_specs(subject, target)
+    required_parent_set = set(required_parent_refs or ())
+    if required_parent_set:
+        span_specs = [
+            spec
+            for spec in span_specs
+            if str(spec["parent_target_paragraph_ref"]) in required_parent_set
+        ]
+    replacement_by_parent = _replacement_paragraphs_by_ref(target, replacement_paragraphs)
+    span_replacements = _target_span_replacement_map(model_payload or {})
+    strict_model_mapping_required = model_payload is not None
+    comparison: list[dict[str, object]] = []
+    missing_replacements: list[str] = []
+    mismatched_hashes: list[str] = []
+    empty_excerpts: list[str] = []
+    unchanged_required: list[str] = []
+    missing_active_targets_by_span: dict[str, list[str]] = {}
+    unsupported_active_targets_by_span: dict[str, list[str]] = {}
+    failed_active_targets_by_span: dict[str, list[str]] = {}
+    materially_changed_count = 0
+
+    for spec in span_specs:
+        span_ref = str(spec["target_span_ref"])
+        parent_ref = str(spec["parent_target_paragraph_ref"])
+        material_required = bool(spec["material_change_required"])
+        parent_replacement = replacement_by_parent.get(parent_ref, "")
+        before_text = str(spec["before_text"])
+        before_preserved = _contains_normalized_sequence(
+            parent_replacement,
+            before_text,
+        )
+        span_replacement = span_replacements.get(span_ref)
+        mapping_present = span_replacement is not None
+        excerpt = (
+            str(span_replacement.get("replacement_excerpt") or "").strip()
+            if span_replacement
+            else parent_replacement
+        )
+        mapping_ok = mapping_present or not strict_model_mapping_required
+        covered_ids = set(
+            _string_tuple(
+                span_replacement.get("active_target_ids_covered")
+                if span_replacement
+                else []
+            )
+        )
+        allowed_ids = set(_string_tuple(spec.get("active_target_ids")))
+        unsupported_ids = sorted(covered_ids - allowed_ids)
+        required_ids = sorted(allowed_ids) if material_required else []
+        missing_ids = (
+            sorted(set(required_ids) - covered_ids)
+            if strict_model_mapping_required
+            else []
+        )
+        hash_matches = True
+        if span_replacement:
+            hash_matches = (
+                str(span_replacement.get("before_text_sha256") or "")
+                == spec["before_text_sha256"]
+            )
+        materially_changed = (
+            material_required
+            and bool(parent_replacement)
+            and not before_preserved
+            and mapping_ok
+            and bool(excerpt)
+            and hash_matches
+            and not unsupported_ids
+            and not missing_ids
+        )
+        if material_required and strict_model_mapping_required and not mapping_present:
+            missing_replacements.append(span_ref)
+        if material_required and mapping_present and not hash_matches:
+            mismatched_hashes.append(span_ref)
+        if material_required and mapping_present and not excerpt:
+            empty_excerpts.append(span_ref)
+        if unsupported_ids:
+            unsupported_active_targets_by_span[span_ref] = unsupported_ids
+        if material_required and missing_ids:
+            missing_active_targets_by_span[span_ref] = missing_ids
+        if material_required and before_preserved:
+            unchanged_required.append(span_ref)
+        if materially_changed:
+            materially_changed_count += 1
+        elif material_required:
+            failed_active_targets_by_span[span_ref] = required_ids
+        comparison.append(
+            {
+                "target_span_ref": span_ref,
+                "parent_target_paragraph_ref": parent_ref,
+                "before_text_sha256": spec["before_text_sha256"],
+                "before_text_preserved_unchanged": before_preserved,
+                "mapping_present": mapping_present,
+                "material_change_required": material_required,
+                "materially_changed": materially_changed,
+                "active_target_ids": list(_string_tuple(spec.get("active_target_ids"))),
+                "span_role": spec.get("span_role"),
+                "allowed_operation": spec.get("allowed_operation"),
+            }
+        )
+
+    failed_refs = [
+        str(row["target_span_ref"])
+        for row in comparison
+        if row["material_change_required"] and not row["materially_changed"]
+    ]
+    thesis_report = _thesis_visible_span_report(comparison)
+    if thesis_report["required"] and not thesis_report["passed"]:
+        failed_refs = _unique(
+            [
+                *failed_refs,
+                *list(thesis_report["failed_target_span_refs"]),
+            ]
+        )
+    failed_refs = sorted(failed_refs)
+    span_level_passed = not failed_refs
+    return {
+        "target_span_count": len(span_specs),
+        "material_target_span_count": len(
+            [spec for spec in span_specs if bool(spec["material_change_required"])]
+        ),
+        "materially_changed_target_span_count": materially_changed_count,
+        "unchanged_required_target_spans": sorted(unchanged_required),
+        "active_target_span_coverage_passed": span_level_passed,
+        "failed_target_span_refs": failed_refs,
+        "failed_active_targets_by_span": failed_active_targets_by_span,
+        "missing_target_span_replacements": sorted(missing_replacements),
+        "hash_mismatched_target_span_replacements": sorted(mismatched_hashes),
+        "empty_target_span_replacement_excerpts": sorted(empty_excerpts),
+        "missing_active_targets_by_span": missing_active_targets_by_span,
+        "unsupported_active_targets_by_span": unsupported_active_targets_by_span,
+        "span_level_coverage_passed": span_level_passed,
+        "target_span_comparison": comparison,
+        "thesis_visible_proof_language_reduction_span_rule": thesis_report,
+    }
+
+
+def _target_span_replacement_map(
+    payload: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    replacements = payload.get("target_span_replacements")
+    if not isinstance(replacements, list):
+        return {}
+    result: dict[str, dict[str, object]] = {}
+    for item in replacements:
+        if not isinstance(item, dict):
+            continue
+        span_ref = str(item.get("target_span_ref") or "")
+        if span_ref:
+            result[span_ref] = item
+    return result
+
+
+def _replacement_paragraphs_by_ref(
+    target: RecomposedText,
+    replacement_paragraphs: list[str],
+) -> dict[str, str]:
+    refs = _target_paragraph_refs(target.original_target)
+    return {
+        ref: replacement_paragraphs[index] if index < len(replacement_paragraphs) else ""
+        for index, ref in enumerate(refs)
+    }
+
+
+def _contains_normalized_sequence(text: str, phrase: str) -> bool:
+    text_words = _normalized_words(text)
+    phrase_words = _normalized_words(phrase)
+    if not text_words or not phrase_words or len(phrase_words) > len(text_words):
+        return False
+    phrase_len = len(phrase_words)
+    return any(
+        text_words[index : index + phrase_len] == phrase_words
+        for index in range(len(text_words) - phrase_len + 1)
+    )
+
+
+def _thesis_visible_span_report(
+    comparison: list[dict[str, object]],
+) -> dict[str, object]:
+    thesis_rows = [
+        row
+        for row in comparison
+        if "thesis_visible_proof_language_reduction"
+        in row.get("active_target_ids", [])
+        and row.get("material_change_required")
+    ]
+    if not thesis_rows:
+        return {"required": False, "passed": True, "failed_target_span_refs": []}
+    thesis_frame_changed = any(
+        row.get("span_role") == "thesis_frame" and row.get("materially_changed")
+        for row in thesis_rows
+    )
+    proof_changed = any(
+        row.get("span_role") == "proof_sentence" and row.get("materially_changed")
+        for row in thesis_rows
+    )
+    failed = []
+    if not thesis_frame_changed:
+        failed.extend(
+            str(row["target_span_ref"])
+            for row in thesis_rows
+            if row.get("span_role") == "thesis_frame"
+        )
+    if not proof_changed:
+        failed.extend(
+            str(row["target_span_ref"])
+            for row in thesis_rows
+            if row.get("span_role") == "proof_sentence"
+        )
+    return {
+        "required": True,
+        "passed": thesis_frame_changed and proof_changed,
+        "thesis_framing_span_changed": thesis_frame_changed,
+        "proof_sentence_span_changed": proof_changed,
+        "failed_target_span_refs": sorted(_unique(failed)),
+        "rule": (
+            "At least one required thesis-framing span and the explicit proof "
+            "span must be materially altered; changing only the proof sentence "
+            "is insufficient."
+        ),
+    }
+
+
 def _build_target_coverage_report(
     subject: MacroSubject,
     target: RecomposedText,
@@ -2961,7 +3728,20 @@ def _build_target_coverage_report(
     )
     materially_changed_count = len(material_refs)
     macro_materiality_passed = materially_changed_count >= materiality_required_count
-    macro_target_coverage_passed = not active_targets_missing and macro_materiality_passed
+    paragraph_level_coverage_passed = (
+        not active_targets_missing and macro_materiality_passed
+    )
+    span_report = _build_target_span_coverage_report(
+        subject,
+        target,
+        replacement_paragraphs,
+        model_payload=model_payload,
+    )
+    span_level_coverage_passed = bool(span_report["span_level_coverage_passed"])
+    span_validation_required = bool(span_report["target_span_count"])
+    macro_target_coverage_passed = paragraph_level_coverage_passed and (
+        span_level_coverage_passed or not span_validation_required
+    )
     return {
         "target_paragraph_count": len(target.original_target),
         "replacement_paragraph_count": len(replacement_paragraphs),
@@ -2972,6 +3752,26 @@ def _build_target_coverage_report(
         "active_targets_covered": active_targets_covered,
         "active_targets_missing": active_targets_missing,
         "unchanged_target_paragraphs_with_justification": unchanged_with_justification,
+        "paragraph_level_coverage_passed": paragraph_level_coverage_passed,
+        "target_span_count": span_report["target_span_count"],
+        "materially_changed_target_span_count": span_report[
+            "materially_changed_target_span_count"
+        ],
+        "unchanged_required_target_spans": span_report[
+            "unchanged_required_target_spans"
+        ],
+        "active_target_span_coverage_passed": span_report[
+            "active_target_span_coverage_passed"
+        ],
+        "failed_target_span_refs": span_report["failed_target_span_refs"],
+        "failed_active_targets_by_span": span_report[
+            "failed_active_targets_by_span"
+        ],
+        "span_level_coverage_passed": span_level_coverage_passed,
+        "target_span_comparison": span_report["target_span_comparison"],
+        "thesis_visible_proof_language_reduction_span_rule": span_report[
+            "thesis_visible_proof_language_reduction_span_rule"
+        ],
         "macro_target_coverage_passed": macro_target_coverage_passed,
         "controller_target_coverage_passed": macro_target_coverage_passed,
         "macro_materiality_passed": macro_materiality_passed,
@@ -3179,12 +3979,18 @@ def _target_addressed_replacement_paragraphs(
             + ", ".join(missing_targets)
         )
 
-    return [
+    replacement_paragraphs = [
         str(seen_refs[ref]["replacement_text"]).strip()
         if ref in seen_refs
         else str(spec_by_ref[ref]["before_text"])
         for ref in _target_paragraph_refs(target.original_target)
     ]
+    _validate_required_target_span_replacements(
+        subject=subject,
+        payload=payload,
+        replacement_paragraphs=replacement_paragraphs,
+    )
+    return replacement_paragraphs
 
 
 def _validate_replacement_section(

@@ -1110,10 +1110,14 @@ class StubBoundedMacroRecompositionClient:
             if isinstance(work_order, dict)
             else []
         )
+        target_spans = (
+            work_order.get("target_spans", []) if isinstance(work_order, dict) else []
+        )
         payload = live_macro_payload(
             prompt.get("active_transformation_targets", []),
             target_movement=str(prompt.get("target_movement") or "middle_and_return_movement"),
             target_paragraphs=target_paragraphs,
+            target_spans=target_spans,
         )
         if self.mode == "invalid_json":
             return "{not valid json"
@@ -1186,6 +1190,16 @@ class StubBoundedMacroRecompositionClient:
                     for target_id in item["active_target_ids_covered"]
                     if target_id != "thesis_visible_proof_language_reduction"
                 ]
+        elif self.mode == "target_p001_final_proof_only":
+            _copy_target_with_changed_proof_only(payload, target_paragraphs, "target_p001")
+        elif self.mode == "target_p001_final_proof_only_then_correct" and not is_retry:
+            _copy_target_with_changed_proof_only(payload, target_paragraphs, "target_p001")
+        elif self.mode == "target_p001_span_retry_copies":
+            _copy_target_with_changed_proof_only(payload, target_paragraphs, "target_p001")
+        elif self.mode == "missing_target_span_p001_s001":
+            _remove_first_required_target_span(payload, target_spans, "target_p001")
+        elif self.mode == "mismatched_target_span_hash":
+            _mismatch_first_required_target_span_hash(payload, target_spans)
         elif self.mode == "missing_active_target":
             payload["active_target_mapping"] = payload["active_target_mapping"][:-1]
         elif self.mode == "unchanged_without_justification":
@@ -1232,6 +1246,7 @@ def live_macro_payload(
     *,
     target_movement: str = "middle_and_return_movement",
     target_paragraphs: list[dict[str, object]] | None = None,
+    target_spans: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     replacement = (
         "The room does not need a new witness. The ring on the wood has dried "
@@ -1287,6 +1302,9 @@ def live_macro_payload(
         "target_paragraph_replacements": target_paragraph_replacements_payload(
             target_paragraphs or []
         ),
+        "target_span_replacements": target_span_replacements_payload(
+            target_spans or []
+        ),
         "rationale": "The bounded section shifts pressure into scene and relation.",
         "local_law_explanation": "Each local mark becomes legible through another mark.",
         "uncertainty": "medium",
@@ -1312,6 +1330,31 @@ def target_paragraph_replacements_payload(
                     "This paragraph is materially rewritten around its assigned active targets."
                 ),
                 "preserved_effects": list(paragraph.get("protected_effects", [])),
+                "risk_notes": "needs later ablation or internal reader-state validation",
+                "uncertainty": "medium",
+            }
+        )
+    return replacements
+
+
+def target_span_replacements_payload(
+    target_spans: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    replacements: list[dict[str, object]] = []
+    for span in target_spans:
+        if not span.get("material_change_required"):
+            continue
+        parent_ref = str(span["parent_target_paragraph_ref"])
+        replacements.append(
+            {
+                "target_span_ref": str(span["target_span_ref"]),
+                "parent_target_paragraph_ref": parent_ref,
+                "before_text_sha256": str(span["before_text_sha256"]),
+                "replacement_excerpt": target_replacement_text(parent_ref, 0),
+                "active_target_ids_covered": list(span.get("active_target_ids", [])),
+                "material_change_summary": (
+                    "This required span is materially changed inside the parent target."
+                ),
                 "risk_notes": "needs later ablation or internal reader-state validation",
                 "uncertainty": "medium",
             }
@@ -1370,6 +1413,90 @@ def _copy_target_paragraph(
     for item in payload.get("target_paragraph_replacements", []):
         if item["target_paragraph_ref"] == target_ref:
             item["replacement_text"] = before_by_ref[target_ref]
+
+
+def _copy_target_with_changed_proof_only(
+    payload: dict[str, object],
+    target_paragraphs: list[dict[str, object]],
+    target_ref: str,
+) -> None:
+    before_by_ref = {
+        str(paragraph["target_paragraph_ref"]): str(paragraph["before_text"])
+        for paragraph in target_paragraphs
+    }
+    before_text = before_by_ref[target_ref]
+    sentences = _test_sentence_like_spans(before_text)
+    replacement_sentences = list(sentences)
+    proof_index = next(
+        (
+            index
+            for index, sentence in enumerate(sentences)
+            if "proof" in sentence.lower() or "proves" in sentence.lower()
+        ),
+        max(len(sentences) - 1, 0),
+    )
+    if replacement_sentences:
+        replacement_sentences[proof_index] = (
+            "Proof tightens through the ring, dust, spoon, and saucer instead of "
+            "standing above the room as a thesis."
+        )
+    replacement_text = " ".join(replacement_sentences)
+    for item in payload.get("target_paragraph_replacements", []):
+        if item["target_paragraph_ref"] == target_ref:
+            item["replacement_text"] = replacement_text
+
+
+def _test_sentence_like_spans(text: str) -> list[str]:
+    sentences: list[str] = []
+    current: list[str] = []
+    for character in text.strip():
+        current.append(character)
+        if character in ".!?":
+            sentence = "".join(current).strip()
+            if sentence:
+                sentences.append(sentence)
+            current = []
+    remainder = "".join(current).strip()
+    if remainder:
+        sentences.append(remainder)
+    return sentences or [text.strip()]
+
+
+def _remove_first_required_target_span(
+    payload: dict[str, object],
+    target_spans: list[dict[str, object]],
+    parent_ref: str,
+) -> None:
+    required_refs = [
+        str(span["target_span_ref"])
+        for span in target_spans
+        if span.get("material_change_required")
+        and span.get("parent_target_paragraph_ref") == parent_ref
+    ]
+    if not required_refs:
+        return
+    payload["target_span_replacements"] = [
+        item
+        for item in payload["target_span_replacements"]
+        if item["target_span_ref"] != required_refs[0]
+    ]
+
+
+def _mismatch_first_required_target_span_hash(
+    payload: dict[str, object],
+    target_spans: list[dict[str, object]],
+) -> None:
+    required_refs = [
+        str(span["target_span_ref"])
+        for span in target_spans
+        if span.get("material_change_required")
+    ]
+    if not required_refs:
+        return
+    for item in payload["target_span_replacements"]:
+        if item["target_span_ref"] == required_refs[0]:
+            item["before_text_sha256"] = "bad-span-hash"
+            return
 
 
 def _successful_retry_override(
@@ -5588,6 +5715,31 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
         assert paragraph["transformation_instruction"]
         assert paragraph["protected_effects"]
         assert paragraph["forbidden_failures"]
+    target_spans = work_order["target_spans"]
+    assert target_spans
+    assert work_order["active_target_units"] == target_spans
+    p001_spans = [
+        span
+        for span in target_spans
+        if span["parent_target_paragraph_ref"] == "target_p001"
+    ]
+    assert len(p001_spans) >= 2
+    assert {
+        span["target_span_ref"] for span in p001_spans if span["material_change_required"]
+    }
+    assert all(span["before_text"] for span in p001_spans)
+    assert all(span["before_text_sha256"] for span in p001_spans)
+    assert all(span["parent_target_paragraph_ref"] == "target_p001" for span in p001_spans)
+    assert any(
+        "thesis_visible_proof_language_reduction" in span["active_target_ids"]
+        and span["material_change_required"]
+        for span in p001_spans
+    )
+    assert {
+        span["allowed_operation"]
+        for span in p001_spans
+        if span["material_change_required"]
+    } <= {"remove_thesis_frame", "relocate_to_object_sequence", "compress"}
     assert {
         target["target_id"] for target in work_order["active_transformation_targets"]
     } == set(READER_STATE_MACRO_2_ACTIVE_TARGET_IDS)
@@ -5604,6 +5756,11 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
     assert coverage["macro_target_coverage_passed"] is True
     assert coverage["controller_target_coverage_passed"] is True
     assert coverage["macro_materiality_passed"] is True
+    assert coverage["paragraph_level_coverage_passed"] is True
+    assert coverage["span_level_coverage_passed"] is True
+    assert coverage["target_span_count"] == len(target_spans)
+    assert coverage["materially_changed_target_span_count"] >= 2
+    assert coverage["failed_target_span_refs"] == []
     assert coverage["active_targets_missing"] == []
     assert set(coverage["active_transformation_targets"]) == set(
         READER_STATE_MACRO_2_ACTIVE_TARGET_IDS
@@ -5673,6 +5830,7 @@ def test_bounded_macro_recomposition_schema_is_strict_for_constraint_mapping():
 
     assert_strict_object_schema(schema, path=BOUNDED_MACRO_RECOMPOSITION_SCHEMA.name)
     assert "target_paragraph_replacements" in schema["required"]
+    assert "target_span_replacements" in schema["required"]
     item_schema = schema["properties"]["constraint_mapping"]["items"]
     assert item_schema["additionalProperties"] is False
     assert "supporting_replacement_excerpt" in item_schema["required"]
@@ -5688,18 +5846,32 @@ def test_bounded_macro_recomposition_schema_is_strict_for_constraint_mapping():
     assert "before_text_sha256" in replacement_item_schema["required"]
     assert "replacement_text" in replacement_item_schema["required"]
     assert "active_target_ids_covered" in replacement_item_schema["required"]
+    span_item_schema = schema["properties"]["target_span_replacements"]["items"]
+    assert span_item_schema["additionalProperties"] is False
+    assert "target_span_ref" in span_item_schema["required"]
+    assert "parent_target_paragraph_ref" in span_item_schema["required"]
+    assert "before_text_sha256" in span_item_schema["required"]
+    assert "replacement_excerpt" in span_item_schema["required"]
 
     parsed_macro_1_payload = parse_and_validate_structured_output(
         dump_json(live_macro_payload()),
         BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     )
     assert parsed_macro_1_payload["target_paragraph_replacements"] == []
+    assert parsed_macro_1_payload["target_span_replacements"] == []
 
     missing_targets_payload = live_macro_payload()
     del missing_targets_payload["target_paragraph_replacements"]
     with pytest.raises(ModelValidationError, match="target_paragraph_replacements"):
         parse_and_validate_structured_output(
             dump_json(missing_targets_payload),
+            BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+        )
+    missing_spans_payload = live_macro_payload()
+    del missing_spans_payload["target_span_replacements"]
+    with pytest.raises(ModelValidationError, match="target_span_replacements"):
+        parse_and_validate_structured_output(
+            dump_json(missing_spans_payload),
             BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
         )
 
@@ -5722,6 +5894,8 @@ def test_bounded_macro_recomposition_openai_response_format_schema_is_strict():
     assert schema["additionalProperties"] is False
     assert "target_paragraph_replacements" in schema["properties"]
     assert "target_paragraph_replacements" in schema["required"]
+    assert "target_span_replacements" in schema["properties"]
+    assert "target_span_replacements" in schema["required"]
     assert set(schema["required"]) == set(schema["properties"])
     assert_openai_strict_object_schema(
         schema,
@@ -5735,6 +5909,9 @@ def test_bounded_macro_recomposition_openai_response_format_schema_is_strict():
     assert set(replacement_item_schema["required"]) == set(
         replacement_item_schema["properties"]
     )
+    span_item_schema = schema["properties"]["target_span_replacements"]["items"]
+    assert span_item_schema["additionalProperties"] is False
+    assert set(span_item_schema["required"]) == set(span_item_schema["properties"])
     active_item_schema = schema["properties"]["active_target_mapping"]["items"]
     assert active_item_schema["additionalProperties"] is False
     assert set(active_item_schema["required"]) == set(active_item_schema["properties"])
@@ -5875,6 +6052,12 @@ def test_bounded_macro_recomposition_reader_state_macro_2_stubbed_openai_target_
     packet_dir = Path(str(result.payload["packet_dir"]))
     prompt = json.loads(clients[0].requests[0].input_text)
     assert prompt["work_order"]["target_paragraphs"]
+    assert prompt["work_order"]["target_spans"]
+    assert any(
+        span["parent_target_paragraph_ref"] == "target_p001"
+        and span["material_change_required"]
+        for span in prompt["work_order"]["target_spans"]
+    )
 
     section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
     assert section["controller_assembled_from_target_paragraph_replacements"] is True
@@ -5887,6 +6070,16 @@ def test_bounded_macro_recomposition_reader_state_macro_2_stubbed_openai_target_
         "target_p004",
     }
     assert all(item["before_text_sha256"] for item in replacements)
+    span_replacements = section["target_span_replacements"]
+    assert span_replacements
+    assert {
+        item["target_span_ref"] for item in span_replacements
+    } == {
+        span["target_span_ref"]
+        for span in prompt["work_order"]["target_spans"]
+        if span["material_change_required"]
+    }
+    assert all(item["replacement_excerpt"] for item in span_replacements)
     preserve_mapping = [
         item
         for item in section["active_target_mapping"]
@@ -5902,6 +6095,8 @@ def test_bounded_macro_recomposition_reader_state_macro_2_stubbed_openai_target_
     assert coverage["macro_target_coverage_passed"] is True
     assert coverage["controller_target_coverage_passed"] is True
     assert coverage["model_active_target_mapping_complete"] is True
+    assert coverage["span_level_coverage_passed"] is True
+    assert coverage["failed_target_span_refs"] == []
     assert coverage["active_targets_missing"] == []
 
     candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
@@ -6022,6 +6217,87 @@ def test_bounded_macro_recomposition_reader_state_macro_2_corrective_retry_accep
     assert model_calls[-2].status == MODEL_CALL_VALIDATION_FAILED
     assert model_calls[-1].status == MODEL_CALL_SUCCESS
     assert final_report.refused is True
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_span_retry_accepts(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            clients,
+            mode="target_p001_final_proof_only_then_correct",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 2
+    retry_prompt = json.loads(clients[0].requests[1].input_text)
+    assert retry_prompt["retry_kind"] == "target_addressed_corrective_retry"
+    assert retry_prompt["first_attempt_failure"]["failed_target_span_refs"]
+    failed_paragraph = retry_prompt["failed_target_paragraphs"][0]
+    assert failed_paragraph["target_paragraph_ref"] == "target_p001"
+    assert failed_paragraph["failed_target_spans"]
+    assert {
+        span["target_span_ref"] for span in failed_paragraph["failed_target_spans"]
+    } == set(retry_prompt["first_attempt_failure"]["failed_target_span_refs"])
+    assert "Changing only the final proof sentence is insufficient" in retry_prompt[
+        "first_attempt_failure"
+    ]["span_level_instruction"]
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    report = section["target_addressed_retry_report"]
+    assert report["retry_attempted"] is True
+    assert report["failed_target_paragraph_refs"] == ["target_p001"]
+    assert report["failed_target_span_refs"]
+    assert report["merged_validation_passed"] is True
+    assert section["target_coverage_report"]["span_level_coverage_passed"] is True
+    assert section["target_coverage_report"]["failed_target_span_refs"] == []
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_span_retry_still_copied_refuses(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="target_p001_span_retry_copies",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 2
+    report = result.payload["target_addressed_retry_report"]
+    assert report["retry_attempted"] is True
+    assert report["failed_target_paragraph_refs"] == ["target_p001"]
+    assert report["failed_target_span_refs"]
+    assert report["merged_validation_passed"] is False
+    assert "target span coverage failed" in result.payload["message"]
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
 
 
 def test_bounded_macro_recomposition_reader_state_macro_2_retry_preserves_passed_refs(
@@ -6193,6 +6469,9 @@ def test_bounded_macro_recomposition_does_not_retry_schema_or_final_claim_failur
         ("mismatched_target_hash", "before_text_sha256 mismatch"),
         ("duplicate_target_ref", "duplicate target_paragraph_ref"),
         ("thesis_target_uncovered", "thesis_visible_proof_language_reduction"),
+        ("target_p001_final_proof_only", "target span coverage failed"),
+        ("missing_target_span_p001_s001", "missing target span replacement"),
+        ("mismatched_target_span_hash", "before_text_sha256 mismatch"),
     ],
 )
 def test_bounded_macro_recomposition_reader_state_macro_2_live_validation_failures(
