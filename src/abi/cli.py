@@ -49,6 +49,11 @@ from abi.modules.internal_reader_lab import (
     INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
     run_internal_reader_lab,
 )
+from abi.modules.internal_reader_state_evaluation import (
+    INTERNAL_READER_STATE_EVAL_CLIENTS,
+    INTERNAL_READER_STATE_EVAL_MAX_MODEL_CALLS_DEFAULT,
+    run_internal_reader_state_evaluation,
+)
 from abi.modules.live_abi_ear import (
     LIVE_ABI_EAR_CLIENTS,
     LIVE_ABI_EAR_MAX_MODEL_CALLS_DEFAULT,
@@ -409,6 +414,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for bounded macro recomposition.",
     )
+    autonomous_reader_state_eval_parser = autonomous_subparsers.add_parser(
+        "reader-state-eval",
+        help="Evaluate the synthesis-selected candidate through internal reader-state traces",
+    )
+    autonomous_reader_state_eval_parser.add_argument(
+        "--client",
+        choices=INTERNAL_READER_STATE_EVAL_CLIENTS,
+        required=True,
+        help="Internal reader-state evaluation client path to use.",
+    )
+    autonomous_reader_state_eval_parser.add_argument(
+        "--synthesis-packet",
+        type=Path,
+        required=True,
+        help="Autonomous evidence synthesis packet directory to consume.",
+    )
+    autonomous_reader_state_eval_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_reader_state_eval_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=INTERNAL_READER_STATE_EVAL_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for reader-state workers.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -570,6 +602,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "autonomous" and args.autonomous_command == "macro-recompose":
         return _cmd_autonomous_macro_recompose(
+            config,
+            client_name=args.client,
+            synthesis_packet=args.synthesis_packet,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "reader-state-eval":
+        return _cmd_autonomous_reader_state_eval(
             config,
             client_name=args.client,
             synthesis_packet=args.synthesis_packet,
@@ -891,6 +931,25 @@ def _cmd_autonomous_macro_recompose(
     max_model_calls: int,
 ) -> int:
     result = run_bounded_macro_recomposition(
+        config,
+        client_name=client_name,
+        synthesis_packet=synthesis_packet,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_reader_state_eval(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    synthesis_packet: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_internal_reader_state_evaluation(
         config,
         client_name=client_name,
         synthesis_packet=synthesis_packet,

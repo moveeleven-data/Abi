@@ -51,6 +51,7 @@ def test_source_uses_no_model_or_api_client_imports():
         Path("src/abi/openai_adapter.py"),
         Path("src/abi/modules/autonomous_revision.py"),
         Path("src/abi/modules/internal_reader_lab.py"),
+        Path("src/abi/modules/internal_reader_state_evaluation.py"),
         Path("src/abi/modules/ablation_informed_revision.py"),
         Path("src/abi/modules/bounded_macro_recomposition.py"),
         Path("src/abi/modules/live_abi_ear.py"),
