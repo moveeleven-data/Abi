@@ -55,6 +55,11 @@ from abi.modules.internal_reader_state_evaluation import (
     run_internal_reader_state_evaluation,
 )
 from abi.modules.next_target_strategy import run_next_target_strategy
+from abi.modules.object_event_recomposition import (
+    OBJECT_EVENT_RECOMPOSITION_CLIENTS,
+    OBJECT_EVENT_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
+    run_object_event_recomposition,
+)
 from abi.modules.live_abi_ear import (
     LIVE_ABI_EAR_CLIENTS,
     LIVE_ABI_EAR_MAX_MODEL_CALLS_DEFAULT,
@@ -452,6 +457,33 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Autonomous evidence synthesis packet directory to consume.",
     )
+    autonomous_object_event_parser = autonomous_subparsers.add_parser(
+        "object-event-recompose",
+        help="Run one bounded object-event pressure recomposition from a strategy packet",
+    )
+    autonomous_object_event_parser.add_argument(
+        "--client",
+        choices=OBJECT_EVENT_RECOMPOSITION_CLIENTS,
+        required=True,
+        help="Object-event recomposition client path to use.",
+    )
+    autonomous_object_event_parser.add_argument(
+        "--strategy-packet",
+        type=Path,
+        required=True,
+        help="Next-target strategy packet directory to consume.",
+    )
+    autonomous_object_event_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_object_event_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=OBJECT_EVENT_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for object-event recomposition.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -631,6 +663,14 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_plan_next_target(
             config,
             synthesis_packet=args.synthesis_packet,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "object-event-recompose":
+        return _cmd_autonomous_object_event_recompose(
+            config,
+            client_name=args.client,
+            strategy_packet=args.strategy_packet,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
         )
     if args.command == "controller" and args.controller_command == "status":
         return _cmd_controller_status(config)
@@ -982,6 +1022,25 @@ def _cmd_autonomous_plan_next_target(
     synthesis_packet: Path,
 ) -> int:
     result = run_next_target_strategy(config, synthesis_packet=synthesis_packet)
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_object_event_recompose(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    strategy_packet: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_object_event_recomposition(
+        config,
+        client_name=client_name,
+        strategy_packet=strategy_packet,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
 

@@ -31,6 +31,7 @@ AUTONOMOUS_CLOSED_LOOP_REVISION_ACTIVE_PHASE = "autonomous_closed_loop_revision_
 AUTONOMOUS_EVIDENCE_SYNTHESIS_ACTIVE_PHASE = "autonomous_evidence_synthesis_v1"
 AUTONOMOUS_BOUNDED_MACRO_RECOMPOSITION_ACTIVE_PHASE = "bounded_macro_recomposition_v1"
 AUTONOMOUS_NEXT_TARGET_STRATEGY_ACTIVE_PHASE = "autonomous_next_target_strategy_v1"
+AUTONOMOUS_OBJECT_EVENT_RECOMPOSITION_ACTIVE_PHASE = "object_event_recomposition_v1"
 
 
 @dataclass(frozen=True)

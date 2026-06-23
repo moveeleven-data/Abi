@@ -88,6 +88,10 @@ from abi.modules.next_target_strategy import (
     NEXT_TARGET_STRATEGY_ARTIFACT_TYPES,
     run_next_target_strategy,
 )
+from abi.modules.object_event_recomposition import (
+    OBJECT_EVENT_TARGET_SCOPE,
+    run_object_event_recomposition,
+)
 from abi.modules.pilot_artifact_set import import_pilot_rival, run_pilot_artifact_set
 
 
@@ -582,6 +586,21 @@ def build_next_target_strategy_ready_chain(tmp_path: Path):
     ]
     assert synthesis.payload["best_current_candidate"]["reader_state_evaluated"] is True
     chain["strategy_synthesis"] = synthesis.payload
+    return chain
+
+
+def build_object_event_strategy_chain(tmp_path: Path):
+    chain = build_next_target_strategy_ready_chain(tmp_path)
+    strategy = run_next_target_strategy(
+        chain["config"],
+        synthesis_packet=Path(str(chain["strategy_synthesis"]["packet_dir"])),
+    )
+    assert strategy.exit_code == 0
+    assert strategy.payload["accepted"] is True
+    assert strategy.payload["current_best_candidate_packet_id"] == chain["macro2"][
+        "packet_id"
+    ]
+    chain["next_target_strategy"] = strategy.payload
     return chain
 
 
@@ -1549,6 +1568,65 @@ class StubBoundedMacroRecompositionClient:
 def bounded_macro_stub_factory(clients, *, mode: str = "valid"):
     def _factory(model: str) -> StubBoundedMacroRecompositionClient:
         client = StubBoundedMacroRecompositionClient(model=model, mode=mode)
+        clients.append(client)
+        return client
+
+    return _factory
+
+
+class StubObjectEventRecompositionClient:
+    provider = "openai"
+
+    def __init__(self, *, model: str, mode: str = "valid") -> None:
+        self.model = model
+        self.mode = mode
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        if request.schema != BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
+            raise AssertionError(f"unexpected schema: {request.schema.name}")
+        prompt = json.loads(request.input_text)
+        work_order = prompt.get("work_order", {})
+        target_paragraphs = (
+            work_order.get("target_paragraphs", [])
+            if isinstance(work_order, dict)
+            else []
+        )
+        payload = live_macro_payload(
+            prompt.get("active_transformation_targets", []),
+            target_movement=OBJECT_EVENT_TARGET_SCOPE,
+            target_paragraphs=target_paragraphs,
+            target_spans=[],
+        )
+        if self.mode == "invalid_json":
+            return "{not valid json"
+        if self.mode == "full_rewrite":
+            payload["replacement_section_text"] = (
+                f"{prompt['unchanged_prefix_text']}\n\n"
+                f"{prompt['before_section_text']}\n\n"
+                f"{prompt['unchanged_suffix_text']}"
+            )
+        elif self.mode == "decorative_only":
+            payload["replacement_section_text"] = (
+                "The table looks blue in the soft morning, the spoon shines, "
+                "the saucer glows, the ring seems delicate, and the dust looks "
+                "silver in a beautiful hush."
+            )
+        elif self.mode == "proof_only":
+            payload["replacement_section_text"] = (
+                "Proof has no outside answer because the law of record compresses "
+                "the return into its own abstract necessity. The answer remains "
+                "inside proof, and proof remains inside the answer."
+            )
+        elif self.mode == "unchanged_region":
+            payload["replacement_section_text"] = str(prompt["before_section_text"])
+        return dump_json(payload)
+
+
+def object_event_stub_factory(clients, *, mode: str = "valid"):
+    def _factory(model: str) -> StubObjectEventRecompositionClient:
+        client = StubObjectEventRecompositionClient(model=model, mode=mode)
         clients.append(client)
         return client
 
@@ -6452,6 +6530,305 @@ def test_next_target_strategy_refuses_without_reader_state_evidence(tmp_path):
     assert result.payload["accepted"] is False
     assert "no reader-state evaluation" in result.payload["message"]
     assert result.payload["model_calls"] == 0
+
+
+def test_object_event_recomposition_fake_accepts_strategy_and_preserves_base(tmp_path):
+    chain = build_object_event_strategy_chain(tmp_path)
+    config = chain["config"]
+    strategy_packet = Path(str(chain["next_target_strategy"]["packet_dir"]))
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_object_event_recomposition(
+        config,
+        client_name="fake",
+        strategy_packet=strategy_packet,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["base_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert result.payload["base_candidate_packet_id"] != chain["macro_payload"]["packet_id"]
+    assert result.payload["target_scope"] == OBJECT_EVENT_TARGET_SCOPE
+    assert result.payload["selected_region_id"] == "middle_recurrence_ordinary_trace_logic"
+    assert result.payload["candidate_generated"] is True
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "bounded_macro_recomposition"
+
+    manifest = read_payload(packet_dir / "macro_recomposition_subject_manifest.json")
+    assert manifest["source_strategy_packet_id"] == chain["next_target_strategy"]["packet_id"]
+    assert manifest["base_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert manifest["proof_packet_id"] == chain["macro2_proof"]["packet_id"]
+    assert manifest["reader_state_packet_id"] == chain["macro2_reader_state"]["packet_id"]
+
+    target_selection = read_payload(packet_dir / "object_event_pressure_target_selection.json")
+    assert target_selection["target_name"] == OBJECT_EVENT_TARGET_SCOPE
+    assert target_selection["selected_region_id"] == "middle_recurrence_ordinary_trace_logic"
+    assert target_selection["generation_authorized_by_command"] is True
+
+    protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
+    assert any("partial reread transformation" in item for item in protected["protected_effects"])
+    assert "decorative vividness with no causal object event" in protected["forbidden_changes"]
+    assert "proof/no-answer compression by inertia" in protected["forbidden_changes"]
+
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["base_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert candidate["target_scope"] == OBJECT_EVENT_TARGET_SCOPE
+    assert candidate["bounded_macro_recomposition"] is True
+    assert candidate["object_event_pressure_recomposition"] is True
+    assert candidate["full_rewrite"] is False
+    assert candidate["candidate_only"] is True
+    assert candidate["non_final"] is True
+    assert candidate["finalization_eligible"] is False
+    assert candidate["no_phase_shift_claim"] is True
+    assert candidate["fixture_only"] is True
+    assert "The cup left the ring" in candidate["text"]
+    base_candidate = read_payload(
+        Path(str(chain["macro2"]["packet_dir"])) / "macro_recomposed_candidate_text.json"
+    )
+    assert str(base_candidate["text"]).split("\n\n")[0] in candidate["text"]
+
+    patch = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    assert patch["object_event_pressure_mapping"]
+    assert patch["target_coverage_report"]["object_event_pressure_mapping_exists"] is True
+    assert patch["target_coverage_report"]["macro_materiality_passed"] is True
+
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    assert diff["target_scope"] == OBJECT_EVENT_TARGET_SCOPE
+    assert diff["changed_spans"][0]["within_selected_target"] is True
+    assert diff["changed_spans"][0]["requires_target_expansion"] is False
+    assert diff["target_coverage_report"]["ready_for_executed_ablation"] is True
+    assert diff["materiality_report"]["object_event_relation_count"] >= 1
+
+    rival = read_payload(packet_dir / "macro_rival_pressure_check.json")
+    assert rival["strongest_rival_pressure_preserved"] is True
+    assert rival["strongest_rival_still_blocks"] is True
+    assert rival["strongest_rival_comparison_passed"] is False
+
+    gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    for gate_name in (
+        "strategy_packet_consumed",
+        "base_candidate_packet_0056_used",
+        "first_read_object_event_pressure_targeted",
+        "bounded_region_selected",
+        "object_event_pressure_mapping_exists",
+        "region_materiality_passed",
+        "protected_effects_recorded",
+        "rival_pressure_preserved",
+        "no_final_claim",
+        "no_phase_shift_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    for gate_name in (
+        "executed_ablation_completed_for_object_event_candidate",
+        "reader_state_eval_completed_for_object_event_candidate",
+        "no_unresolved_internal_blockers",
+        "internal_operator_approval",
+        "finalization_eligible",
+    ):
+        assert gate_results[gate_name]["passed"] is False
+    assert gate["passed"] is False
+    assert gate["candidate_generated"] is True
+    assert gate["requires_executed_ablation_before_improvement_claim"] is True
+
+    packet = read_payload(packet_dir / "macro_recomposition_packet.json")
+    assert packet["base_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert packet["target_scope"] == OBJECT_EVENT_TARGET_SCOPE
+    assert packet["counts"]["model_calls"] == 0
+    assert packet["requires_executed_ablation_before_improvement_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        ablation_subject = _load_subject(connection, packet_dir)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert ablation_subject.revision_packet_kind == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert ablation_subject.base_candidate_packet_id == chain["macro2"]["packet_id"]
+    assert ablation_subject.target_movement == OBJECT_EVENT_TARGET_SCOPE
+    assert final_report.refused is True
+
+
+def test_object_event_recomposition_refuses_strategy_missing_current_best(tmp_path):
+    chain = build_object_event_strategy_chain(tmp_path)
+    invalid_packet = tmp_path / "invalid_object_event_strategy_missing_best"
+    shutil.copytree(Path(str(chain["next_target_strategy"]["packet_dir"])), invalid_packet)
+
+    def _remove_current_best(payload):
+        payload.pop("current_best_candidate_packet_id", None)
+
+    rewrite_payload(invalid_packet / "current_best_candidate_summary.json", _remove_current_best)
+
+    result = run_object_event_recomposition(
+        chain["config"],
+        client_name="fake",
+        strategy_packet=invalid_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "missing current best candidate" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_object_event_recomposition_refuses_wrong_strategy_target(tmp_path):
+    chain = build_object_event_strategy_chain(tmp_path)
+    invalid_packet = tmp_path / "invalid_object_event_strategy_wrong_target"
+    shutil.copytree(Path(str(chain["next_target_strategy"]["packet_dir"])), invalid_packet)
+
+    def _wrong_target(payload):
+        payload["target_name"] = "proof_no_outside_answer_refinement"
+
+    rewrite_payload(invalid_packet / "object_event_pressure_target_map.json", _wrong_target)
+
+    result = run_object_event_recomposition(
+        chain["config"],
+        client_name="fake",
+        strategy_packet=invalid_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "object_event_pressure_target_map target_name" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_object_event_recomposition_openai_refuses_without_allow_live(tmp_path):
+    chain = build_object_event_strategy_chain(tmp_path)
+    clients = []
+
+    result = run_object_event_recomposition(
+        chain["config"],
+        client_name="openai",
+        strategy_packet=Path(str(chain["next_target_strategy"]["packet_dir"])),
+        allow_live_model=False,
+        client_factory=object_event_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--allow-live-model" in result.payload["message"]
+    assert clients == []
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_object_event_recomposition_openai_refuses_without_api_key(tmp_path, monkeypatch):
+    chain = build_object_event_strategy_chain(tmp_path)
+    clients = []
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    result = run_object_event_recomposition(
+        chain["config"],
+        client_name="openai",
+        strategy_packet=Path(str(chain["next_target_strategy"]["packet_dir"])),
+        allow_live_model=True,
+        client_factory=object_event_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "OPENAI_API_KEY is not set" in result.payload["message"]
+    assert clients == []
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_object_event_recomposition_stubbed_openai_success(tmp_path, monkeypatch):
+    chain = build_object_event_strategy_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_object_event_recomposition(
+        chain["config"],
+        client_name="openai",
+        strategy_packet=Path(str(chain["next_target_strategy"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        model="stub-object-event-model",
+        client_factory=object_event_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert len(clients) == 1
+    assert len(clients[0].requests) == 1
+    assert result.payload["counts"]["model_calls"] == 1
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    model_call = result.payload["model_calls"][0]
+    assert model_call["provider"] == "openai"
+    assert model_call["model"] == "stub-object-event-model"
+    assert model_call["status"] == MODEL_CALL_SUCCESS
+
+    plan_envelope = json.loads(
+        (packet_dir / "macro_recomposition_plan.json").read_text(encoding="utf-8")
+    )
+    patch_envelope = json.loads(
+        (packet_dir / "macro_patch_or_section_plan.json").read_text(encoding="utf-8")
+    )
+    assert plan_envelope["model_call_id"] == result.payload["model_call_ids"][0]
+    assert patch_envelope["model_call_id"] == result.payload["model_call_ids"][0]
+    assert patch_envelope["fixture_only"] is False
+
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["source_model_call_id"] == result.payload["model_call_ids"][0]
+    assert candidate["fixture_only"] is False
+    assert candidate["base_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert candidate["target_scope"] == OBJECT_EVENT_TARGET_SCOPE
+    assert candidate["non_final"] is True
+    assert candidate["finalization_eligible"] is False
+    assert candidate["no_phase_shift_claim"] is True
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_message"),
+    [
+        ("full_rewrite", "full rewrite"),
+        ("decorative_only", "object-event pressure mapping failed"),
+        ("proof_only", "object-event pressure mapping failed"),
+        ("unchanged_region", "selected region materiality failed"),
+    ],
+)
+def test_object_event_recomposition_stubbed_openai_validation_failures(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected_message,
+):
+    chain = build_object_event_strategy_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_object_event_recomposition(
+        chain["config"],
+        client_name="openai",
+        strategy_packet=Path(str(chain["next_target_strategy"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        model="stub-object-event-model",
+        client_factory=object_event_stub_factory(clients, mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert not (packet_dir / "macro_recomposed_candidate_text.json").exists()
 
 
 def test_autonomous_evidence_synthesis_does_not_select_new_macro2_without_proof(tmp_path):
