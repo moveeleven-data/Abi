@@ -64,6 +64,8 @@ KNOWN_PACKET_CHAIN = (
     ("autonomous_evidence_synthesis", "packet_0006"),
     ("bounded_macro_recomposition", "packet_0056"),
     ("executed_ablation", "packet_0019"),
+    ("autonomous_evidence_synthesis", "packet_0010"),
+    ("internal_reader_state_evaluation", "packet_0005"),
 )
 
 SOURCE_PACKET_FILES = {
@@ -285,6 +287,7 @@ def run_autonomous_evidence_synthesis(
         )
 
         payloads["residual_blocker_map"] = _build_residual_blocker_map(
+            payloads["best_current_candidate_selection"],
             payloads["exhausted_handle_report"],
             payloads["rival_pressure_summary"],
             payloads["reader_state_evidence_adjudication"],
@@ -605,6 +608,49 @@ def _build_subject_manifest(
             for source in sources
             if source.packet_kind == "internal_reader_state_evaluation"
         ],
+        "macro2_reader_state_evaluation_packets_consumed": [
+            source.packet_id
+            for source in sources
+            if source.packet_kind == "internal_reader_state_evaluation"
+            and (
+                source.payload.get("selected_candidate_packet_id")
+                in {
+                    candidate.packet_id
+                    for candidate in sources
+                    if candidate.packet_kind == "bounded_macro_recomposition"
+                    and (
+                        candidate.payload.get("target_scope")
+                        == READER_STATE_MACRO_2_TARGET_SCOPE
+                        or candidate.payload.get("target_movement")
+                        == READER_STATE_MACRO_2_TARGET_SCOPE
+                    )
+                }
+                or _normalized_path_text(source.payload.get("selected_candidate_packet_dir"))
+                in {
+                    _normalized_path_text(candidate.packet_dir)
+                    for candidate in sources
+                    if candidate.packet_kind == "bounded_macro_recomposition"
+                    and (
+                        candidate.payload.get("target_scope")
+                        == READER_STATE_MACRO_2_TARGET_SCOPE
+                        or candidate.payload.get("target_movement")
+                        == READER_STATE_MACRO_2_TARGET_SCOPE
+                    )
+                }
+                or source.payload.get("selected_candidate_text_sha256")
+                in {
+                    _candidate_text_sha_for_source(candidate)
+                    for candidate in sources
+                    if candidate.packet_kind == "bounded_macro_recomposition"
+                    and (
+                        candidate.payload.get("target_scope")
+                        == READER_STATE_MACRO_2_TARGET_SCOPE
+                        or candidate.payload.get("target_movement")
+                        == READER_STATE_MACRO_2_TARGET_SCOPE
+                    )
+                }
+            )
+        ],
         "missing_source_packets": missing_expected,
         "missing_critical_source_kinds": critical_missing,
         "source_chain_complete": not critical_missing,
@@ -919,6 +965,15 @@ def _internal_reader_state_history_row(source: SourcePacket) -> dict[str, object
         or subject.get("selected_candidate_packet_id")
         or ""
     )
+    selected_candidate_packet_dir = (
+        source.payload.get("selected_candidate_packet_dir")
+        or subject.get("selected_candidate_packet_dir")
+    )
+    selected_candidate_text_sha256 = (
+        source.payload.get("selected_candidate_text_sha256")
+        or subject.get("selected_candidate_text_sha256")
+        or delta.get("selected_candidate_text_sha256")
+    )
     reread_strength = _reader_state_strength(delta, opening, reread)
     return _base_history_row(source) | {
         "source_packet": source.payload.get("source_synthesis_packet_id"),
@@ -926,8 +981,8 @@ def _internal_reader_state_history_row(source: SourcePacket) -> dict[str, object
         "selected_candidate_packet_id": selected_candidate_packet_id,
         "selected_candidate_kind": source.payload.get("selected_candidate_packet_kind")
         or subject.get("selected_candidate_packet_kind"),
-        "selected_candidate_packet_dir": source.payload.get("selected_candidate_packet_dir")
-        or subject.get("selected_candidate_packet_dir"),
+        "selected_candidate_packet_dir": selected_candidate_packet_dir,
+        "selected_candidate_text_sha256": selected_candidate_text_sha256,
         "selected_candidate_artifact_id": source.payload.get("selected_candidate_artifact_id")
         or subject.get("selected_candidate_artifact_id"),
         "model_calls": model_calls,
@@ -1465,6 +1520,52 @@ def _is_reader_state_macro_2_proof(
     )
 
 
+def _latest_reader_state_for_candidate(
+    reader_state_rows: list[dict[str, object]],
+    candidate: dict[str, object],
+) -> dict[str, object] | None:
+    matching_rows = [
+        row for row in reader_state_rows if _reader_state_matches_candidate(row, candidate)
+    ]
+    if not matching_rows:
+        return None
+    return sorted(
+        matching_rows,
+        key=lambda row: (
+            str(row.get("created_at", "")),
+            int(row.get("event_index") or 0),
+            str(row.get("packet_id", "")),
+        ),
+    )[-1]
+
+
+def _reader_state_matches_candidate(
+    reader_state_row: dict[str, object],
+    candidate: dict[str, object],
+) -> bool:
+    selected_kind = str(reader_state_row.get("selected_candidate_kind") or "")
+    candidate_kind = str(candidate.get("packet_kind") or "")
+    selected_packet_id = str(reader_state_row.get("selected_candidate_packet_id") or "")
+    candidate_packet_id = str(candidate.get("packet_id") or "")
+    if selected_packet_id and selected_packet_id == candidate_packet_id:
+        return not selected_kind or selected_kind == candidate_kind
+
+    selected_dir = _normalized_path_text(reader_state_row.get("selected_candidate_packet_dir"))
+    candidate_dir = _normalized_path_text(candidate.get("packet_dir"))
+    if selected_dir and selected_dir == candidate_dir:
+        return True
+
+    selected_sha = str(reader_state_row.get("selected_candidate_text_sha256") or "")
+    candidate_sha = str(candidate.get("candidate_text_sha256") or candidate.get("text_sha256") or "")
+    return bool(selected_sha and candidate_sha and selected_sha == candidate_sha)
+
+
+def _normalized_path_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\\", "/").rstrip("/").lower()
+
+
 def _build_best_candidate_selection(
     sources: list[SourcePacket],
     history: dict[str, object],
@@ -1483,12 +1584,9 @@ def _build_best_candidate_selection(
         (str(pair["candidate_packet_id"]), str(pair["candidate_packet_kind"])): pair
         for pair in candidate_proof_pairs
     }
-    reader_state_by_candidate = {
-        str(row["selected_candidate_packet_id"]): row
-        for row in rows
-        if row["packet_kind"] == "internal_reader_state_evaluation"
-        and row.get("selected_candidate_packet_id")
-    }
+    reader_state_rows = [
+        row for row in rows if row["packet_kind"] == "internal_reader_state_evaluation"
+    ]
     candidates: list[dict[str, object]] = []
     for row in rows:
         if row["packet_kind"] not in CANDIDATE_PACKET_KINDS:
@@ -1536,7 +1634,7 @@ def _build_best_candidate_selection(
                 ),
             }
         )
-        reader_state_row = reader_state_by_candidate.get(str(row["packet_id"]))
+        reader_state_row = _latest_reader_state_for_candidate(reader_state_rows, row)
         if reader_state_row is not None:
             candidate.update(
                 {
@@ -1550,6 +1648,9 @@ def _build_best_candidate_selection(
                     ),
                     "reader_state_post_reread_state": reader_state_row.get(
                         "post_reread_reader_state"
+                    ),
+                    "reader_state_selected_candidate_text_sha256": reader_state_row.get(
+                        "selected_candidate_text_sha256"
                     ),
                     "reader_state_strongest_rival_still_blocks": reader_state_row.get(
                         "strongest_rival_still_blocks"
@@ -1983,11 +2084,15 @@ def _build_reader_state_evidence_adjudication(
         if isinstance(selected, dict) and selected.get("packet_id")
         else None
     )
+    selected_candidate = selected if isinstance(selected, dict) else {}
     reader_rows = [
         row
         for row in rows
         if row["packet_kind"] == "internal_reader_state_evaluation"
-        and (selected_packet_id is None or row.get("selected_candidate_packet_id") == selected_packet_id)
+        and (
+            selected_packet_id is None
+            or _reader_state_matches_candidate(row, selected_candidate)
+        )
     ]
     if not reader_rows:
         return {
@@ -2041,6 +2146,8 @@ def _build_reader_state_evidence_adjudication(
         "packet_dir": row["packet_dir"],
         "selected_candidate_packet_id": row.get("selected_candidate_packet_id"),
         "selected_candidate_kind": row.get("selected_candidate_kind"),
+        "selected_candidate_packet_dir": row.get("selected_candidate_packet_dir"),
+        "selected_candidate_text_sha256": row.get("selected_candidate_text_sha256"),
         "model_calls": row.get("model_calls"),
         "fixture_only": row.get("fixture_only"),
         "first_pass_trace_exists": row.get("first_pass_trace_exists"),
@@ -2057,6 +2164,14 @@ def _build_reader_state_evidence_adjudication(
         if reread.get("opening_becomes_more_necessary_after_return")
         else "not_confirmed",
         "proof_no_outside_answer_carry_status": proof_status,
+        "final_return_echo_status": "improved_but_unproven"
+        if reread_strength == "partial"
+        or opening.get("ending_changes_opening") is False
+        else "unresolved",
+        "first_read_object_event_pressure_status": "still_weaker_than_rival"
+        if rival.get("rival_still_wins_on_first_read_vividness")
+        or rival.get("rival_still_wins_on_lived_object_event_pressure")
+        else "not_confirmed",
         "return_without_regression_status": row.get("return_without_regression_status"),
         "local_field_causal_necessity": row.get("local_field_causal_necessity"),
         "hostile_risk_status": hostile_status,
@@ -2149,6 +2264,15 @@ def _build_reader_state_tension_report(
     rival = _optional_payload(packet_dir, "rival_reader_state_comparison.json")
     hostile = _optional_payload(packet_dir, "hostile_reader_state_report.json")
     tensions: list[dict[str, object]] = []
+    if adjudication.get("reread_transformation_strength") == "partial":
+        tensions.append(
+            _tension(
+                "reread_transformation_partial_not_decisive",
+                "high",
+                "Reader-state evidence reports partial transformation, not decisive opening-return change.",
+                ["reader_delta_report", "opening_return_transformation_report"],
+            )
+        )
     if reread.get("opening_becomes_more_necessary_after_return") and not opening.get(
         "ending_changes_opening"
     ):
@@ -2194,6 +2318,18 @@ def _build_reader_state_tension_report(
                 ["proof_constraint_carry_report", "reread_reader_state_trace"],
             )
         )
+    if (
+        rival.get("rival_still_wins_on_first_read_vividness")
+        or rival.get("rival_still_wins_on_lived_object_event_pressure")
+    ) and adjudication.get("local_field_causal_necessity") == "increased":
+        tensions.append(
+            _tension(
+                "structural_return_gain_vs_first_read_object_event_gap",
+                "high",
+                "Macro-2 can improve structural return and local field causality while leaving the first-read object-event pressure gap unresolved.",
+                ["reader_delta_report", "rival_reader_state_comparison"],
+            )
+        )
     model_comparison = _as_dict(rival.get("model_reader_comparison"))
     if rival.get("candidate_scores") and model_comparison.get("strongest_by_local_embodiment"):
         candidate_scores = _as_dict(rival.get("candidate_scores"))
@@ -2209,6 +2345,14 @@ def _build_reader_state_tension_report(
                     ["rival_reader_state_comparison"],
                 )
             )
+    tensions.append(
+        _tension(
+            "internal_reader_evidence_not_human_data",
+            "medium",
+            "Internal reader evidence can guide the next target but is model-internal evidence, not human validation.",
+            ["internal_reader_state_eval_gate_report"],
+        )
+    )
     return {
         "reader_state_evidence_present": True,
         "packet_id": adjudication.get("packet_id"),
@@ -2233,6 +2377,7 @@ def _build_reader_state_tension_report(
 
 
 def _build_residual_blocker_map(
+    best_candidate: dict[str, object],
     exhausted_handle_report: dict[str, object],
     rival_pressure_summary: dict[str, object],
     reader_state_adjudication: dict[str, object],
@@ -2249,6 +2394,16 @@ def _build_residual_blocker_map(
     reader_state_partial = (
         reader_state_adjudication.get("reread_transformation_strength") == "partial"
     )
+    selected = best_candidate.get("selected_best_candidate")
+    selected_is_macro2 = bool(
+        isinstance(selected, dict)
+        and selected.get("packet_kind") == "bounded_macro_recomposition"
+        and (
+            selected.get("target_scope") == READER_STATE_MACRO_2_TARGET_SCOPE
+            or selected.get("target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
+        )
+    )
+    macro2_reader_state_present = selected_is_macro2 and reader_state_present
     reader_state_tensions_present = int(reader_state_tension_report.get("tension_count", 0)) > 0
     blockers = [
         _blocker(
@@ -2341,7 +2496,9 @@ def _build_residual_blocker_map(
         blockers.extend(
             [
                 _blocker(
-                    "local_embodiment_vs_compression_balance",
+                    "local_embodiment_vs_conceptual_compression_balance"
+                    if macro2_reader_state_present
+                    else "local_embodiment_vs_compression_balance",
                     "medium",
                     "reader-state adjudication says the local field became causal, but rival pressure still wins lived object-event immediacy",
                     False,
@@ -2355,18 +2512,43 @@ def _build_residual_blocker_map(
                     status="active_after_reader_state",
                 ),
                 _blocker(
-                    "thesis_visible_proof_language",
+                    "thesis_visible_scaffold_risk"
+                    if macro2_reader_state_present
+                    else "thesis_visible_proof_language",
                     "high",
                     "proof/no-outside-answer carry remains partly explicit or thesis-visible",
                     False,
                     status="active_after_reader_state",
                 ),
                 _blocker(
-                    "first_read_vividness_gap",
+                    "first_read_object_event_pressure_gap"
+                    if macro2_reader_state_present
+                    else "first_read_vividness_gap",
                     "high",
                     "rival comparison says strongest rival still wins first-read vividness and lived object-event pressure",
                     False,
                     status="rival_still_blocks",
+                ),
+                _blocker(
+                    "strongest_rival_still_winning",
+                    "high",
+                    "strongest rival still wins first-read vividness and lived object-event pressure",
+                    False,
+                    status="rival_still_blocks",
+                ),
+                _blocker(
+                    "proof_no_outside_answer_carry_still_partial",
+                    "high",
+                    "proof/no-outside-answer carry is scene-bound in places but remains partial or unresolved",
+                    False,
+                    status="partial_after_reader_state",
+                ),
+                _blocker(
+                    "final_return_echo_reread_strength_still_partial",
+                    "high",
+                    "final return echo is improved but not decisive in internal reread evidence",
+                    False,
+                    status="partial_after_reader_state",
                 ),
             ]
         )
@@ -2377,10 +2559,15 @@ def _build_residual_blocker_map(
         "immediate_macro_recomposition_recommended": False if macro_active else True,
         "internal_reader_state_evaluation_recommended": macro_active and not reader_state_present,
         "reader_state_evidence_consumed": reader_state_present,
+        "macro2_reader_state_evidence_consumed": macro2_reader_state_present,
+        "next_target_strategy_recommended": macro2_reader_state_present,
+        "first_read_object_event_pressure_strategy_recommended": macro2_reader_state_present,
         "reader_state_informed_recomposition_recommended": reader_state_present
-        and reader_state_partial,
+        and reader_state_partial
+        and not macro2_reader_state_present,
         "reader_state_informed_macro_2_recomposition_recommended": reader_state_present
-        and reader_state_partial,
+        and reader_state_partial
+        and not macro2_reader_state_present,
         "generic_more_compression_recommended": False,
         "strongest_rival_still_blocks": rival_pressure_summary["strongest_rival_still_blocks"],
         "not_finalization_eligible": True,
@@ -2503,6 +2690,31 @@ def _build_local_law_case_notes(
                     "case_note": "Rival pressure remains active even after macro-level reader-state improvement.",
                     "source_evidence_packet_ids": reader_packet_ids,
                 },
+                {
+                    "law_id": "macro2_live_support_can_remain_partial",
+                    "case_note": "Macro-2 has live ablation support and live reader-state support, but reader-state transformation remains partial.",
+                    "source_evidence_packet_ids": reader_packet_ids,
+                },
+                {
+                    "law_id": "macro2_structural_return_can_improve_while_first_read_lags",
+                    "case_note": "Structural return can improve while the strongest rival still wins first-read object-event pressure.",
+                    "source_evidence_packet_ids": reader_packet_ids,
+                },
+                {
+                    "law_id": "macro2_object_field_can_gain_causality_without_clearing_scaffold_risk",
+                    "case_note": "Table, dust, spoon, saucer, and ring can become more causal after reread without fully defeating thesis or scaffold risk.",
+                    "source_evidence_packet_ids": reader_packet_ids,
+                },
+                {
+                    "law_id": "macro2_proof_no_answer_scene_bound_but_partial",
+                    "case_note": "Proof/no-outside-answer can become more scene-bound while remaining partly explicit.",
+                    "source_evidence_packet_ids": reader_packet_ids,
+                },
+                {
+                    "law_id": "reader_state_evidence_sets_next_target",
+                    "case_note": "Reader-state evidence must drive the next target; do not keep pushing the previous handle by inertia.",
+                    "source_evidence_packet_ids": reader_packet_ids,
+                },
             ]
         )
         if int(reader_state_tension_report.get("tension_count", 0)) > 0:
@@ -2546,7 +2758,20 @@ def _build_strategic_decision_report(
     reader_state_partial = (
         reader_state_adjudication.get("reread_transformation_strength") == "partial"
     )
-    if selected_is_macro2 and not reader_state_present:
+    if selected_is_macro2 and reader_state_present:
+        recommendation = "preserve_macro2_candidate_and_prepare_next_reader_state_target_strategy"
+        next_action = "review_macro2_reader_state_synthesis_before_new_candidate"
+        do_not_patch = True
+        basis = [
+            "reader-state-informed macro-2 remains the best current candidate after linked ablation proof",
+            "macro-2 reader-state evaluation has now been consumed for the selected candidate",
+            "reader-state evidence reports partial opening-return transformation, not decisive success",
+            "table/dust/spoon/saucer/ring became more causal after reread",
+            "first-read object-event pressure and strongest-rival vividness still block",
+            "proof/no-outside-answer carry remains partial or thesis-visible",
+            "operator review should choose the next residual target before any new candidate generation",
+        ]
+    elif selected_is_macro2 and not reader_state_present:
         recommendation = "preserve_macro2_candidate_and_run_reader_state_evaluation"
         next_action = "run_internal_reader_state_evaluation_on_macro2_candidate"
         do_not_patch = True
@@ -2609,11 +2834,19 @@ def _build_strategic_decision_report(
         and not reader_state_present,
         "reader_state_evidence_consumed": reader_state_present,
         "reader_state_informed_recomposition_recommended": reader_state_present
-        and reader_state_partial,
+        and reader_state_partial
+        and not selected_is_macro2,
         "reader_state_informed_macro_2_recomposition_recommended": reader_state_present
-        and reader_state_partial,
-        "targeted_proof_no_outside_answer_recomposition_recommended": reader_state_present,
-        "final_return_reread_echo_recomposition_recommended": reader_state_present,
+        and reader_state_partial
+        and not selected_is_macro2,
+        "next_reader_state_target_strategy_recommended": selected_is_macro2
+        and reader_state_present,
+        "first_read_object_event_pressure_strategy_recommended": selected_is_macro2
+        and reader_state_present,
+        "targeted_proof_no_outside_answer_recomposition_recommended": reader_state_present
+        and not selected_is_macro2,
+        "final_return_reread_echo_recomposition_recommended": reader_state_present
+        and not selected_is_macro2,
         "do_not_build_loop_controller_yet": True,
         "do_not_add_taste_memory_yet": True,
         "decision_basis": basis,
@@ -2665,6 +2898,69 @@ def _build_macro_recomposition_brief(
             or selected.get("target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
         )
     )
+    if selected_is_macro2 and reader_state_present:
+        return {
+            "brief_type": "macro2_reader_state_next_strategy_brief_not_artifact",
+            "current_best_base_candidate": selected,
+            "current_best_base_candidate_packet_id": selected.get("packet_id"),
+            "current_best_base_candidate_packet_kind": selected.get("packet_kind"),
+            "linked_executed_ablation_packet_id": selected.get("proof_packet_id"),
+            "reader_state_evidence_packet_id": reader_state_adjudication.get("packet_id"),
+            "evidence_basis": {
+                "ablation_packet_id": selected.get("proof_packet_id"),
+                "reader_state_packet_id": reader_state_adjudication.get("packet_id"),
+                "reader_state_fixture_only": reader_state_adjudication.get("fixture_only"),
+                "reader_state_model_calls": reader_state_adjudication.get("model_calls"),
+                "reader_state_selected_candidate_text_sha256": reader_state_adjudication.get(
+                    "selected_candidate_text_sha256"
+                ),
+            },
+            "what_improved": [
+                "macro-2 has linked executed-ablation support",
+                "internal reader-state evidence reports partial reread transformation",
+                "opening field becomes more record-bearing after reread",
+                "table/dust/spoon/saucer/ring gained causal necessity after reread",
+                "overexplanation was reduced without reported local embodiment damage",
+            ],
+            "what_remains_unproven": [
+                "first-read object-event pressure remains weaker than the strongest rival",
+                "proof/no-outside-answer carry remains partial or unresolved",
+                "final return echo and opening-return transformation remain partial",
+                "hostile reader still detects thesis/scaffold risk",
+                "strongest-rival pressure remains blocking",
+            ],
+            "protected_effects": [
+                "preserve packet_0056 macro-2 gains",
+                "preserve table/dust/spoon/saucer/ring causal field",
+                "preserve reduced overexplanation",
+                "preserve opening as record-bearing local field",
+                "preserve strongest-rival pressure as active constraint",
+            ],
+            "candidate_is_non_final": True,
+            "forbidden_drift": [
+                "do not write a new candidate inside synthesis",
+                "do not return to the local patch treadmill",
+                "do not add more abstract proof language",
+                "do not compress into summary",
+                "do not declare victory over the rival",
+                "do not make a phase-shift claim",
+            ],
+            "next_strategy_questions": [
+                "which first-read object-event pressure gap should be targeted next",
+                "which proof/no-answer language remains thesis-visible",
+                "which final-return echo change can be tested without thinning embodiment",
+                "whether operator review authorizes a new creative action",
+            ],
+            "operator_review_required_before_new_creative_action": True,
+            "run_internal_reader_state_evaluation_before_further_recomposition": False,
+            "run_another_macro_recomposition_now": False,
+            "reader_state_evidence_consumed": True,
+            "not_finalization_eligible": True,
+            "not_candidate_artifact": True,
+            "not_human_validated": True,
+            "no_phase_shift_claim": True,
+            "worker": "macro2_reader_state_next_strategy_brief_v1_controller",
+        }
     if selected_kind == "bounded_macro_recomposition" and reader_state_present:
         return {
             "brief_type": "reader_state_informed_macro_2_recomposition_brief_not_artifact",
@@ -2942,6 +3238,14 @@ def _build_gate_report(
     macro_candidate_selected = isinstance(selected, dict) and selected.get(
         "packet_kind"
     ) == "bounded_macro_recomposition"
+    selected_is_macro2 = bool(
+        isinstance(selected, dict)
+        and selected.get("packet_kind") == "bounded_macro_recomposition"
+        and (
+            selected.get("target_scope") == READER_STATE_MACRO_2_TARGET_SCOPE
+            or selected.get("target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
+        )
+    )
     macro2_candidate_proof_linked = bool(best_candidate.get("macro2_candidate_proof_linked"))
     candidate_supersession_evaluated = bool(
         best_candidate.get("candidate_supersession_evaluated")
@@ -2958,6 +3262,20 @@ def _build_gate_report(
     reader_state_classified = reader_state_evidence_consumed and reader_state_adjudication.get(
         "reread_transformation_strength"
     ) in {"none", "weak", "partial", "strong"}
+    macro2_reader_state_evidence_consumed = selected_is_macro2 and reader_state_evidence_consumed
+    macro2_reader_state_eval_linked = macro2_reader_state_evidence_consumed and (
+        reader_state_adjudication.get("selected_candidate_packet_id") == selected.get("packet_id")
+        or reader_state_adjudication.get("selected_candidate_text_sha256")
+        == selected.get("text_sha256")
+    )
+    best_candidate_reader_state_status_current = bool(
+        isinstance(selected, dict)
+        and selected.get("reader_state_evaluated")
+        and (
+            selected.get("reader_state_packet_id")
+            == reader_state_adjudication.get("packet_id")
+        )
+    )
     gate_results = [
         _gate_result("synthesis_packet_exists", True),
         _gate_result("source_chain_complete", bool(subject_manifest["source_chain_complete"])),
@@ -3031,6 +3349,18 @@ def _build_gate_report(
             "reader_state_tensions_recorded",
             bool(reader_state_tensions),
         ),
+        _gate_result(
+            "macro2_reader_state_evidence_consumed",
+            macro2_reader_state_evidence_consumed if selected_is_macro2 else True,
+        ),
+        _gate_result(
+            "macro2_reader_state_eval_linked",
+            macro2_reader_state_eval_linked if selected_is_macro2 else True,
+        ),
+        _gate_result(
+            "best_candidate_reader_state_status_current",
+            best_candidate_reader_state_status_current if selected_is_macro2 else True,
+        ),
         _gate_result("macro_recomposition_brief_exists", bool(macro_brief)),
         _gate_result("no_final_claim", True),
         _gate_result("no_phase_shift_claim", True),
@@ -3074,6 +3404,9 @@ def _build_gate_report(
         "candidate_supersession_evaluated": candidate_supersession_evaluated,
         "best_current_candidate_updated_from_macro2_proof": best_updated_from_macro2_proof,
         "strongest_rival_pressure_preserved": strongest_rival_pressure_preserved,
+        "macro2_reader_state_evidence_consumed": macro2_reader_state_evidence_consumed,
+        "macro2_reader_state_eval_linked": macro2_reader_state_eval_linked,
+        "best_candidate_reader_state_status_current": best_candidate_reader_state_status_current,
         "reader_state_evidence_consumed": reader_state_evidence_consumed,
         "reader_state_adjudication_exists": bool(reader_state_adjudication),
         "reader_state_transformation_classified": reader_state_classified,
@@ -3144,6 +3477,9 @@ def _build_packet_summary(
             for source in sources
             if source.packet_kind == "internal_reader_state_evaluation"
         ],
+        "macro2_reader_state_evaluation_packets_consumed": payloads[
+            "autonomous_evidence_synthesis_subject_manifest"
+        ].get("macro2_reader_state_evaluation_packets_consumed", []),
         "candidate_proof_pairs": payloads["best_current_candidate_selection"][
             "candidate_proof_pairs"
         ],
@@ -3166,6 +3502,12 @@ def _build_packet_summary(
         "best_current_candidate_updated_from_macro2_proof": payloads[
             "best_current_candidate_selection"
         ]["best_current_candidate_updated_from_macro2_proof"],
+        "macro2_reader_state_evidence_consumed": payloads["synthesis_gate_report"][
+            "macro2_reader_state_evidence_consumed"
+        ],
+        "macro2_reader_state_eval_linked": payloads["synthesis_gate_report"][
+            "macro2_reader_state_eval_linked"
+        ],
         "reader_state_informed_recomposition_recommended": decision[
             "reader_state_informed_recomposition_recommended"
         ],
@@ -3192,9 +3534,12 @@ def _source_packet_summary(source: SourcePacket) -> dict[str, object]:
         "source_synthesis_packet_id": source.payload.get("source_synthesis_packet_id"),
         "selected_candidate_packet_id": source.payload.get("selected_candidate_packet_id"),
         "selected_candidate_packet_kind": source.payload.get("selected_candidate_packet_kind"),
+        "selected_candidate_packet_dir": source.payload.get("selected_candidate_packet_dir"),
+        "selected_candidate_text_sha256": source.payload.get("selected_candidate_text_sha256"),
         "base_candidate_packet_id": source.payload.get("base_candidate_packet_id"),
         "target_scope": source.payload.get("target_scope"),
         "target_movement": source.payload.get("target_movement"),
+        "candidate_text_sha256": _candidate_text_sha_for_source(source),
         "artifact_ids": source.artifact_ids,
         "model_backed": source.model_backed,
         "model_call_ids": list(source.model_call_ids),
@@ -3202,6 +3547,22 @@ def _source_packet_summary(source: SourcePacket) -> dict[str, object]:
         "finalization_eligible": bool(source.payload.get("finalization_eligible", False)),
         "no_phase_shift_claim": bool(source.payload.get("no_phase_shift_claim", True)),
     }
+
+
+def _candidate_text_sha_for_source(source: SourcePacket) -> str:
+    if source.packet_kind == "bounded_macro_recomposition":
+        candidate = _optional_payload(source.packet_dir, "macro_recomposed_candidate_text.json")
+        value = (
+            candidate.get("text_sha256")
+            or source.payload.get("candidate_text_sha256")
+            or source.payload.get("selected_best_candidate_text_sha256")
+        )
+        return str(value or "")
+    return str(
+        source.payload.get("candidate_text_sha256")
+        or source.payload.get("selected_candidate_text_sha256")
+        or ""
+    )
 
 
 def _critical_missing(sources: list[SourcePacket]) -> list[str]:
