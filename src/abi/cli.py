@@ -54,6 +54,7 @@ from abi.modules.internal_reader_state_evaluation import (
     INTERNAL_READER_STATE_EVAL_MAX_MODEL_CALLS_DEFAULT,
     run_internal_reader_state_evaluation,
 )
+from abi.modules.next_target_strategy import run_next_target_strategy
 from abi.modules.live_abi_ear import (
     LIVE_ABI_EAR_CLIENTS,
     LIVE_ABI_EAR_MAX_MODEL_CALLS_DEFAULT,
@@ -441,6 +442,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=INTERNAL_READER_STATE_EVAL_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for reader-state workers.",
     )
+    autonomous_plan_next_target_parser = autonomous_subparsers.add_parser(
+        "plan-next-target",
+        help="Plan the next evidence-grounded autonomous target without generation",
+    )
+    autonomous_plan_next_target_parser.add_argument(
+        "--synthesis-packet",
+        type=Path,
+        required=True,
+        help="Autonomous evidence synthesis packet directory to consume.",
+    )
     controller_parser = subparsers.add_parser("controller", help="Inspect fail-closed controller state")
     controller_subparsers = controller_parser.add_subparsers(
         dest="controller_command",
@@ -615,6 +626,11 @@ def main(argv: list[str] | None = None) -> int:
             synthesis_packet=args.synthesis_packet,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "plan-next-target":
+        return _cmd_autonomous_plan_next_target(
+            config,
+            synthesis_packet=args.synthesis_packet,
         )
     if args.command == "controller" and args.controller_command == "status":
         return _cmd_controller_status(config)
@@ -956,6 +972,16 @@ def _cmd_autonomous_reader_state_eval(
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
     )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_plan_next_target(
+    config: AbiConfig,
+    *,
+    synthesis_packet: Path,
+) -> int:
+    result = run_next_target_strategy(config, synthesis_packet=synthesis_packet)
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
 

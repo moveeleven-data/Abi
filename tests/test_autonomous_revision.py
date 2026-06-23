@@ -84,6 +84,10 @@ from abi.modules.executed_ablation import (
 )
 from abi.modules.internal_reader_lab import FakeInternalReaderLabModelClient, run_internal_reader_lab
 from abi.modules.internal_reader_state_evaluation import run_internal_reader_state_evaluation
+from abi.modules.next_target_strategy import (
+    NEXT_TARGET_STRATEGY_ARTIFACT_TYPES,
+    run_next_target_strategy,
+)
 from abi.modules.pilot_artifact_set import import_pilot_rival, run_pilot_artifact_set
 
 
@@ -565,6 +569,19 @@ def build_live_macro2_candidate_with_reader_state(
         )
     chain["macro2_synthesis"] = synthesis.payload
     chain["macro2_reader_state"] = reader_state.payload
+    return chain
+
+
+def build_next_target_strategy_ready_chain(tmp_path: Path):
+    chain = build_live_macro2_candidate_with_reader_state(tmp_path)
+    synthesis = run_autonomous_evidence_synthesis(chain["config"], run_id=chain["run_id"])
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["accepted"] is True
+    assert synthesis.payload["best_current_candidate"]["packet_id"] == chain["macro2"][
+        "packet_id"
+    ]
+    assert synthesis.payload["best_current_candidate"]["reader_state_evaluated"] is True
+    chain["strategy_synthesis"] = synthesis.payload
     return chain
 
 
@@ -6219,6 +6236,222 @@ def test_autonomous_evidence_synthesis_consumes_macro2_reader_state_by_candidate
 
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_next_target_strategy_accepts_reader_state_synthesis_and_operationalizes_target(
+    tmp_path,
+):
+    chain = build_next_target_strategy_ready_chain(tmp_path)
+    config = chain["config"]
+    synthesis_packet = Path(str(chain["strategy_synthesis"]["packet_dir"]))
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_next_target_strategy(config, synthesis_packet=synthesis_packet)
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["current_best_candidate_packet_id"] == chain["macro2"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["macro2_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["macro2_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["target_name"] == "first_read_object_event_pressure_gap"
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "next_target_strategy"
+    assert {artifact.type for artifact in result.artifacts} == set(
+        NEXT_TARGET_STRATEGY_ARTIFACT_TYPES
+    )
+
+    for artifact_type in NEXT_TARGET_STRATEGY_ARTIFACT_TYPES:
+        envelope = json.loads(
+            (packet_dir / f"{artifact_type}.json").read_text(encoding="utf-8")
+        )
+        assert envelope["artifact_type"] == artifact_type
+        assert envelope["fixture_only"] is False
+        assert envelope["model_call_id"] is None
+
+    subject = read_payload(packet_dir / "next_target_strategy_subject_manifest.json")
+    assert subject["source_synthesis_packet_id"] == chain["strategy_synthesis"]["packet_id"]
+    assert subject["current_best_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert subject["proof_packet_id"] == chain["macro2_proof"]["packet_id"]
+    assert subject["reader_state_eval_packet_id"] == chain["macro2_reader_state"][
+        "packet_id"
+    ]
+    assert subject["strongest_rival_still_blocks"] is True
+    assert subject["candidate_generated"] is False
+    assert subject["no_phase_shift_claim"] is True
+
+    source = read_payload(packet_dir / "source_evidence_summary.json")
+    assert source["current_best_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert source["proof_packet_id"] == chain["macro2_proof"]["packet_id"]
+    assert source["reader_state_packet_id"] == chain["macro2_reader_state"]["packet_id"]
+    assert source["not_human_data"] is True
+    assert source["candidate_final"] is False
+
+    best = read_payload(packet_dir / "current_best_candidate_summary.json")
+    assert best["current_best_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert best["superseded_prior_best_packet_id"] == chain["macro_payload"][
+        "packet_id"
+    ]
+    assert best["candidate_generated"] is False
+    assert any(
+        "reader-state evidence" in reason
+        for reason in best["why_current_best_superseded_prior_best"]
+    )
+
+    blockers = read_payload(packet_dir / "reader_state_blocker_summary.json")
+    assert blockers["top_blocker_id"] == "first_read_object_event_pressure_gap"
+    assert blockers["ranked_blockers"][0]["blocker_id"] == (
+        "first_read_object_event_pressure_gap"
+    )
+    assert "strongest_rival_still_winning" in blockers["active_blocker_ids"]
+    assert blockers["prior_proof_no_answer_handle_status"] == "improved_but_not_solved"
+    assert blockers["do_not_continue_proof_no_answer_compression_by_inertia"] is True
+    assert blockers["next_target_should_follow_evidence_not_previous_momentum"] is True
+
+    rival = read_payload(packet_dir / "strongest_rival_pressure_delta.json")
+    assert rival["strongest_rival_still_blocks"] is True
+    assert "first-read vividness" in rival["where_rival_still_wins"]
+    assert "lived object-event pressure" in rival["where_rival_still_wins"]
+    assert rival["strongest_rival_comparison_passed"] is False
+
+    protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
+    assert any("partial reread transformation" in item for item in protected["protected_effects"])
+    assert "writing a new candidate in this command" in protected["forbidden_changes"]
+    assert "declaring phase shift" in protected["forbidden_changes"]
+
+    target_map = read_payload(packet_dir / "object_event_pressure_target_map.json")
+    assert target_map["target_name"] == "first_read_object_event_pressure_gap"
+    assert "an object changes because another object or action pressures it" in target_map[
+        "what_counts_as_object_event_pressure"
+    ]
+    assert "decorative furniture added to seem vivid" in target_map[
+        "what_counts_as_fake_detail_only_vividness"
+    ]
+    assert "bounded early/middle scene-pressure recomposition" in target_map[
+        "possible_intervention_types"
+    ]
+    assert target_map["generation_chosen"] is False
+
+    region_map = read_payload(packet_dir / "candidate_region_pressure_map.json")
+    region_ids = {region["region_id"] for region in region_map["regions"]}
+    assert "opening_table_dust_spoon_saucer_ring_field" in region_ids
+    assert "middle_recurrence_ordinary_trace_logic" in region_ids
+    assert "proof_no_outside_answer_region" in region_ids
+    assert "final_return_opening_transformation_region" in region_ids
+    assert region_map["do_not_assume_final_return_is_next_region"] is True
+
+    strategy = read_payload(packet_dir / "next_intervention_strategy.json")
+    assert strategy["recommended_action"] == "request_operator_review_before_generation"
+    assert strategy["secondary_recommendation"] == (
+        "prepare_bounded_object_event_pressure_recomposition"
+    )
+    assert strategy["top_ranked_blocker"] == "first_read_object_event_pressure_gap"
+    assert strategy["generation_allowed_by_this_packet"] is False
+    assert strategy["operator_review_required_before_generation"] is True
+
+    plan = read_payload(packet_dir / "ablation_and_reader_eval_plan.json")
+    assert any(
+        chain["macro2"]["packet_id"] in item
+        for item in plan["if_future_candidate_is_generated"]
+    )
+    assert "revert_object_event_pressure_intervention" in plan["required_future_controls"]
+    assert "strongest_rival_comparison" in plan["required_future_controls"]
+    assert "first-read vividness" in plan["reader_eval_focus"]
+    assert plan["next_candidate_generated"] is False
+
+    gate = read_payload(packet_dir / "next_target_strategy_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    for gate_name in (
+        "source_synthesis_consumed",
+        "current_best_candidate_identified",
+        "proof_packet_linked",
+        "reader_state_packet_linked",
+        "residual_blockers_ranked",
+        "strongest_rival_pressure_preserved",
+        "next_target_strategy_created",
+        "no_candidate_generated",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    for gate_name in (
+        "next_candidate_generated",
+        "ablation_completed_for_next_candidate",
+        "reader_state_eval_completed_for_next_candidate",
+        "no_unresolved_internal_blockers",
+        "internal_operator_approval",
+        "finalization_eligible",
+        "phase_shift_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is False
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["not_human_validated"] is True
+    assert gate["strongest_rival_still_blocks"] is True
+
+    packet = read_payload(packet_dir / "next_target_strategy_packet.json")
+    assert packet["current_best_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert packet["proof_packet_id"] == chain["macro2_proof"]["packet_id"]
+    assert packet["reader_state_packet_id"] == chain["macro2_reader_state"]["packet_id"]
+    assert packet["counts"]["model_calls"] == 0
+    assert packet["counts"]["candidate_artifacts_created"] == 0
+    assert packet["counts"]["strategy_artifacts"] == len(NEXT_TARGET_STRATEGY_ARTIFACT_TYPES)
+    assert packet["candidate_generated"] is False
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_next_target_strategy_refuses_missing_best_current_candidate(tmp_path):
+    chain = build_next_target_strategy_ready_chain(tmp_path)
+    invalid_packet = tmp_path / "invalid_next_target_synthesis_missing_best"
+    shutil.copytree(Path(str(chain["strategy_synthesis"]["packet_dir"])), invalid_packet)
+
+    def _remove_best(payload):
+        payload.pop("selected_best_candidate", None)
+
+    rewrite_payload(invalid_packet / "best_current_candidate_selection.json", _remove_best)
+
+    result = run_next_target_strategy(chain["config"], synthesis_packet=invalid_packet)
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "missing best_current_candidate" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+
+
+def test_next_target_strategy_refuses_without_reader_state_evidence(tmp_path):
+    chain = build_live_macro2_candidate_with_optional_proof(tmp_path, proof_mode="useful")
+    synthesis = run_autonomous_evidence_synthesis(chain["config"], run_id=chain["run_id"])
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["best_current_candidate"]["packet_id"] == chain["macro2"][
+        "packet_id"
+    ]
+    assert synthesis.payload["best_current_candidate"]["reader_state_evaluated"] is False
+
+    result = run_next_target_strategy(
+        chain["config"],
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "no reader-state evaluation" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
 
 
 def test_autonomous_evidence_synthesis_does_not_select_new_macro2_without_proof(tmp_path):
