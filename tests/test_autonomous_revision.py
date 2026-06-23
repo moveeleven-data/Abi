@@ -502,19 +502,46 @@ That is why the sky gives no answer. The silence is cosmic, the answer is withhe
 In the morning the table returns, and the return is described as changed, but the change still arrives as a closing explanation rather than an event inside the room."""
 
 
+P003_RETURN_MACRO_BASE_TEXT = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
+
+There is a deeper pattern, and the pattern has to be named as record, law, proof, and answer before the reader can see why the table matters.
+
+A line of life and mind proves itself by announcing that proof must arise inside the line. No answer enters from outside the kitchen; the silence holds the room to its own evidence.
+
+Then the return, if it comes, will not be regression. It will come back through the table, through the dust, through the spoon on its side and the saucer with its crack, through the same room that held the earlier strain. The ring will remain a ring; the dust will remain dust; the room will remain the room, but now the morning sits in the grain and the day before sits in the gray body under the edge. The beginning is not restored untouched. It returns with what crossed it written into the surface, and the small world is still itself while no longer apart from what happened to it."""
+
+
 def prepare_multi_paragraph_macro_synthesis(synthesis_payload: dict[str, object]) -> Path:
+    return prepare_macro_synthesis_base_text(
+        synthesis_payload,
+        base_text=MULTI_PARAGRAPH_MACRO_BASE_TEXT,
+    )
+
+
+def prepare_macro_synthesis_base_text(
+    synthesis_payload: dict[str, object],
+    *,
+    base_text: str,
+) -> Path:
     synthesis_packet = Path(str(synthesis_payload["packet_dir"]))
     best_path = synthesis_packet / "best_current_candidate_selection.json"
     best = read_payload(best_path)
     selected = best["selected_best_candidate"]
     base_packet = Path(str(selected["packet_dir"]))
-    base_text_path = base_packet / "cycle2_revised_candidate_text.json"
-    text_sha = sha256_text(MULTI_PARAGRAPH_MACRO_BASE_TEXT)
+    base_text_path = next(
+        path
+        for path in (
+            base_packet / "cycle2_revised_candidate_text.json",
+            base_packet / "macro_recomposed_candidate_text.json",
+        )
+        if path.exists()
+    )
+    text_sha = sha256_text(base_text)
 
     def _rewrite_base(payload):
-        payload["text"] = MULTI_PARAGRAPH_MACRO_BASE_TEXT
+        payload["text"] = base_text
         payload["text_sha256"] = text_sha
-        payload["word_count"] = len(MULTI_PARAGRAPH_MACRO_BASE_TEXT.split())
+        payload["word_count"] = len(base_text.split())
 
     def _rewrite_best(payload):
         selected_best = payload["selected_best_candidate"]
@@ -1226,6 +1253,12 @@ class StubBoundedMacroRecompositionClient:
             _copy_target_paragraph(payload, target_paragraphs, "target_p002")
         elif self.mode == "copied_target_p003":
             _copy_target_paragraph(payload, target_paragraphs, "target_p003")
+        elif self.mode == "near_copy_target_p003":
+            _near_copy_target_paragraph(payload, target_paragraphs, "target_p003")
+        elif self.mode == "near_copy_target_p003_then_correct" and not is_retry:
+            _near_copy_target_paragraph(payload, target_paragraphs, "target_p003")
+        elif self.mode == "near_copy_target_p003_retry_near_copy":
+            _near_copy_target_paragraph(payload, target_paragraphs, "target_p003")
         elif self.mode == "copied_target_p004":
             _copy_target_paragraph(payload, target_paragraphs, "target_p004")
         elif self.mode == "copied_target_p004_then_correct" and not is_retry:
@@ -1475,6 +1508,29 @@ def _copy_target_paragraph(
     for item in payload.get("target_paragraph_replacements", []):
         if item["target_paragraph_ref"] == target_ref:
             item["replacement_text"] = before_by_ref[target_ref]
+
+
+def _near_copy_target_paragraph(
+    payload: dict[str, object],
+    target_paragraphs: list[dict[str, object]],
+    target_ref: str,
+) -> None:
+    before_by_ref = {
+        str(paragraph["target_paragraph_ref"]): str(paragraph["before_text"])
+        for paragraph in target_paragraphs
+    }
+    before_text = before_by_ref[target_ref]
+    replacement_text = (
+        before_text.replace("will not be regression", "will not be a reset")
+        .replace(
+            "The beginning is not restored untouched.",
+            "The beginning is not untouched when it comes back.",
+        )
+        .replace("restored untouched", "untouched")
+    )
+    for item in payload.get("target_paragraph_replacements", []):
+        if item["target_paragraph_ref"] == target_ref:
+            item["replacement_text"] = replacement_text
 
 
 def _copy_target_with_changed_proof_only(
@@ -5774,9 +5830,27 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
         assert paragraph["word_count"] > 0
         assert paragraph["active_target_ids"]
         assert paragraph["material_change_required"] is True
+        materiality_contract = paragraph["paragraph_materiality_contract"]
+        assert materiality_contract["material_rewrite_required"] is True
+        assert materiality_contract["near_copy_rejected"] is True
+        assert materiality_contract["lexical_substitution_insufficient"] is True
+        assert (
+            materiality_contract["span_mapping_necessary_but_not_sufficient"]
+            is True
+        )
+        assert materiality_contract["preserve_function_not_sentence_structure"] is True
+        assert materiality_contract["must_change_global_paragraph_relation"] is True
+        assert materiality_contract["controller_thresholds"]["required_ratio"] == 0.18
         assert paragraph["transformation_instruction"]
         assert paragraph["protected_effects"]
         assert paragraph["forbidden_failures"]
+    p003_contract = next(
+        paragraph["paragraph_materiality_contract"]
+        for paragraph in target_paragraphs
+        if paragraph["target_paragraph_ref"] == "target_p003"
+    )
+    assert p003_contract["lexical_substitution_insufficient"] is True
+    assert p003_contract["preserve_function_not_sentence_structure"] is True
     target_spans = work_order["target_spans"]
     assert target_spans
     assert work_order["active_target_units"] == target_spans
@@ -6125,6 +6199,11 @@ def test_bounded_macro_recomposition_stubbed_openai_success_creates_model_backed
     assert request_prompt["target_movement"] == "middle_and_return_movement"
     assert request_prompt["protected_semantic_constraints"]
     assert request_prompt["active_transformation_targets"]
+    assert "target span mappings are necessary but not enough" in request_prompt[
+        "output_rule"
+    ]
+    assert "reject near-copies" in request_prompt["output_rule"]
+    assert "lexical substitution" in request_prompt["output_rule"]
     packet_dir = Path(str(result.payload["packet_dir"]))
 
     plan_envelope = json.loads(
@@ -6422,6 +6501,129 @@ def test_bounded_macro_recomposition_reader_state_macro_2_corrective_retry_accep
     assert model_calls[-2].status == MODEL_CALL_VALIDATION_FAILED
     assert model_calls[-1].status == MODEL_CALL_SUCCESS
     assert final_report.refused is True
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_retry_includes_materiality_feedback(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    synthesis_packet = prepare_macro_synthesis_base_text(
+        chain["synthesis"],
+        base_text=P003_RETURN_MACRO_BASE_TEXT,
+    )
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=synthesis_packet,
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            clients,
+            mode="near_copy_target_p003_then_correct",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 2
+    retry_prompt = json.loads(clients[0].requests[1].input_text)
+    assert retry_prompt["retry_kind"] == "target_addressed_corrective_retry"
+    assert retry_prompt["first_attempt_failure"][
+        "paragraph_materiality_failure_reason"
+    ]
+    assert retry_prompt["first_attempt_failure"][
+        "paragraph_materiality_metrics_by_ref"
+    ]["target_p003"]["changed_count"] >= 6
+    assert retry_prompt["first_attempt_failure"][
+        "paragraph_materiality_metrics_by_ref"
+    ]["target_p003"]["changed_ratio"] < 0.18
+    assert retry_prompt["first_attempt_failure"][
+        "paragraph_materiality_metrics_by_ref"
+    ]["target_p003"]["required_ratio"] == 0.18
+    assert retry_prompt["first_attempt_failure"][
+        "spans_passed_but_paragraph_failed_by_ref"
+    ]["target_p003"] is True
+    failed_p003 = retry_prompt["failed_target_paragraphs"][0]
+    assert failed_p003["target_paragraph_ref"] == "target_p003"
+    assert failed_p003["failed_target_spans"] == []
+    assert failed_p003["material_target_spans"]
+    assert {
+        "target_p003_s001",
+        "target_p003_s004",
+    } <= {span["target_span_ref"] for span in failed_p003["material_target_spans"]}
+    assert failed_p003["paragraph_materiality_contract"][
+        "lexical_substitution_insufficient"
+    ] is True
+    assert "Your span mappings were not enough" in failed_p003["materiality_feedback"]
+    assert "not a lexical polish" in failed_p003["retry_instruction"]
+    assert "Do not copy the opening sentence architecture" in failed_p003[
+        "retry_instruction"
+    ]
+    assert retry_prompt["work_order"]["retry_prompt_included_materiality_feedback"] is True
+    assert retry_prompt["work_order"][
+        "retry_prompt_included_material_spans_even_if_span_passed"
+    ] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    report = section["target_addressed_retry_report"]
+    assert report["paragraph_materiality_failure_reason"]
+    assert report["paragraph_materiality_metrics_by_ref"]["target_p003"][
+        "changed_ratio"
+    ] < 0.18
+    assert report["spans_passed_but_paragraph_failed_by_ref"]["target_p003"] is True
+    assert report["retry_prompt_included_materiality_feedback"] is True
+    assert report["retry_prompt_included_failed_span_refs"] is False
+    assert report["retry_prompt_included_material_spans_even_if_span_passed"] is True
+    replacements = {
+        item["target_paragraph_ref"]: item["replacement_text"]
+        for item in section["target_paragraph_replacements"]
+    }
+    assert "The return touches the first table" in replacements["target_p003"]
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_p003_near_copy_still_refuses(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    synthesis_packet = prepare_macro_synthesis_base_text(
+        chain["synthesis"],
+        base_text=P003_RETURN_MACRO_BASE_TEXT,
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=synthesis_packet,
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="near_copy_target_p003_retry_near_copy",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["counts"]["model_calls"] == 2
+    assert "corrective retry target_paragraph_replacements[target_p003] copied" in (
+        result.payload["message"]
+    )
+    report = result.payload["target_addressed_retry_report"]
+    assert report["failed_target_paragraph_refs"] == ["target_p003"]
+    assert report["spans_passed_but_paragraph_failed_by_ref"]["target_p003"] is True
+    assert report["retry_prompt_included_materiality_feedback"] is True
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
 
 
 def test_bounded_macro_recomposition_reader_state_macro_2_retry_collects_all_bad_refs(
@@ -6952,6 +7154,7 @@ def test_bounded_macro_recomposition_does_not_retry_schema_or_final_claim_failur
     [
         ("missing_target_p002", "missing target paragraph replacement: target_p002"),
         ("copied_target_p002", "proof_no_outside_answer_refinement"),
+        ("near_copy_target_p003", "copied or insufficiently changed"),
         ("copied_target_p004", "final_return_echo_reread_strength"),
         ("mismatched_target_hash", "before_text_sha256 mismatch"),
         ("duplicate_target_ref", "duplicate target_paragraph_ref"),

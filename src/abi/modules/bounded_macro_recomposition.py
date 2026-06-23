@@ -75,6 +75,8 @@ OPTIONAL_SYNTHESIS_ARTIFACT_FILES = (
 
 TARGET_MOVEMENT = "middle_and_return_movement"
 READER_STATE_MACRO_2_TARGET_SCOPE = "reader_state_informed_macro_2"
+PARAGRAPH_MATERIALITY_MIN_CHANGED_WORDS = 6
+PARAGRAPH_MATERIALITY_MIN_CHANGED_RATIO = 0.18
 
 REQUIRED_SEMANTIC_CONSTRAINT_IDS = (
     "proof_from_inside_line",
@@ -195,6 +197,8 @@ class TargetAddressedRetryPlan:
     failure_reasons_by_span: dict[str, str]
     failed_material_target_ids_by_ref: dict[str, list[str]]
     failed_active_targets_by_span: dict[str, list[str]]
+    paragraph_materiality_metrics_by_ref: dict[str, dict[str, object]]
+    spans_passed_but_paragraph_failed_by_ref: dict[str, bool]
     first_failure_message: str
 
 
@@ -208,6 +212,8 @@ class MacroTargetValidationResult:
     failed_target_span_refs: tuple[str, ...]
     failed_material_target_ids_by_ref: dict[str, list[str]]
     failed_active_targets_by_span: dict[str, list[str]]
+    paragraph_materiality_metrics_by_ref: dict[str, dict[str, object]]
+    spans_passed_but_paragraph_failed_by_ref: dict[str, bool]
     failure_reasons_by_ref: dict[str, str]
     failure_reasons_by_span: dict[str, str]
     target_coverage_report: dict[str, object]
@@ -1095,8 +1101,15 @@ def _prompt_for_live_macro_recomposition(
                 "must also return target_paragraph_replacements keyed by the "
                 "controller target_paragraph_ref values and target_span_replacements "
                 "for every target span marked material_change_required. Replace "
-                "every target paragraph marked material_change_required; do not "
-                "copy target paragraphs or required target spans unchanged. If two "
+                "every target paragraph marked material_change_required with a "
+                "material rewrite; target span mappings are necessary but not enough. "
+                "Do not preserve sentence architecture while claiming transformation, "
+                "and do not perform lexical substitution. Preserve causal/reader "
+                "effect, not exact prose. For return paragraphs, strengthen the "
+                "opening-return transformation rather than restating the same return "
+                "claim in near-identical syntax. The controller will reject near-copies "
+                "even if target_span_replacements are present. Do not copy target "
+                "paragraphs or required target spans unchanged. If two "
                 "active targets share a paragraph, the paragraph replacement must "
                 "satisfy both. For thesis_visible_proof_language_reduction, "
                 "changing only the final proof sentence is insufficient if "
@@ -1149,6 +1162,9 @@ def _prompt_for_live_macro_recomposition_retry(
                 "return target_paragraph_replacements keyed only by failed refs",
                 "return target_span_replacements for failed required span refs",
                 "replace failed paragraphs materially",
+                "use paragraph_materiality_metrics_by_ref to avoid near-copy retries",
+                "return materially rewritten paragraphs, not lexical polish",
+                "preserve function/effect, not sentence structure",
                 "preserve protected effects",
                 "avoid forbidden failures",
                 "avoid copied text",
@@ -1194,6 +1210,24 @@ def _prompt_for_live_macro_recomposition_retry(
                 "failed_active_targets_by_span": (
                     retry_plan.failed_active_targets_by_span
                 ),
+                "paragraph_materiality_failure_reason": (
+                    _paragraph_materiality_failure_reason(retry_plan)
+                ),
+                "paragraph_materiality_metrics_by_ref": (
+                    retry_plan.paragraph_materiality_metrics_by_ref
+                ),
+                "spans_passed_but_paragraph_failed_by_ref": (
+                    retry_plan.spans_passed_but_paragraph_failed_by_ref
+                ),
+                "materiality_feedback": (
+                    "Your span mappings were not enough. The paragraph remained too "
+                    "close globally."
+                ),
+                "materiality_instruction": (
+                    "Return a materially rewritten paragraph, not a lexical polish. "
+                    "Preserve function/effect, not sentence structure. Do not copy "
+                    "the opening sentence architecture of the failed paragraph."
+                ),
                 "span_level_instruction": (
                     "Changing only the final proof sentence is insufficient when "
                     "required thesis-framing spans remain intact. Return a new "
@@ -1214,6 +1248,12 @@ def _prompt_for_live_macro_recomposition_retry(
                 "successful refs. For failed required target spans, also return "
                 "target_span_replacements keyed by target_span_ref with non-empty "
                 "replacement_excerpt and matching before_text_sha256. The controller "
+                "rejects near-copies even when span mappings are present; if "
+                "paragraph_materiality_metrics_by_ref shows changed_ratio below "
+                f"{PARAGRAPH_MATERIALITY_MIN_CHANGED_RATIO}, change the global "
+                "paragraph relation and sentence architecture while preserving "
+                "the assigned function/effect. "
+                "Do not perform lexical substitution. "
                 "will merge successful first-attempt replacements with retry "
                 "replacements and rerun full validation."
             ),
@@ -1229,6 +1269,16 @@ def _retry_failed_paragraph_spec(
 ) -> dict[str, object]:
     ref = str(spec["target_paragraph_ref"])
     failed_span_set = set(retry_plan.failed_target_span_refs)
+    material_span_specs = [
+        span_spec
+        for span_spec in target_span_specs
+        if str(span_spec["parent_target_paragraph_ref"]) == ref
+        and bool(span_spec["material_change_required"])
+    ]
+    first_attempt_replacement = _first_attempt_replacement_text(
+        retry_plan.first_attempt_payload,
+        target_ref=ref,
+    )
     return {
         "target_paragraph_ref": ref,
         "before_text": spec["before_text"],
@@ -1239,13 +1289,25 @@ def _retry_failed_paragraph_spec(
             retry_plan.failed_material_target_ids_by_ref.get(ref, [])
         ),
         "material_change_required": spec["material_change_required"],
+        "paragraph_materiality_contract": spec.get("paragraph_materiality_contract", {}),
         "transformation_instruction": spec["transformation_instruction"],
         "protected_effects": list(spec["protected_effects"]),
         "forbidden_failures": list(spec["forbidden_failures"]),
-        "first_attempt_replacement_text": _first_attempt_replacement_text(
-            retry_plan.first_attempt_payload,
-            target_ref=ref,
+        "first_attempt_replacement_text": first_attempt_replacement,
+        "paragraph_materiality_failure_reason": retry_plan.failure_reasons_by_ref.get(
+            ref,
+            "",
         ),
+        "paragraph_materiality_metrics": (
+            retry_plan.paragraph_materiality_metrics_by_ref.get(ref, {})
+        ),
+        "spans_passed_but_paragraph_failed": (
+            retry_plan.spans_passed_but_paragraph_failed_by_ref.get(ref, False)
+        ),
+        "material_target_spans": [
+            _retry_material_span_spec(span_spec, retry_plan=retry_plan)
+            for span_spec in material_span_specs
+        ],
         "failed_target_spans": [
             _retry_failed_span_spec(span_spec, retry_plan=retry_plan)
             for span_spec in target_span_specs
@@ -1253,6 +1315,48 @@ def _retry_failed_paragraph_spec(
             and str(span_spec["target_span_ref"]) in failed_span_set
         ],
         "failure_reason": retry_plan.failure_reasons_by_ref.get(ref, ""),
+        "materiality_feedback": (
+            "Your span mappings were not enough. The paragraph remained too close "
+            "globally."
+        ),
+        "retry_instruction": (
+            "Return a materially rewritten paragraph, not a lexical polish. Preserve "
+            "function/effect, not sentence structure. Do not copy the opening sentence "
+            "architecture of the failed paragraph."
+        ),
+    }
+
+
+def _paragraph_materiality_failure_reason(
+    retry_plan: TargetAddressedRetryPlan,
+) -> str:
+    failed_reasons = [
+        reason
+        for reason in retry_plan.failure_reasons_by_ref.values()
+        if _failure_reason_has_paragraph_materiality(reason)
+    ]
+    if not failed_reasons:
+        return ""
+    return "; ".join(failed_reasons)
+
+
+def _retry_material_span_spec(
+    spec: dict[str, object],
+    *,
+    retry_plan: TargetAddressedRetryPlan,
+) -> dict[str, object]:
+    span_ref = str(spec["target_span_ref"])
+    return {
+        "target_span_ref": span_ref,
+        "parent_target_paragraph_ref": spec["parent_target_paragraph_ref"],
+        "before_text": spec["before_text"],
+        "before_text_sha256": spec["before_text_sha256"],
+        "active_target_ids": list(spec["active_target_ids"]),
+        "material_change_required": spec["material_change_required"],
+        "allowed_operation": spec["allowed_operation"],
+        "transformation_instruction": spec["transformation_instruction"],
+        "span_failed": span_ref in retry_plan.failed_target_span_refs,
+        "failure_reason": retry_plan.failure_reasons_by_span.get(span_ref, ""),
     }
 
 
@@ -1292,6 +1396,13 @@ def _retry_work_order(
     retry_work_order["retry_scope"] = "failed_target_paragraph_refs_only"
     retry_work_order["target_paragraphs"] = failed_specs
     retry_work_order["model_must_not_touch_successful_refs"] = True
+    retry_work_order["retry_prompt_included_materiality_feedback"] = True
+    retry_work_order["retry_prompt_included_failed_span_refs"] = any(
+        bool(spec.get("failed_target_spans")) for spec in failed_specs
+    )
+    retry_work_order["retry_prompt_included_material_spans_even_if_span_passed"] = any(
+        bool(spec.get("material_target_spans")) for spec in failed_specs
+    )
     return retry_work_order
 
 
@@ -2449,6 +2560,12 @@ def _target_paragraph_specs(
                 "active_target_ids": active_ids,
                 "deferred_or_removed_active_target_ids": deferred_or_removed_ids,
                 "material_change_required": material_change_required,
+                "paragraph_materiality_contract": (
+                    _paragraph_materiality_contract()
+                    if subject.normalized_brief.reader_state_informed
+                    and material_change_required
+                    else {"material_rewrite_required": False}
+                ),
                 "transformation_instruction": " ".join(instruction_parts)
                 or "Preserve this paragraph unless the controller assigned a material target.",
                 "protected_effects": protected,
@@ -2456,6 +2573,31 @@ def _target_paragraph_specs(
             }
         )
     return specs
+
+
+def _paragraph_materiality_contract() -> dict[str, object]:
+    return {
+        "material_rewrite_required": True,
+        "near_copy_rejected": True,
+        "lexical_substitution_insufficient": True,
+        "span_mapping_necessary_but_not_sufficient": True,
+        "preserve_function_not_sentence_structure": True,
+        "must_change_global_paragraph_relation": True,
+        "materiality_basis": (
+            "Paragraph-level materiality requires both changed_count >= "
+            f"{PARAGRAPH_MATERIALITY_MIN_CHANGED_WORDS} and changed_ratio >= "
+            f"{PARAGRAPH_MATERIALITY_MIN_CHANGED_RATIO}; span mappings alone do not pass."
+        ),
+        "controller_thresholds": {
+            "required_changed_count": PARAGRAPH_MATERIALITY_MIN_CHANGED_WORDS,
+            "required_ratio": PARAGRAPH_MATERIALITY_MIN_CHANGED_RATIO,
+        },
+        "examples_of_insufficient_change": [
+            'replacing "regression" with "reset"',
+            'reordering "not restored untouched" without changing the return relation',
+            "adding one phrase while preserving the same paragraph architecture",
+        ],
+    }
 
 
 def _operational_active_ids_for_paragraph(
@@ -3372,6 +3514,18 @@ def _macro_target_validation_result(
         ref: list(_string_tuple(span_failures[ref].get("active_target_ids")))
         for ref in failed_span_refs
     }
+    paragraph_materiality_metrics_by_ref = _paragraph_materiality_metrics_by_ref(
+        target_coverage_report,
+    )
+    spans_passed_but_paragraph_failed_by_ref = (
+        _spans_passed_but_paragraph_failed_by_ref(
+            subject=subject,
+            target=target,
+            failed_paragraph_refs=failed_paragraph_refs,
+            failed_span_refs=failed_span_refs,
+            failure_reasons_by_ref=failure_reasons_by_ref,
+        )
+    )
     paragraph_records = tuple(
         {
             "target_paragraph_ref": ref,
@@ -3413,6 +3567,10 @@ def _macro_target_validation_result(
         failed_target_span_refs=failed_span_refs,
         failed_material_target_ids_by_ref=failed_material_target_ids_by_ref,
         failed_active_targets_by_span=failed_active_targets_by_span,
+        paragraph_materiality_metrics_by_ref=paragraph_materiality_metrics_by_ref,
+        spans_passed_but_paragraph_failed_by_ref=(
+            spans_passed_but_paragraph_failed_by_ref
+        ),
         failure_reasons_by_ref=failure_reasons_by_ref,
         failure_reasons_by_span=failure_reasons_by_span,
         target_coverage_report=target_coverage_report,
@@ -3441,6 +3599,66 @@ def _macro_target_validation_message(
             + "; ".join(failure_reasons_by_span.values())
         )
     return "; ".join(parts) or "target validation passed"
+
+
+def _paragraph_materiality_metrics_by_ref(
+    target_coverage_report: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    rows = target_coverage_report.get("paragraph_comparison")
+    if not isinstance(rows, list):
+        return {}
+    metrics_by_ref: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ref = str(row.get("target_paragraph_ref") or "")
+        if ref:
+            metrics_by_ref[ref] = {
+                "before_word_count": int(row.get("before_word_count") or 0),
+                "after_word_count": int(row.get("after_word_count") or 0),
+                "overlap_word_count": int(row.get("overlap_word_count") or 0),
+                "changed_count": int(row.get("changed_count") or 0),
+                "changed_ratio": float(row.get("changed_ratio") or 0.0),
+                "required_changed_count": PARAGRAPH_MATERIALITY_MIN_CHANGED_WORDS,
+                "required_ratio": PARAGRAPH_MATERIALITY_MIN_CHANGED_RATIO,
+                "materially_changed": bool(row.get("materially_changed")),
+            }
+    return metrics_by_ref
+
+
+def _spans_passed_but_paragraph_failed_by_ref(
+    *,
+    subject: MacroSubject,
+    target: RecomposedText,
+    failed_paragraph_refs: tuple[str, ...],
+    failed_span_refs: tuple[str, ...],
+    failure_reasons_by_ref: dict[str, str],
+) -> dict[str, bool]:
+    failed_spans_by_parent: dict[str, set[str]] = {}
+    span_specs = _target_span_specs(subject, target)
+    for spec in span_specs:
+        span_ref = str(spec["target_span_ref"])
+        if span_ref not in failed_span_refs:
+            continue
+        parent_ref = str(spec["parent_target_paragraph_ref"])
+        failed_spans_by_parent.setdefault(parent_ref, set()).add(span_ref)
+    result: dict[str, bool] = {}
+    for ref in failed_paragraph_refs:
+        reason = failure_reasons_by_ref.get(ref, "")
+        result[ref] = (
+            _failure_reason_has_paragraph_materiality(reason)
+            and not failed_spans_by_parent.get(ref)
+        )
+    return result
+
+
+def _failure_reason_has_paragraph_materiality(reason: str) -> bool:
+    return (
+        "copied or insufficiently changed" in reason
+        or "macro materiality failed" in reason
+        or "does not cover material active targets" in reason
+        or "macro target coverage failed" in reason
+    )
 
 
 def _add_paragraph_failure(
@@ -3539,6 +3757,8 @@ def _target_addressed_retry_plan_from_failure(
         failure_reasons_by_span={},
         failed_material_target_ids_by_ref={},
         failed_active_targets_by_span={},
+        paragraph_materiality_metrics_by_ref={},
+        spans_passed_but_paragraph_failed_by_ref={},
         first_failure_message=result.model_call.error_message or result.model_call.status,
     )
     if not subject.normalized_brief.reader_state_informed:
@@ -3592,6 +3812,12 @@ def _target_addressed_retry_plan_from_failure(
             validation_result.failed_material_target_ids_by_ref
         ),
         failed_active_targets_by_span=validation_result.failed_active_targets_by_span,
+        paragraph_materiality_metrics_by_ref=(
+            validation_result.paragraph_materiality_metrics_by_ref
+        ),
+        spans_passed_but_paragraph_failed_by_ref=(
+            validation_result.spans_passed_but_paragraph_failed_by_ref
+        ),
         first_failure_message=error_message,
     )
 
@@ -4045,6 +4271,18 @@ def _target_addressed_retry_report_not_attempted(
         "failed_active_targets_by_span": (
             retry_plan.failed_active_targets_by_span if retry_plan else {}
         ),
+        "paragraph_materiality_failure_reason": (
+            _paragraph_materiality_failure_reason(retry_plan) if retry_plan else ""
+        ),
+        "paragraph_materiality_metrics_by_ref": (
+            retry_plan.paragraph_materiality_metrics_by_ref if retry_plan else {}
+        ),
+        "spans_passed_but_paragraph_failed_by_ref": (
+            retry_plan.spans_passed_but_paragraph_failed_by_ref if retry_plan else {}
+        ),
+        "retry_prompt_included_materiality_feedback": False,
+        "retry_prompt_included_failed_span_refs": False,
+        "retry_prompt_included_material_spans_even_if_span_passed": False,
         "preserved_first_attempt_refs": [],
         "retry_replaced_refs": [],
         "ignored_retry_refs": [],
@@ -4085,6 +4323,24 @@ def _target_addressed_retry_report(
         "failure_reasons_by_span": retry_plan.failure_reasons_by_span,
         "failed_material_target_ids_by_ref": retry_plan.failed_material_target_ids_by_ref,
         "failed_active_targets_by_span": retry_plan.failed_active_targets_by_span,
+        "paragraph_materiality_failure_reason": (
+            _paragraph_materiality_failure_reason(retry_plan)
+        ),
+        "paragraph_materiality_metrics_by_ref": (
+            retry_plan.paragraph_materiality_metrics_by_ref
+        ),
+        "spans_passed_but_paragraph_failed_by_ref": (
+            retry_plan.spans_passed_but_paragraph_failed_by_ref
+        ),
+        "retry_prompt_included_materiality_feedback": bool(
+            retry_plan.failed_target_paragraph_refs
+        ),
+        "retry_prompt_included_failed_span_refs": bool(
+            retry_plan.failed_target_span_refs
+        ),
+        "retry_prompt_included_material_spans_even_if_span_passed": bool(
+            retry_plan.spans_passed_but_paragraph_failed_by_ref
+        ),
         "preserved_first_attempt_refs": preserved_refs,
         "retry_replaced_refs": retry_replaced_refs,
         "ignored_retry_refs": ignored_retry_refs,
@@ -4771,7 +5027,7 @@ def _paragraph_materiality_comparison(
         after = replacement_paragraphs[index] if index < len(replacement_paragraphs) else ""
         before_words = _normalized_words(before)
         after_words = _normalized_words(after)
-        materially_changed = _materially_changed_words(before_words, after_words)
+        metrics = _materiality_word_metrics(before_words, after_words)
         rows.append(
             {
                 "target_paragraph_ref": _target_paragraph_ref(index),
@@ -4779,18 +5035,40 @@ def _paragraph_materiality_comparison(
                 "after_sha256": sha256_text(after),
                 "before_word_count": len(before_words),
                 "after_word_count": len(after_words),
+                "overlap_word_count": metrics["overlap_word_count"],
+                "changed_count": metrics["changed_count"],
+                "changed_ratio": metrics["changed_ratio"],
+                "required_changed_count": PARAGRAPH_MATERIALITY_MIN_CHANGED_WORDS,
+                "required_ratio": PARAGRAPH_MATERIALITY_MIN_CHANGED_RATIO,
                 "normalized_text_equal": before_words == after_words,
-                "materially_changed": materially_changed,
+                "materially_changed": metrics["materially_changed"],
             }
         )
     return rows
 
 
 def _materially_changed_words(before_words: list[str], after_words: list[str]) -> bool:
+    return bool(_materiality_word_metrics(before_words, after_words)["materially_changed"])
+
+
+def _materiality_word_metrics(
+    before_words: list[str],
+    after_words: list[str],
+) -> dict[str, object]:
     if not before_words and not after_words:
-        return False
+        return {
+            "overlap_word_count": 0,
+            "changed_count": 0,
+            "changed_ratio": 0.0,
+            "materially_changed": False,
+        }
     if before_words == after_words:
-        return False
+        return {
+            "overlap_word_count": len(before_words),
+            "changed_count": 0,
+            "changed_ratio": 0.0,
+            "materially_changed": False,
+        }
     before_counts = _word_counts(before_words)
     after_counts = _word_counts(after_words)
     overlap = sum(
@@ -4799,7 +5077,16 @@ def _materially_changed_words(before_words: list[str], after_words: list[str]) -
     max_count = max(len(before_words), len(after_words), 1)
     changed_count = max_count - overlap
     changed_ratio = changed_count / max_count
-    return changed_count >= 6 and changed_ratio >= 0.18
+    materially_changed = (
+        changed_count >= PARAGRAPH_MATERIALITY_MIN_CHANGED_WORDS
+        and changed_ratio >= PARAGRAPH_MATERIALITY_MIN_CHANGED_RATIO
+    )
+    return {
+        "overlap_word_count": overlap,
+        "changed_count": changed_count,
+        "changed_ratio": changed_ratio,
+        "materially_changed": materially_changed,
+    }
 
 
 def _word_counts(words: list[str]) -> dict[str, int]:
