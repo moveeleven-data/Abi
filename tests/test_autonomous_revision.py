@@ -1285,6 +1285,54 @@ class StubBoundedMacroRecompositionClient:
                     for target_id in item["active_target_ids_covered"]
                     if target_id != "thesis_visible_proof_language_reduction"
                 ]
+        elif self.mode == "extra_known_paragraph_target_claim":
+            _append_target_paragraph_claim(
+                payload,
+                "target_p002",
+                "final_return_echo_reread_strength",
+            )
+        elif self.mode == "paragraph_extra_known_does_not_cover_missing_assigned":
+            _replace_target_paragraph_claims(
+                payload,
+                "target_p001",
+                ["final_return_echo_reread_strength"],
+            )
+        elif self.mode == "unknown_paragraph_target_claim":
+            _append_target_paragraph_claim(
+                payload,
+                "target_p002",
+                "invented_macro_target",
+            )
+        elif self.mode == "extra_known_span_target_claim":
+            _append_first_required_target_span_claim(
+                payload,
+                target_spans,
+                "target_p001",
+                "final_return_echo_reread_strength",
+            )
+        elif self.mode == "span_extra_known_does_not_cover_missing_assigned":
+            _replace_first_required_target_span_claims(
+                payload,
+                target_spans,
+                "target_p001",
+                ["final_return_echo_reread_strength"],
+            )
+        elif self.mode == "unknown_span_target_claim":
+            _append_first_required_target_span_claim(
+                payload,
+                target_spans,
+                "target_p001",
+                "invented_macro_target",
+            )
+        elif self.mode == "copied_target_p004_retry_extra_known_claim":
+            if not is_retry:
+                _copy_target_paragraph(payload, target_paragraphs, "target_p004")
+            else:
+                _append_target_paragraph_claim(
+                    payload,
+                    "target_p004",
+                    "proof_no_outside_answer_refinement",
+                )
         elif self.mode == "target_p001_final_proof_only":
             _copy_target_with_changed_proof_only(payload, target_paragraphs, "target_p001")
         elif self.mode == "target_p001_final_proof_only_then_correct" and not is_retry:
@@ -1508,6 +1556,71 @@ def _copy_target_paragraph(
     for item in payload.get("target_paragraph_replacements", []):
         if item["target_paragraph_ref"] == target_ref:
             item["replacement_text"] = before_by_ref[target_ref]
+
+
+def _append_target_paragraph_claim(
+    payload: dict[str, object],
+    target_ref: str,
+    target_id: str,
+) -> None:
+    for item in payload.get("target_paragraph_replacements", []):
+        if item["target_paragraph_ref"] == target_ref:
+            item.setdefault("active_target_ids_covered", []).append(target_id)
+            return
+
+
+def _replace_target_paragraph_claims(
+    payload: dict[str, object],
+    target_ref: str,
+    target_ids: list[str],
+) -> None:
+    for item in payload.get("target_paragraph_replacements", []):
+        if item["target_paragraph_ref"] == target_ref:
+            item["active_target_ids_covered"] = list(target_ids)
+            return
+
+
+def _append_first_required_target_span_claim(
+    payload: dict[str, object],
+    target_spans: list[dict[str, object]],
+    parent_ref: str,
+    target_id: str,
+) -> None:
+    span_ref = _first_required_target_span_ref(target_spans, parent_ref)
+    if not span_ref:
+        return
+    for item in payload.get("target_span_replacements", []):
+        if item["target_span_ref"] == span_ref:
+            item.setdefault("active_target_ids_covered", []).append(target_id)
+            return
+
+
+def _replace_first_required_target_span_claims(
+    payload: dict[str, object],
+    target_spans: list[dict[str, object]],
+    parent_ref: str,
+    target_ids: list[str],
+) -> None:
+    span_ref = _first_required_target_span_ref(target_spans, parent_ref)
+    if not span_ref:
+        return
+    for item in payload.get("target_span_replacements", []):
+        if item["target_span_ref"] == span_ref:
+            item["active_target_ids_covered"] = list(target_ids)
+            return
+
+
+def _first_required_target_span_ref(
+    target_spans: list[dict[str, object]],
+    parent_ref: str,
+) -> str:
+    for span in target_spans:
+        if (
+            span.get("material_change_required")
+            and span.get("parent_target_paragraph_ref") == parent_ref
+        ):
+            return str(span["target_span_ref"])
+    return ""
 
 
 def _near_copy_target_paragraph(
@@ -6327,6 +6440,20 @@ def test_bounded_macro_recomposition_reader_state_macro_2_stubbed_openai_target_
         "make_opening_return_transformational",
     } <= {span["allowed_operation"] for span in final_material_spans}
     assert prompt["work_order"]["target_assignment_consistency_passed"] is True
+    assert prompt["work_order"]["controller_target_assignment_authoritative"] is True
+    assert prompt["work_order"][
+        "model_extra_known_target_claims_are_ignored_as_non_evidence"
+    ] is True
+    assert "controller owns target assignment" in prompt["output_rule"]
+    assert all(
+        paragraph["active_target_ids_covered_must_be_subset_of"]
+        == paragraph["active_target_ids"]
+        for paragraph in prompt["work_order"]["target_paragraphs"]
+    )
+    assert all(
+        span["active_target_ids_covered_must_be_subset_of"] == span["active_target_ids"]
+        for span in prompt["work_order"]["target_spans"]
+    )
 
     section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
     assert section["controller_assembled_from_target_paragraph_replacements"] is True
@@ -6381,6 +6508,219 @@ def test_bounded_macro_recomposition_reader_state_macro_2_stubbed_openai_target_
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
     assert final_report.refused is True
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_ignores_extra_known_paragraph_claim(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            clients,
+            mode="extra_known_paragraph_target_claim",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+    assert len(clients[0].requests) == 1
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    coverage = section["target_coverage_report"]
+    assert coverage["macro_target_coverage_passed"] is True
+    assert coverage["ignored_model_target_claims_by_paragraph_ref"] == {
+        "target_p002": ["final_return_echo_reread_strength"]
+    }
+    assert coverage["unknown_model_target_claims_by_paragraph_ref"] == {}
+    assert coverage["model_target_claim_normalization_applied"] is True
+    assert coverage["model_target_claims_used_as_evidence"] is False
+    assert coverage["ignored_model_target_claims_used_as_evidence"] is False
+    assert coverage["controller_target_assignment_authoritative"] is True
+    assert section["ignored_model_target_claims_by_paragraph_ref"] == {
+        "target_p002": ["final_return_echo_reread_strength"]
+    }
+    assert section["target_addressed_retry_report"]["retry_attempted"] is False
+    gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
+    assert gate["controller_target_assignment_authoritative"] is True
+    assert gate["ignored_model_target_claims_by_paragraph_ref"] == {
+        "target_p002": ["final_return_echo_reread_strength"]
+    }
+    packet = read_payload(packet_dir / "macro_recomposition_packet.json")
+    assert packet["ignored_model_target_claims_by_paragraph_ref"] == {
+        "target_p002": ["final_return_echo_reread_strength"]
+    }
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_extra_known_paragraph_claim_is_not_coverage(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="paragraph_extra_known_does_not_cover_missing_assigned",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "thesis_visible_proof_language_reduction" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_unknown_paragraph_target_claim_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="unknown_paragraph_target_claim",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "unknown model active target IDs: invented_macro_target" in result.payload[
+        "message"
+    ]
+    assert result.payload["counts"]["model_calls"] == 1
+    report = result.payload["target_addressed_retry_report"]
+    assert report["retry_attempted"] is False
+    assert "failure was fatal" in report["retry_reason"]
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_ignores_extra_known_span_claim(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            clients,
+            mode="extra_known_span_target_claim",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    coverage = section["target_coverage_report"]
+    ignored = coverage["ignored_model_target_claims_by_span_ref"]
+    assert ignored
+    ignored_span_ref = next(iter(ignored))
+    assert ignored[ignored_span_ref] == ["final_return_echo_reread_strength"]
+    assert coverage["unknown_model_target_claims_by_span_ref"] == {}
+    assert coverage["model_target_claims_used_as_evidence"] is False
+    assert coverage["controller_target_assignment_authoritative"] is True
+    assert section["ignored_model_target_claims_by_span_ref"] == ignored
+    assert section["target_addressed_retry_report"]["retry_attempted"] is False
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_extra_known_span_claim_is_not_coverage(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            [],
+            mode="span_extra_known_does_not_cover_missing_assigned",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "does not cover material active targets" in result.payload["message"]
+    assert "thesis_visible_proof_language_reduction" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_unknown_span_target_claim_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([], mode="unknown_span_target_claim"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "target_span_replacements" in result.payload["message"]
+    assert "unknown model active target IDs: invented_macro_target" in result.payload[
+        "message"
+    ]
+    assert result.payload["counts"]["model_calls"] == 1
+    report = result.payload["target_addressed_retry_report"]
+    assert report["retry_attempted"] is False
+    assert "failure was fatal" in report["retry_reason"]
+    assert "macro_recomposition_packet" not in result.payload["artifact_ids"]
 
 
 def test_bounded_macro_recomposition_reader_state_macro_2_controller_assembly_overrides_blob(
@@ -6501,6 +6841,49 @@ def test_bounded_macro_recomposition_reader_state_macro_2_corrective_retry_accep
     assert model_calls[-2].status == MODEL_CALL_VALIDATION_FAILED
     assert model_calls[-1].status == MODEL_CALL_SUCCESS
     assert final_report.refused is True
+
+
+def test_bounded_macro_recomposition_reader_state_macro_2_retry_normalizes_extra_known_claim(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        max_model_calls=2,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory(
+            clients,
+            mode="copied_target_p004_retry_extra_known_claim",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 2
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    report = section["target_addressed_retry_report"]
+    assert report["retry_attempted"] is True
+    assert report["failed_target_paragraph_refs"] == ["target_p004"]
+    assert report["merged_validation_passed"] is True
+    assert report["ignored_model_target_claims_by_paragraph_ref"] == {
+        "target_p004": ["proof_no_outside_answer_refinement"]
+    }
+    assert report["model_target_claims_used_as_evidence"] is False
+    coverage = section["target_coverage_report"]
+    assert coverage["macro_target_coverage_passed"] is True
+    assert coverage["ignored_model_target_claims_by_paragraph_ref"] == {
+        "target_p004": ["proof_no_outside_answer_refinement"]
+    }
+    assert coverage["unknown_model_target_claims_by_paragraph_ref"] == {}
 
 
 def test_bounded_macro_recomposition_reader_state_macro_2_retry_includes_materiality_feedback(

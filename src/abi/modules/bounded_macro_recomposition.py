@@ -427,6 +427,7 @@ def run_bounded_macro_recomposition(
                     )
                     model_results.append(retry_result)
                     retry_report = _target_addressed_retry_report(
+                        subject=subject,
                         retry_plan=retry_plan,
                         first_attempt_model_call_id=result.model_call.id,
                         retry_model_call_id=retry_result.model_call.id,
@@ -450,6 +451,7 @@ def run_bounded_macro_recomposition(
                         )
                         if not merged_validation.passed:
                             retry_report = _target_addressed_retry_report(
+                                subject=subject,
                                 retry_plan=retry_plan,
                                 first_attempt_model_call_id=result.model_call.id,
                                 retry_model_call_id=retry_result.model_call.id,
@@ -476,6 +478,7 @@ def run_bounded_macro_recomposition(
                         model_payload = merged_payload
                         model_call_id = retry_result.model_call.id
                         retry_report = _target_addressed_retry_report(
+                            subject=subject,
                             retry_plan=retry_plan,
                             first_attempt_model_call_id=result.model_call.id,
                             retry_model_call_id=retry_result.model_call.id,
@@ -1111,12 +1114,17 @@ def _prompt_for_live_macro_recomposition(
                 "even if target_span_replacements are present. Do not copy target "
                 "paragraphs or required target spans unchanged. If two "
                 "active targets share a paragraph, the paragraph replacement must "
-                "satisfy both. For thesis_visible_proof_language_reduction, "
+                "satisfy both. Each active_target_ids_covered field must list only "
+                "the active target IDs assigned to that exact paragraph or span by "
+                "the work order. Globally known targets assigned elsewhere must not "
+                "be claimed here; the controller owns target assignment and will "
+                "ignore extra known claims as non-evidence while rejecting unknown "
+                "target IDs. For thesis_visible_proof_language_reduction, "
                 "changing only the final proof sentence is insufficient if "
                 "thesis-framing spans remain intact. The controller will assemble "
                 "final text and reject copied paragraphs, copied required spans, "
                 "hash mismatches, missing target refs, missing span refs, and "
-                "unsupported target coverage claims. For non-reader-state macro "
+                "unknown target coverage claims. For non-reader-state macro "
                 "recomposition, return target_paragraph_replacements and "
                 "target_span_replacements as empty arrays."
             ),
@@ -1164,6 +1172,7 @@ def _prompt_for_live_macro_recomposition_retry(
                 "replace failed paragraphs materially",
                 "use paragraph_materiality_metrics_by_ref to avoid near-copy retries",
                 "return materially rewritten paragraphs, not lexical polish",
+                "claim active_target_ids_covered only for IDs assigned to the failed paragraph or span",
                 "preserve function/effect, not sentence structure",
                 "preserve protected effects",
                 "avoid forbidden failures",
@@ -1253,7 +1262,10 @@ def _prompt_for_live_macro_recomposition_retry(
                 f"{PARAGRAPH_MATERIALITY_MIN_CHANGED_RATIO}, change the global "
                 "paragraph relation and sentence architecture while preserving "
                 "the assigned function/effect. "
-                "Do not perform lexical substitution. "
+                "Do not perform lexical substitution. active_target_ids_covered "
+                "must be a subset of the controller-assigned IDs for that failed "
+                "paragraph or failed span. Extra globally known target claims are "
+                "ignored as non-evidence; unknown target IDs are rejected. The controller "
                 "will merge successful first-attempt replacements with retry "
                 "replacements and rerun full validation."
             ),
@@ -1285,6 +1297,11 @@ def _retry_failed_paragraph_spec(
         "before_text_sha256": spec["before_text_sha256"],
         "word_count": spec["word_count"],
         "active_target_ids": list(spec["active_target_ids"]),
+        "active_target_ids_covered_must_be_subset_of": list(spec["active_target_ids"]),
+        "deferred_or_removed_active_target_ids": list(
+            spec.get("deferred_or_removed_active_target_ids", [])
+        ),
+        "controller_target_assignment_authoritative": True,
         "material_active_target_ids_failed": list(
             retry_plan.failed_material_target_ids_by_ref.get(ref, [])
         ),
@@ -1352,6 +1369,8 @@ def _retry_material_span_spec(
         "before_text": spec["before_text"],
         "before_text_sha256": spec["before_text_sha256"],
         "active_target_ids": list(spec["active_target_ids"]),
+        "active_target_ids_covered_must_be_subset_of": list(spec["active_target_ids"]),
+        "controller_target_assignment_authoritative": True,
         "material_change_required": spec["material_change_required"],
         "allowed_operation": spec["allowed_operation"],
         "transformation_instruction": spec["transformation_instruction"],
@@ -1372,6 +1391,8 @@ def _retry_failed_span_spec(
         "before_text": spec["before_text"],
         "before_text_sha256": spec["before_text_sha256"],
         "active_target_ids": list(spec["active_target_ids"]),
+        "active_target_ids_covered_must_be_subset_of": list(spec["active_target_ids"]),
+        "controller_target_assignment_authoritative": True,
         "material_change_required": spec["material_change_required"],
         "allowed_operation": spec["allowed_operation"],
         "transformation_instruction": spec["transformation_instruction"],
@@ -1651,6 +1672,9 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
         "target_assignment_consistency_passed": target_assignment_consistency_report[
             "target_assignment_consistency_passed"
         ],
+        "controller_target_assignment_authoritative": True,
+        "model_extra_known_target_claims_are_ignored_as_non_evidence": True,
+        "unknown_model_target_claims_fail_validation": True,
         "before_section_text": "\n\n".join(target.original_target),
         "selected_candidate_text": subject.base_text,
         "bounded_macro_recomposition": True,
@@ -1671,6 +1695,7 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
             "forbidden changes",
             "protected semantic constraints",
             "active transformation targets",
+            "target paragraph/span active target assignments",
             "target coverage validation",
             "text assembly",
             "diff report",
@@ -1897,6 +1922,7 @@ def _build_patch_or_section_plan(
         ),
         "worker": "macro_patch_or_section_plan_v1_fake_controller",
     }
+    payload.update(_target_claim_normalization_projection(coverage_report))
     if subject.normalized_brief.reader_state_informed:
         payload.update(
             {
@@ -2051,7 +2077,7 @@ def _build_diff_report(
         model_payload=model_payload,
     )
     assignment_report = _target_assignment_consistency_report_for_subject(subject)
-    return {
+    payload = {
         "base_candidate_packet_id": subject.base_packet_id,
         "base_text_sha256": subject.base_text_sha256,
         "revised_text_sha256": candidate["text_sha256"],
@@ -2089,6 +2115,8 @@ def _build_diff_report(
         "no_phase_shift_claim": True,
         "worker": "macro_recomposition_diff_report_v1_controller",
     }
+    payload.update(_target_claim_normalization_projection(coverage_report))
+    return payload
 
 
 def _build_rival_pressure_check(
@@ -2216,7 +2244,7 @@ def _build_gate_report(
     failed_gates = [
         str(gate["gate_name"]) for gate in gate_results if not bool(gate["passed"])
     ]
-    return {
+    payload = {
         "passed": False,
         "eligible": False,
         "finalization_eligible": False,
@@ -2278,6 +2306,8 @@ def _build_gate_report(
         ),
         "worker": "macro_recomposition_gate_report_v1_controller",
     }
+    payload.update(_target_claim_normalization_projection(coverage_report))
+    return payload
 
 
 def _build_packet_summary(
@@ -2291,7 +2321,12 @@ def _build_packet_summary(
     model_results: list[ModelDriverResult],
     retry_report: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    coverage_report = payloads["macro_recomposition_diff_report"].get(
+        "target_coverage_report",
+    )
+    if not isinstance(coverage_report, dict):
+        coverage_report = {}
+    payload = {
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
@@ -2323,9 +2358,7 @@ def _build_packet_summary(
         "diff_report_artifact_id": artifacts["macro_recomposition_diff_report"].id,
         "rival_pressure_check_artifact_id": artifacts["macro_rival_pressure_check"].id,
         "gate_report": payloads["macro_recomposition_gate_report"],
-        "target_coverage_report": payloads["macro_recomposition_diff_report"].get(
-            "target_coverage_report"
-        ),
+        "target_coverage_report": coverage_report,
         "target_assignment_consistency_report": payloads[
             "macro_recomposition_gate_report"
         ].get("target_assignment_consistency_report"),
@@ -2343,6 +2376,8 @@ def _build_packet_summary(
         "no_phase_shift_claim": True,
         "worker": "macro_recomposition_packet_v1_controller",
     }
+    payload.update(_target_claim_normalization_projection(coverage_report))
+    return payload
 
 
 def _fake_recompose_text(subject: MacroSubject) -> RecomposedText:
@@ -2558,7 +2593,9 @@ def _target_paragraph_specs(
                 "word_count": len(_words(before_text)),
                 "raw_active_target_ids": raw_active_ids,
                 "active_target_ids": active_ids,
+                "active_target_ids_covered_must_be_subset_of": active_ids,
                 "deferred_or_removed_active_target_ids": deferred_or_removed_ids,
+                "controller_target_assignment_authoritative": True,
                 "material_change_required": material_change_required,
                 "paragraph_materiality_contract": (
                     _paragraph_materiality_contract()
@@ -2675,6 +2712,8 @@ def _target_span_specs(
                     "before_text": before_text,
                     "before_text_sha256": sha256_text(before_text),
                     "active_target_ids": list(active_ids),
+                    "active_target_ids_covered_must_be_subset_of": list(active_ids),
+                    "controller_target_assignment_authoritative": True,
                     "material_change_required": material,
                     "transformation_instruction": _target_span_instruction(
                         role=role,
@@ -3208,20 +3247,26 @@ def _collect_live_macro_validation_result(
             list(replacement_paragraphs),
             model_payload=payload,
         )
-        _collect_span_failures_from_report(
-            subject=subject,
-            target=target,
-            replacement_paragraphs=list(replacement_paragraphs),
-            payload=payload,
-            paragraph_failures=paragraph_failures,
-            span_failures=span_failures,
+        unknown_target_claim_messages = _unknown_model_target_claim_failure_messages(
+            target_coverage_report
         )
-        _collect_paragraph_coverage_failures(
-            subject=subject,
-            target=target,
-            target_coverage_report=target_coverage_report,
-            paragraph_failures=paragraph_failures,
-        )
+        if unknown_target_claim_messages:
+            fatal_failures.extend(unknown_target_claim_messages)
+        else:
+            _collect_span_failures_from_report(
+                subject=subject,
+                target=target,
+                replacement_paragraphs=list(replacement_paragraphs),
+                payload=payload,
+                paragraph_failures=paragraph_failures,
+                span_failures=span_failures,
+            )
+            _collect_paragraph_coverage_failures(
+                subject=subject,
+                target=target,
+                target_coverage_report=target_coverage_report,
+                paragraph_failures=paragraph_failures,
+            )
 
     return _macro_target_validation_result(
         subject=subject,
@@ -3298,15 +3343,31 @@ def _collect_target_paragraph_failures(
             continue
         active_ids_covered = _string_tuple(item.get("active_target_ids_covered"))
         allowed_target_ids = set(_string_tuple(spec.get("active_target_ids")))
-        unsupported = sorted(set(active_ids_covered) - allowed_target_ids)
-        if unsupported:
+        target_claims = _normalize_model_target_claims(
+            claimed_target_ids=active_ids_covered,
+            assigned_target_ids=allowed_target_ids,
+            known_target_ids=_known_active_target_ids(subject),
+        )
+        unknown_target_ids = target_claims["unknown_model_target_ids"]
+        if unknown_target_ids:
+            fatal_failures.append(
+                "target_paragraph_replacements["
+                f"{ref}] contains unknown model active target IDs: "
+                + ", ".join(unknown_target_ids)
+            )
+        assigned_covered_ids = set(target_claims["assigned_claims_present"])
+        required_assigned_material_ids = sorted(allowed_target_ids & material_ids)
+        missing_assigned_material_ids = sorted(
+            set(required_assigned_material_ids) - assigned_covered_ids
+        )
+        if bool(spec["material_change_required"]) and missing_assigned_material_ids:
             _add_paragraph_failure(
                 paragraph_failures,
                 ref,
                 "target_paragraph_replacements["
-                f"{ref}] covers unassigned active target IDs: "
-                + ", ".join(unsupported),
-                material_target_ids=material_target_ids,
+                f"{ref}] does not cover assigned material active targets: "
+                + ", ".join(missing_assigned_material_ids),
+                material_target_ids=missing_assigned_material_ids,
             )
         before_words = _normalized_words(str(spec["before_text"]))
         after_words = _normalized_words(replacement_text)
@@ -3323,7 +3384,9 @@ def _collect_target_paragraph_failures(
             )
         if materially_changed:
             covered_material_targets.update(
-                target_id for target_id in active_ids_covered if target_id in material_ids
+                target_id
+                for target_id in assigned_covered_ids
+                if target_id in material_ids
             )
 
     missing_refs = sorted(material_refs - set(seen_refs))
@@ -3405,7 +3468,7 @@ def _collect_span_failures_from_report(
             "target span replacement_excerpt is empty",
         )
     for span_ref, target_ids in dict(
-        report.get("unsupported_active_targets_by_span", {})
+        report.get("unknown_model_target_claims_by_span_ref", {})
     ).items():
         _add_span_failure(
             subject,
@@ -3413,7 +3476,7 @@ def _collect_span_failures_from_report(
             paragraph_failures,
             span_failures,
             str(span_ref),
-            "target span covers unassigned active target IDs: "
+            "target span contains unknown model active target IDs: "
             + ", ".join(_string_tuple(target_ids)),
             active_target_ids=_string_tuple(target_ids),
         )
@@ -3659,6 +3722,165 @@ def _failure_reason_has_paragraph_materiality(reason: str) -> bool:
         or "does not cover material active targets" in reason
         or "macro target coverage failed" in reason
     )
+
+
+TARGET_CLAIM_NORMALIZATION_FIELD_NAMES = (
+    "ignored_model_target_claims_by_paragraph_ref",
+    "ignored_model_target_claims_by_span_ref",
+    "unknown_model_target_claims_by_paragraph_ref",
+    "unknown_model_target_claims_by_span_ref",
+    "model_target_claim_normalization_applied",
+    "model_target_claims_used_as_evidence",
+    "ignored_model_target_claims_used_as_evidence",
+    "controller_target_assignment_authoritative",
+)
+
+
+def _known_active_target_ids(subject: MacroSubject) -> set[str]:
+    return set(subject.normalized_brief.active_transformation_target_ids)
+
+
+def _normalize_model_target_claims(
+    *,
+    claimed_target_ids: tuple[str, ...] | list[str] | set[str],
+    assigned_target_ids: tuple[str, ...] | list[str] | set[str],
+    known_target_ids: set[str],
+) -> dict[str, list[str]]:
+    claimed = set(_target_id_tuple(claimed_target_ids))
+    assigned = set(_target_id_tuple(assigned_target_ids))
+    known = set(known_target_ids) | assigned
+    return {
+        "assigned_claims_present": sorted(claimed & assigned),
+        "extra_known_unassigned_target_ids": sorted((claimed - assigned) & known),
+        "unknown_model_target_ids": sorted(claimed - known),
+    }
+
+
+def _target_id_tuple(value: tuple[str, ...] | list[str] | set[str]) -> tuple[str, ...]:
+    if isinstance(value, set):
+        return tuple(str(item) for item in value if str(item).strip())
+    return _string_tuple(value)
+
+
+def _target_claim_normalization_fields(
+    *,
+    ignored_paragraph: dict[str, list[str]] | None = None,
+    ignored_span: dict[str, list[str]] | None = None,
+    unknown_paragraph: dict[str, list[str]] | None = None,
+    unknown_span: dict[str, list[str]] | None = None,
+    model_payload_present: bool = False,
+) -> dict[str, object]:
+    ignored_paragraph = ignored_paragraph or {}
+    ignored_span = ignored_span or {}
+    unknown_paragraph = unknown_paragraph or {}
+    unknown_span = unknown_span or {}
+    ignored_present = bool(ignored_paragraph or ignored_span)
+    return {
+        "ignored_model_target_claims_by_paragraph_ref": ignored_paragraph,
+        "ignored_model_target_claims_by_span_ref": ignored_span,
+        "unknown_model_target_claims_by_paragraph_ref": unknown_paragraph,
+        "unknown_model_target_claims_by_span_ref": unknown_span,
+        "model_target_claim_normalization_applied": model_payload_present,
+        "model_target_claims_used_as_evidence": not ignored_present,
+        "ignored_model_target_claims_used_as_evidence": False,
+        "controller_target_assignment_authoritative": True,
+    }
+
+
+def _target_claim_normalization_projection(
+    report: dict[str, object],
+) -> dict[str, object]:
+    empty_by_ref_fields = {
+        "ignored_model_target_claims_by_paragraph_ref",
+        "ignored_model_target_claims_by_span_ref",
+        "unknown_model_target_claims_by_paragraph_ref",
+        "unknown_model_target_claims_by_span_ref",
+    }
+    bool_defaults = {
+        "model_target_claim_normalization_applied": False,
+        "model_target_claims_used_as_evidence": True,
+        "ignored_model_target_claims_used_as_evidence": False,
+        "controller_target_assignment_authoritative": True,
+    }
+    projection: dict[str, object] = {}
+    for name in TARGET_CLAIM_NORMALIZATION_FIELD_NAMES:
+        if name in empty_by_ref_fields:
+            value = report.get(name, {})
+            projection[name] = value if isinstance(value, dict) else {}
+        else:
+            projection[name] = bool(report.get(name, bool_defaults[name]))
+    return projection
+
+
+def _paragraph_model_target_claim_report(
+    *,
+    subject: MacroSubject,
+    target: RecomposedText,
+    model_payload: dict[str, object] | None,
+    required_parent_refs: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    ignored: dict[str, list[str]] = {}
+    unknown: dict[str, list[str]] = {}
+    if model_payload is None:
+        return _target_claim_normalization_fields()
+    spec_by_ref = {
+        str(spec["target_paragraph_ref"]): spec
+        for spec in _target_paragraph_specs(subject, target)
+    }
+    required_ref_set = set(required_parent_refs or ())
+    for ref, item in _replacement_map(model_payload).items():
+        if required_ref_set and ref not in required_ref_set:
+            continue
+        spec = spec_by_ref.get(ref)
+        if spec is None:
+            continue
+        normalized = _normalize_model_target_claims(
+            claimed_target_ids=_string_tuple(item.get("active_target_ids_covered")),
+            assigned_target_ids=_string_tuple(spec.get("active_target_ids")),
+            known_target_ids=_known_active_target_ids(subject),
+        )
+        extra_known = normalized["extra_known_unassigned_target_ids"]
+        unknown_ids = normalized["unknown_model_target_ids"]
+        if extra_known:
+            ignored[ref] = extra_known
+        if unknown_ids:
+            unknown[ref] = unknown_ids
+    return _target_claim_normalization_fields(
+        ignored_paragraph=ignored,
+        unknown_paragraph=unknown,
+        model_payload_present=True,
+    )
+
+
+def _unknown_model_target_claim_failure_messages(
+    target_coverage_report: dict[str, object],
+) -> tuple[str, ...]:
+    messages: list[str] = []
+    paragraph_unknown = target_coverage_report.get(
+        "unknown_model_target_claims_by_paragraph_ref",
+        {},
+    )
+    if isinstance(paragraph_unknown, dict):
+        for ref, target_ids in sorted(paragraph_unknown.items()):
+            ids = ", ".join(_string_tuple(target_ids))
+            if ids:
+                messages.append(
+                    f"target_paragraph_replacements[{ref}] contains unknown "
+                    f"model active target IDs: {ids}"
+                )
+    span_unknown = target_coverage_report.get(
+        "unknown_model_target_claims_by_span_ref",
+        {},
+    )
+    if isinstance(span_unknown, dict):
+        for ref, target_ids in sorted(span_unknown.items()):
+            ids = ", ".join(_string_tuple(target_ids))
+            if ids:
+                messages.append(
+                    f"target_span_replacements[{ref}] contains unknown model "
+                    f"active target IDs: {ids}"
+                )
+    return tuple(messages)
 
 
 def _add_paragraph_failure(
@@ -4161,14 +4383,20 @@ def _validate_retry_target_replacements(
             )
         covered_ids = set(_string_tuple(item.get("active_target_ids_covered")))
         allowed_ids = set(_string_tuple(spec.get("active_target_ids")))
-        unsupported = sorted(covered_ids - allowed_ids)
-        if unsupported:
+        target_claims = _normalize_model_target_claims(
+            claimed_target_ids=covered_ids,
+            assigned_target_ids=allowed_ids,
+            known_target_ids=_known_active_target_ids(subject),
+        )
+        unknown_ids = target_claims["unknown_model_target_ids"]
+        if unknown_ids:
             raise ModelValidationError(
-                f"corrective retry target_paragraph_replacements[{ref}] covers "
-                "unassigned active target IDs: " + ", ".join(unsupported)
+                f"corrective retry target_paragraph_replacements[{ref}] contains "
+                "unknown model active target IDs: " + ", ".join(unknown_ids)
             )
         required_ids = sorted(allowed_ids & material_ids)
-        missing_ids = sorted(set(required_ids) - covered_ids)
+        assigned_covered_ids = set(target_claims["assigned_claims_present"])
+        missing_ids = sorted(set(required_ids) - assigned_covered_ids)
         if missing_ids:
             raise ModelValidationError(
                 f"corrective retry target_paragraph_replacements[{ref}] does not "
@@ -4253,7 +4481,7 @@ def _target_addressed_retry_report_not_attempted(
     first_attempt_model_call_id: str | None = None,
     budget_remaining: bool = False,
 ) -> dict[str, object]:
-    return {
+    report = {
         "retry_attempted": False,
         "retry_reason": retry_plan.retry_reason if retry_plan else "",
         "first_attempt_model_call_id": first_attempt_model_call_id,
@@ -4293,10 +4521,13 @@ def _target_addressed_retry_report_not_attempted(
         "no_phase_shift_claim": True,
         "finalization_eligible": False,
     }
+    report.update(_target_claim_normalization_fields())
+    return report
 
 
 def _target_addressed_retry_report(
     *,
+    subject: MacroSubject,
     retry_plan: TargetAddressedRetryPlan,
     first_attempt_model_call_id: str,
     retry_model_call_id: str,
@@ -4312,6 +4543,46 @@ def _target_addressed_retry_report(
     preserved_refs = sorted(first_refs - failed_refs)
     retry_replaced_refs = sorted(ref for ref in retry_refs if ref in failed_refs)
     ignored_retry_refs = sorted(retry_refs - failed_refs)
+    retry_claim_report = _target_claim_normalization_fields()
+    if retry_payload is not None:
+        target = _target_window(subject.base_text)
+        paragraph_claim_report = _paragraph_model_target_claim_report(
+            subject=subject,
+            target=target,
+            model_payload=retry_payload,
+            required_parent_refs=retry_plan.failed_target_paragraph_refs,
+        )
+        retry_span_report = _build_target_span_coverage_report(
+            subject,
+            target,
+            [
+                str(spec["before_text"])
+                for spec in _target_paragraph_specs(subject, target)
+            ],
+            model_payload=retry_payload,
+            required_parent_refs=retry_plan.failed_target_paragraph_refs,
+        )
+        retry_claim_report = _target_claim_normalization_fields(
+            ignored_paragraph=dict(
+                paragraph_claim_report.get(
+                    "ignored_model_target_claims_by_paragraph_ref",
+                    {},
+                )
+            ),
+            ignored_span=dict(
+                retry_span_report.get("ignored_model_target_claims_by_span_ref", {})
+            ),
+            unknown_paragraph=dict(
+                paragraph_claim_report.get(
+                    "unknown_model_target_claims_by_paragraph_ref",
+                    {},
+                )
+            ),
+            unknown_span=dict(
+                retry_span_report.get("unknown_model_target_claims_by_span_ref", {})
+            ),
+            model_payload_present=True,
+        )
     report = {
         "retry_attempted": True,
         "retry_reason": retry_plan.retry_reason,
@@ -4350,6 +4621,7 @@ def _target_addressed_retry_report(
         "no_phase_shift_claim": True,
         "finalization_eligible": False,
     }
+    report.update(retry_claim_report)
     if remaining_failure_message:
         report["remaining_failure_message"] = remaining_failure_message
     if remaining_validation_result is not None:
@@ -4648,12 +4920,12 @@ def _validate_required_target_span_replacements(
             f"{error_prefix}target_span_replacements[{empty[0]}] "
             "replacement_excerpt is empty"
         )
-    unsupported = dict(report.get("unsupported_active_targets_by_span", {}))
-    if unsupported:
-        span_ref = sorted(unsupported)[0]
+    unknown = dict(report.get("unknown_model_target_claims_by_span_ref", {}))
+    if unknown:
+        span_ref = sorted(unknown)[0]
         raise ModelValidationError(
-            f"{error_prefix}target_span_replacements[{span_ref}] covers "
-            "unassigned active target IDs: " + ", ".join(unsupported[span_ref])
+            f"{error_prefix}target_span_replacements[{span_ref}] contains unknown "
+            "model active target IDs: " + ", ".join(_string_tuple(unknown[span_ref]))
         )
     missing_ids = dict(report.get("missing_active_targets_by_span", {}))
     if missing_ids:
@@ -4695,6 +4967,8 @@ def _build_target_span_coverage_report(
     unchanged_required: list[str] = []
     missing_active_targets_by_span: dict[str, list[str]] = {}
     unsupported_active_targets_by_span: dict[str, list[str]] = {}
+    ignored_model_target_claims_by_span_ref: dict[str, list[str]] = {}
+    unknown_model_target_claims_by_span_ref: dict[str, list[str]] = {}
     failed_active_targets_by_span: dict[str, list[str]] = {}
     materially_changed_count = 0
 
@@ -4724,10 +4998,17 @@ def _build_target_span_coverage_report(
             )
         )
         allowed_ids = set(_string_tuple(spec.get("active_target_ids")))
-        unsupported_ids = sorted(covered_ids - allowed_ids)
+        target_claims = _normalize_model_target_claims(
+            claimed_target_ids=covered_ids,
+            assigned_target_ids=allowed_ids,
+            known_target_ids=_known_active_target_ids(subject),
+        )
+        assigned_covered_ids = set(target_claims["assigned_claims_present"])
+        extra_known_ids = target_claims["extra_known_unassigned_target_ids"]
+        unknown_ids = target_claims["unknown_model_target_ids"]
         required_ids = sorted(allowed_ids) if material_required else []
         missing_ids = (
-            sorted(set(required_ids) - covered_ids)
+            sorted(set(required_ids) - assigned_covered_ids)
             if strict_model_mapping_required
             else []
         )
@@ -4744,7 +5025,7 @@ def _build_target_span_coverage_report(
             and mapping_ok
             and bool(excerpt)
             and hash_matches
-            and not unsupported_ids
+            and not unknown_ids
             and not missing_ids
         )
         if material_required and strict_model_mapping_required and not mapping_present:
@@ -4753,8 +5034,11 @@ def _build_target_span_coverage_report(
             mismatched_hashes.append(span_ref)
         if material_required and mapping_present and not excerpt:
             empty_excerpts.append(span_ref)
-        if unsupported_ids:
-            unsupported_active_targets_by_span[span_ref] = unsupported_ids
+        if extra_known_ids:
+            ignored_model_target_claims_by_span_ref[span_ref] = extra_known_ids
+        if unknown_ids:
+            unknown_model_target_claims_by_span_ref[span_ref] = unknown_ids
+            unsupported_active_targets_by_span[span_ref] = unknown_ids
         if material_required and missing_ids:
             missing_active_targets_by_span[span_ref] = missing_ids
         if material_required and before_preserved:
@@ -4773,6 +5057,9 @@ def _build_target_span_coverage_report(
                 "material_change_required": material_required,
                 "materially_changed": materially_changed,
                 "active_target_ids": list(_string_tuple(spec.get("active_target_ids"))),
+                "assigned_target_ids_covered": sorted(assigned_covered_ids),
+                "ignored_model_target_claims": extra_known_ids,
+                "unknown_model_target_claims": unknown_ids,
                 "span_role": spec.get("span_role"),
                 "allowed_operation": spec.get("allowed_operation"),
             }
@@ -4808,6 +5095,10 @@ def _build_target_span_coverage_report(
         "empty_target_span_replacement_excerpts": sorted(empty_excerpts),
         "missing_active_targets_by_span": missing_active_targets_by_span,
         "unsupported_active_targets_by_span": unsupported_active_targets_by_span,
+        "ignored_model_target_claims_by_span_ref": (
+            ignored_model_target_claims_by_span_ref
+        ),
+        "unknown_model_target_claims_by_span_ref": unknown_model_target_claims_by_span_ref,
         "span_level_coverage_passed": span_level_passed,
         "target_span_comparison": comparison,
         "thesis_visible_proof_language_reduction_span_rule": thesis_report,
@@ -4972,6 +5263,28 @@ def _build_target_coverage_report(
         replacement_paragraphs,
         model_payload=model_payload,
     )
+    paragraph_claim_report = _paragraph_model_target_claim_report(
+        subject=subject,
+        target=target,
+        model_payload=model_payload,
+    )
+    target_claim_report = _target_claim_normalization_fields(
+        ignored_paragraph=dict(
+            paragraph_claim_report.get(
+                "ignored_model_target_claims_by_paragraph_ref",
+                {},
+            )
+        ),
+        ignored_span=dict(span_report.get("ignored_model_target_claims_by_span_ref", {})),
+        unknown_paragraph=dict(
+            paragraph_claim_report.get(
+                "unknown_model_target_claims_by_paragraph_ref",
+                {},
+            )
+        ),
+        unknown_span=dict(span_report.get("unknown_model_target_claims_by_span_ref", {})),
+        model_payload_present=model_payload is not None,
+    )
     span_level_coverage_passed = bool(span_report["span_level_coverage_passed"])
     span_validation_required = bool(span_report["target_span_count"])
     macro_target_coverage_passed = paragraph_level_coverage_passed and (
@@ -5015,6 +5328,7 @@ def _build_target_coverage_report(
         "model_active_target_mapping_complete": bool(model_payload)
         and _active_target_mapping_complete_for_subject(subject, model_payload),
         "ready_for_executed_ablation": macro_target_coverage_passed,
+        **target_claim_report,
     }
 
 
@@ -5212,11 +5526,27 @@ def _target_addressed_replacement_paragraphs(
             )
         active_ids_covered = _string_tuple(item.get("active_target_ids_covered"))
         allowed_target_ids = set(_string_tuple(spec.get("active_target_ids")))
-        unsupported = sorted(set(active_ids_covered) - allowed_target_ids)
-        if unsupported:
+        target_claims = _normalize_model_target_claims(
+            claimed_target_ids=active_ids_covered,
+            assigned_target_ids=allowed_target_ids,
+            known_target_ids=_known_active_target_ids(subject),
+        )
+        unknown_target_ids = target_claims["unknown_model_target_ids"]
+        if unknown_target_ids:
             raise ModelValidationError(
-                f"target_paragraph_replacements[{ref}] covers unassigned active target IDs: "
-                + ", ".join(unsupported)
+                f"target_paragraph_replacements[{ref}] contains unknown model active "
+                "target IDs: " + ", ".join(unknown_target_ids)
+            )
+        assigned_covered_ids = set(target_claims["assigned_claims_present"])
+        required_assigned_material_ids = sorted(allowed_target_ids & material_target_ids)
+        missing_assigned_material_ids = sorted(
+            set(required_assigned_material_ids) - assigned_covered_ids
+        )
+        if bool(spec["material_change_required"]) and missing_assigned_material_ids:
+            raise ModelValidationError(
+                f"target_paragraph_replacements[{ref}] does not cover assigned "
+                "material active targets: "
+                + ", ".join(missing_assigned_material_ids)
             )
         before_words = _normalized_words(str(spec["before_text"]))
         after_words = _normalized_words(replacement_text)
@@ -5229,7 +5559,9 @@ def _target_addressed_replacement_paragraphs(
             )
         if materially_changed:
             covered_material_targets.update(
-                target_id for target_id in active_ids_covered if target_id in material_target_ids
+                target_id
+                for target_id in assigned_covered_ids
+                if target_id in material_target_ids
             )
         seen_refs[ref] = item
 
