@@ -461,6 +461,91 @@ def build_reader_state_macro_synthesis_chain(tmp_path: Path):
     }
 
 
+def build_live_macro2_candidate_with_optional_proof(
+    tmp_path: Path,
+    *,
+    proof_mode: str | None = "useful",
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+    macro2 = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-live-macro",
+        client_factory=bounded_macro_stub_factory([]),
+    )
+    assert macro2.exit_code == 0
+    assert macro2.payload["accepted"] is True
+    assert macro2.payload["target_scope"] == READER_STATE_MACRO_2_TARGET_SCOPE
+    proof_payload = None
+    if proof_mode is not None:
+        proof = run_executed_ablation(
+            chain["config"],
+            client_name="openai",
+            revision_packet=macro2.payload["packet_dir"],
+            allow_live_model=True,
+            api_key="stub-key",
+            model="stub-executed-ablation",
+            client_factory=executed_ablation_stub_factory([]),
+        )
+        assert proof.exit_code == 0
+        assert proof.payload["accepted"] is True
+        proof_payload = proof.payload
+        _rewrite_macro2_proof(proof_payload, useful=proof_mode == "useful")
+    chain["macro2"] = macro2.payload
+    chain["macro2_proof"] = proof_payload
+    return chain
+
+
+def _rewrite_macro2_proof(proof_payload: dict[str, object], *, useful: bool) -> None:
+    def _causal(payload):
+        payload["selected_repair_causal_status"] = (
+            "useful_but_insufficient" if useful else "noncausal_or_cosmetic"
+        )
+        payload["selected_repair_appears_causal"] = useful
+        payload["reduced_overexplanation"] = useful
+        payload["damaged_local_embodiment"] = False if useful else True
+        payload["strongest_rival_pressure_remains_blocking"] = True
+        payload["recommended_next_action"] = (
+            "preserve useful local repair and run reader-state evaluation"
+            if useful
+            else "do not promote this repair"
+        )
+
+    def _comparison(payload):
+        payload["repair_has_causal_support"] = useful
+        payload["revert_performs_same_or_better"] = not useful
+        payload["reverting_patch_weakens_candidate"] = useful
+        payload["record_compression_improves_discovery"] = False
+        payload["strongest_rival_still_beats_candidate"] = True
+
+    def _packet(payload):
+        payload["selected_repair_causal_status"] = (
+            "useful_but_insufficient" if useful else "noncausal_or_cosmetic"
+        )
+        payload["comparison_internal_consistency"] = True
+        gate_report = payload.get("gate_report", {})
+        if isinstance(gate_report, dict):
+            gate_report["actual_executed_ablation_evidence_exists"] = True
+            gate_report["actual_ablation_comparison_exists"] = True
+            gate_report["comparison_internal_consistency"] = True
+            gate_report["countable_evidence_variant_count"] = 3
+
+    def _gate(payload):
+        payload["actual_executed_ablation_evidence_exists"] = True
+        payload["actual_ablation_comparison_exists"] = True
+        payload["comparison_internal_consistency"] = True
+        payload["countable_evidence_variant_count"] = 3
+        payload["rival_remains_blocking"] = True
+
+    rewrite_payload(proof_payload["artifact_paths"]["ablation_causal_effect_report"], _causal)
+    rewrite_payload(proof_payload["artifact_paths"]["ablation_old_new_rival_comparison"], _comparison)
+    rewrite_payload(proof_payload["artifact_paths"]["executed_ablation_packet"], _packet)
+    rewrite_payload(proof_payload["artifact_paths"]["executed_ablation_gate_report"], _gate)
+
+
 def revision_stub_factory(
     clients: list[FakeAutonomousRevisionModelClient],
     *,
@@ -5753,6 +5838,217 @@ def test_autonomous_evidence_synthesis_adjudicates_reader_state_evidence(tmp_pat
 
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_supersedes_with_live_macro2_proof(tmp_path):
+    chain = build_live_macro2_candidate_with_optional_proof(tmp_path, proof_mode="useful")
+    config = chain["config"]
+    run_id = chain["run_id"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_autonomous_evidence_synthesis(config, run_id=run_id)
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(packet_dir / "autonomous_evidence_synthesis_subject_manifest.json")
+    assert chain["macro2"]["packet_id"] in manifest["macro2_candidate_packets_consumed"]
+    assert chain["macro2_proof"]["packet_id"] in manifest["macro2_ablation_packets_consumed"]
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    macro2_rows = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "bounded_macro_recomposition"
+        and row["packet_id"] == chain["macro2"]["packet_id"]
+    ]
+    assert macro2_rows
+    assert macro2_rows[0]["target_scope"] == READER_STATE_MACRO_2_TARGET_SCOPE
+    assert macro2_rows[0]["model_backed"] is True
+    assert macro2_rows[0]["fixture_only"] is False
+    proof_rows = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "executed_ablation"
+        and row["packet_id"] == chain["macro2_proof"]["packet_id"]
+    ]
+    assert proof_rows
+    assert proof_rows[0]["source_revision_packet_id"] == chain["macro2"]["packet_id"]
+    assert proof_rows[0]["causal_status"] == "useful_but_insufficient"
+    assert proof_rows[0]["actual_executed_ablation_evidence_exists"] is True
+    assert proof_rows[0]["countable_evidence_variant_count"] > 0
+    assert proof_rows[0]["model_backed"] is True
+    assert proof_rows[0]["fixture_only"] is False
+
+    causal = read_payload(packet_dir / "causal_status_summary.json")
+    assert chain["macro2"]["packet_id"] in causal["macro2_candidate_packet_ids"]
+    assert chain["macro2_proof"]["packet_id"] in causal["macro2_proof_packet_ids"]
+    findings = {finding["finding_id"]: finding for finding in causal["findings"]}
+    assert findings["reader_state_informed_macro_2_candidate_proof"][
+        "status"
+    ] == "useful_but_insufficient"
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == chain["macro2"]["packet_id"]
+    assert selected["packet_kind"] == "bounded_macro_recomposition"
+    assert selected["base_candidate_packet_id"] == chain["macro_payload"]["packet_id"]
+    assert selected["proof_packet_id"] == chain["macro2_proof"]["packet_id"]
+    assert selected["candidate_proof_linked"] is True
+    assert selected["supersession_eligible"] is True
+    assert selected["selected_by_candidate_proof_supersession"] is True
+    assert best["candidate_supersession_evaluated"] is True
+    assert best["candidate_proof_supersession_applied"] is True
+    assert best["best_current_candidate_updated_from_macro2_proof"] is True
+    pair = [
+        item
+        for item in best["candidate_proof_pairs"]
+        if item["candidate_packet_id"] == chain["macro2"]["packet_id"]
+        and item["candidate_packet_kind"] == "bounded_macro_recomposition"
+    ][0]
+    assert pair["proof_packet_id"] == chain["macro2_proof"]["packet_id"]
+    assert pair["supersession_eligible"] is True
+
+    adjudication = read_payload(packet_dir / "reader_state_evidence_adjudication.json")
+    assert adjudication["reader_state_evidence_present"] is False
+    assert adjudication["selected_candidate_packet_id"] == chain["macro2"]["packet_id"]
+
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    assert blockers["internal_reader_state_evaluation_recommended"] is True
+    assert blockers["reader_state_informed_macro_2_recomposition_recommended"] is False
+    assert blockers["strongest_rival_still_blocks"] is True
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["recommendation"] == (
+        "preserve_macro2_candidate_and_run_reader_state_evaluation"
+    )
+    assert decision["next_recommended_action"] == (
+        "run_internal_reader_state_evaluation_on_macro2_candidate"
+    )
+    assert decision["internal_reader_state_evaluation_recommended"] is True
+
+    brief = read_payload(packet_dir / "macro_recomposition_brief.json")
+    assert brief["brief_type"] == "macro2_evidence_review_next_step_brief_not_artifact"
+    assert brief["run_internal_reader_state_evaluation_before_further_recomposition"] is True
+    assert brief["run_another_macro_recomposition_now"] is False
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    assert gate_results["macro2_candidate_consumed"]["passed"] is True
+    assert gate_results["macro2_ablation_consumed"]["passed"] is True
+    assert gate_results["macro2_candidate_proof_linked"]["passed"] is True
+    assert gate_results["candidate_supersession_evaluated"]["passed"] is True
+    assert gate_results["best_current_candidate_updated_from_macro2_proof"]["passed"] is True
+    assert gate_results["strongest_rival_pressure_preserved"]["passed"] is True
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+
+    packet = read_payload(packet_dir / "autonomous_evidence_synthesis_packet.json")
+    assert packet["best_current_candidate"]["packet_id"] == chain["macro2"]["packet_id"]
+    assert packet["next_recommended_action"] == (
+        "run_internal_reader_state_evaluation_on_macro2_candidate"
+    )
+    assert packet["best_current_candidate_updated_from_macro2_proof"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_does_not_select_new_macro2_without_proof(tmp_path):
+    chain = build_live_macro2_candidate_with_optional_proof(tmp_path, proof_mode=None)
+
+    result = run_autonomous_evidence_synthesis(chain["config"], run_id=chain["run_id"])
+
+    assert result.exit_code == 0
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == chain["macro_payload"]["packet_id"]
+    assert selected["packet_kind"] == "bounded_macro_recomposition"
+    macro2_option = [
+        option
+        for option in best["candidate_options"]
+        if option["packet_id"] == chain["macro2"]["packet_id"]
+        and option["packet_kind"] == "bounded_macro_recomposition"
+    ][0]
+    assert macro2_option["candidate_proof_linked"] is False
+    assert macro2_option["supersession_eligible"] is False
+    assert "no_executed_ablation_proof_linked" in macro2_option["supersession_blockers"]
+    assert best["best_current_candidate_updated_from_macro2_proof"] is False
+
+
+def test_autonomous_evidence_synthesis_rejects_failed_or_fake_macro2_supersession(
+    tmp_path,
+):
+    failed_chain = build_live_macro2_candidate_with_optional_proof(
+        tmp_path / "failed",
+        proof_mode="failed",
+    )
+    failed_result = run_autonomous_evidence_synthesis(
+        failed_chain["config"],
+        run_id=failed_chain["run_id"],
+    )
+    failed_packet_dir = Path(str(failed_result.payload["packet_dir"]))
+    failed_best = read_payload(failed_packet_dir / "best_current_candidate_selection.json")
+    failed_selected = failed_best["selected_best_candidate"]
+    assert failed_selected["packet_id"] == failed_chain["macro_payload"]["packet_id"]
+    assert failed_selected["packet_kind"] == "bounded_macro_recomposition"
+    failed_macro2_option = [
+        option
+        for option in failed_best["candidate_options"]
+        if option["packet_id"] == failed_chain["macro2"]["packet_id"]
+        and option["packet_kind"] == "bounded_macro_recomposition"
+    ][0]
+    assert failed_macro2_option["supersession_eligible"] is False
+    assert "proof_causal_status_not_useful_or_stronger" in failed_macro2_option[
+        "supersession_blockers"
+    ]
+
+    fake_chain = build_reader_state_macro_synthesis_chain(tmp_path / "fake")
+    fake_macro2 = run_bounded_macro_recomposition(
+        fake_chain["config"],
+        client_name="fake",
+        synthesis_packet=Path(str(fake_chain["synthesis"]["packet_dir"])),
+    )
+    assert fake_macro2.exit_code == 0
+    fake_proof = run_executed_ablation(
+        fake_chain["config"],
+        client_name="fake",
+        revision_packet=fake_macro2.payload["packet_dir"],
+    )
+    assert fake_proof.exit_code == 0
+    _rewrite_macro2_proof(fake_proof.payload, useful=True)
+
+    fake_result = run_autonomous_evidence_synthesis(
+        fake_chain["config"],
+        run_id=fake_chain["run_id"],
+    )
+    fake_packet_dir = Path(str(fake_result.payload["packet_dir"]))
+    fake_best = read_payload(fake_packet_dir / "best_current_candidate_selection.json")
+    fake_selected = fake_best["selected_best_candidate"]
+    assert fake_selected["packet_id"] == fake_chain["macro_payload"]["packet_id"]
+    assert fake_selected["packet_kind"] == "bounded_macro_recomposition"
+    fake_macro2_option = [
+        option
+        for option in fake_best["candidate_options"]
+        if option["packet_id"] == fake_macro2.payload["packet_id"]
+        and option["packet_kind"] == "bounded_macro_recomposition"
+    ][0]
+    assert fake_macro2_option["candidate_proof_linked"] is True
+    assert fake_macro2_option["supersession_eligible"] is False
+    assert "candidate_not_live_model_backed" in fake_macro2_option["supersession_blockers"]
+    assert "proof_not_live_model_backed" in fake_macro2_option["supersession_blockers"]
+    assert fake_best["best_current_candidate_updated_from_macro2_proof"] is False
 
 
 def test_autonomous_evidence_synthesis_refuses_missing_critical_packets(tmp_path):
