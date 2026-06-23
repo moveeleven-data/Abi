@@ -360,6 +360,27 @@ def run_bounded_macro_recomposition(
             ],
         )
 
+        assignment_report = payloads["macro_recomposition_work_order"].get(
+            "target_assignment_consistency_report",
+            {},
+        )
+        if isinstance(assignment_report, dict) and not bool(
+            assignment_report.get("target_assignment_consistency_passed", True)
+        ):
+            return _failure_result(
+                subject=subject,
+                packet_dir=packet_dir,
+                client_name=client_name,
+                model=configured_model,
+                artifacts=artifacts,
+                model_results=model_results,
+                message=(
+                    "Bounded macro recomposition refused before model call: "
+                    "target assignment inconsistent for "
+                    f"{assignment_report.get('inconsistent_target_paragraph_refs', [])}"
+                ),
+            )
+
         if client_name == "openai":
             connection.commit()
             factory = client_factory or _default_openai_client_factory
@@ -695,6 +716,12 @@ def run_bounded_macro_recomposition(
         "model_call_ids": [result.model_call.id for result in model_results],
         "model_calls": [result.model_call_to_dict() for result in model_results],
         "target_addressed_retry_report": retry_report,
+        "target_assignment_consistency_passed": payloads[
+            "macro_recomposition_packet"
+        ].get("target_assignment_consistency_passed"),
+        "target_assignment_consistency_report": payloads[
+            "macro_recomposition_packet"
+        ].get("target_assignment_consistency_report"),
         "gate_report": payloads["macro_recomposition_gate_report"],
         "finalization_eligible": False,
         "not_finalization_eligible": True,
@@ -1487,6 +1514,12 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
     target = _target_window(subject.base_text)
     target_paragraphs = _target_paragraph_specs(subject, target)
     target_spans = _target_span_specs(subject, target, target_paragraphs)
+    target_assignment_consistency_report = _build_target_assignment_consistency_report(
+        target_paragraphs=target_paragraphs,
+        target_spans=target_spans,
+        material_required_target_ids=subject.normalized_brief.material_required_target_ids,
+        reader_state_informed=subject.normalized_brief.reader_state_informed,
+    )
     return {
         "work_order_id": f"macro_recomposition_{subject.synthesis_packet_id}",
         "source_synthesis_packet_id": subject.synthesis_packet_id,
@@ -1503,6 +1536,10 @@ def _build_work_order(subject: MacroSubject) -> dict[str, object]:
         "target_paragraphs": target_paragraphs,
         "target_spans": target_spans,
         "active_target_units": target_spans,
+        "target_assignment_consistency_report": target_assignment_consistency_report,
+        "target_assignment_consistency_passed": target_assignment_consistency_report[
+            "target_assignment_consistency_passed"
+        ],
         "before_section_text": "\n\n".join(target.original_target),
         "selected_candidate_text": subject.base_text,
         "bounded_macro_recomposition": True,
@@ -1718,6 +1755,7 @@ def _build_patch_or_section_plan(
         recomposed.replacement,
         model_payload=model_payload,
     )
+    assignment_report = _target_assignment_consistency_report_for_subject(subject)
     payload = {
         "section_plan_id": f"macro_section_{sha256_text(''.join(recomposed.replacement))[:12]}",
         "target_movement": subject.normalized_brief.target_movement,
@@ -1735,6 +1773,10 @@ def _build_patch_or_section_plan(
         "before_section_text": "\n\n".join(recomposed.original_target),
         "replacement_section_text": "\n\n".join(recomposed.replacement),
         "target_coverage_report": coverage_report,
+        "target_assignment_consistency_report": assignment_report,
+        "target_assignment_consistency_passed": assignment_report[
+            "target_assignment_consistency_passed"
+        ],
         "source_base_text_sha256": subject.base_text_sha256,
         "target_addressed_retry_report": retry_report
         or _target_addressed_retry_report_not_attempted(),
@@ -1897,6 +1939,7 @@ def _build_diff_report(
         recomposed.replacement,
         model_payload=model_payload,
     )
+    assignment_report = _target_assignment_consistency_report_for_subject(subject)
     return {
         "base_candidate_packet_id": subject.base_packet_id,
         "base_text_sha256": subject.base_text_sha256,
@@ -1911,6 +1954,10 @@ def _build_diff_report(
         "opening_scene_preserved": True,
         "unchanged_prefix_paragraph_count": len(recomposed.unchanged_prefix),
         "target_coverage_report": coverage_report,
+        "target_assignment_consistency_report": assignment_report,
+        "target_assignment_consistency_passed": assignment_report[
+            "target_assignment_consistency_passed"
+        ],
         "target_addressed_retry_report": retry_report
         or _target_addressed_retry_report_not_attempted(),
         "changed_paragraph_start_index": recomposed.target_start_index,
@@ -1977,6 +2024,12 @@ def _build_gate_report(
     coverage_report = diff_report.get("target_coverage_report", {})
     if not isinstance(coverage_report, dict):
         coverage_report = {}
+    assignment_report = diff_report.get("target_assignment_consistency_report", {})
+    if not isinstance(assignment_report, dict):
+        assignment_report = {}
+    target_assignment_consistency_passed = bool(
+        assignment_report.get("target_assignment_consistency_passed")
+    )
     macro_target_coverage_passed = bool(
         coverage_report.get("macro_target_coverage_passed")
     )
@@ -2011,6 +2064,16 @@ def _build_gate_report(
         ),
         _gate_result("macro_target_coverage_passed", macro_target_coverage_passed),
         _gate_result("macro_materiality_passed", macro_materiality_passed),
+        _gate_result(
+            "target_assignment_consistency_passed",
+            target_assignment_consistency_passed,
+            []
+            if target_assignment_consistency_passed
+            else [
+                "controller target assignment has material paragraph targets without "
+                "operational child spans"
+            ],
+        ),
         _gate_result(
             "semantic_constraint_satisfaction_proven",
             False,
@@ -2068,6 +2131,8 @@ def _build_gate_report(
         "requires_internal_reader_or_ablation_validation": True,
         "macro_target_coverage_passed": macro_target_coverage_passed,
         "macro_materiality_passed": macro_materiality_passed,
+        "target_assignment_consistency_passed": target_assignment_consistency_passed,
+        "target_assignment_consistency_report": assignment_report,
         "active_transformation_targets_covered": list(
             coverage_report.get("active_targets_covered", [])
         ),
@@ -2150,6 +2215,12 @@ def _build_packet_summary(
         "target_coverage_report": payloads["macro_recomposition_diff_report"].get(
             "target_coverage_report"
         ),
+        "target_assignment_consistency_report": payloads[
+            "macro_recomposition_gate_report"
+        ].get("target_assignment_consistency_report"),
+        "target_assignment_consistency_passed": payloads[
+            "macro_recomposition_gate_report"
+        ].get("target_assignment_consistency_passed"),
         "target_addressed_retry_report": retry_report
         or _target_addressed_retry_report_not_attempted(),
         "bounded_macro_recomposition": True,
@@ -2334,6 +2405,14 @@ def _target_paragraph_specs(
         refs = paragraph_refs if target_ref == "target_section" else [target_ref]
         for ref in refs:
             active_ids_by_ref.setdefault(ref, []).append(target_id)
+    if subject.normalized_brief.reader_state_informed and len(paragraph_refs) >= 4:
+        penultimate_ref = paragraph_refs[-2]
+        for target_id in (
+            "final_return_echo_reread_strength",
+            "opening_return_transformation_strengthening",
+        ):
+            if target_id in subject.normalized_brief.active_transformation_target_ids:
+                active_ids_by_ref.setdefault(penultimate_ref, []).append(target_id)
 
     specs: list[dict[str, object]] = []
     material_ids = set(subject.normalized_brief.material_required_target_ids)
@@ -2341,7 +2420,13 @@ def _target_paragraph_specs(
     forbidden = list(subject.normalized_brief.forbidden_changes)
     for index, before_text in enumerate(target.original_target):
         ref = paragraph_refs[index]
-        active_ids = _unique(active_ids_by_ref.get(ref, []))
+        raw_active_ids = _unique(active_ids_by_ref.get(ref, []))
+        active_ids, deferred_or_removed_ids = _operational_active_ids_for_paragraph(
+            subject=subject,
+            parent_ref=ref,
+            before_text=before_text,
+            active_ids=raw_active_ids,
+        )
         material_change_required = any(target_id in material_ids for target_id in active_ids)
         instruction_parts = [
             descriptions[target_id]
@@ -2360,7 +2445,9 @@ def _target_paragraph_specs(
                 "before_text": before_text,
                 "before_text_sha256": sha256_text(before_text),
                 "word_count": len(_words(before_text)),
+                "raw_active_target_ids": raw_active_ids,
                 "active_target_ids": active_ids,
+                "deferred_or_removed_active_target_ids": deferred_or_removed_ids,
                 "material_change_required": material_change_required,
                 "transformation_instruction": " ".join(instruction_parts)
                 or "Preserve this paragraph unless the controller assigned a material target.",
@@ -2369,6 +2456,37 @@ def _target_paragraph_specs(
             }
         )
     return specs
+
+
+def _operational_active_ids_for_paragraph(
+    *,
+    subject: MacroSubject,
+    parent_ref: str,
+    before_text: str,
+    active_ids: list[str],
+) -> tuple[list[str], list[str]]:
+    if not subject.normalized_brief.reader_state_informed:
+        return _unique(active_ids), []
+    retained: list[str] = []
+    deferred_or_removed: list[str] = []
+    for target_id in active_ids:
+        if (
+            target_id == "thesis_visible_proof_language_reduction"
+            and not _paragraph_has_thesis_visible_proof_work(parent_ref, before_text)
+        ):
+            deferred_or_removed.append(target_id)
+            continue
+        retained.append(target_id)
+    return _unique(retained), _unique(deferred_or_removed)
+
+
+def _paragraph_has_thesis_visible_proof_work(parent_ref: str, before_text: str) -> bool:
+    if parent_ref == "target_p001":
+        return True
+    if parent_ref != "target_p002":
+        return False
+    sentences = _sentence_like_spans(before_text)
+    return any(_is_proof_sentence(sentence) for sentence in sentences)
 
 
 def _target_span_specs(
@@ -2383,11 +2501,13 @@ def _target_span_specs(
     span_specs: list[dict[str, object]] = []
     for paragraph_spec in specs:
         parent_ref = str(paragraph_spec["target_paragraph_ref"])
+        paragraph_active_ids = _string_tuple(paragraph_spec.get("active_target_ids"))
         sentences = _sentence_like_spans(str(paragraph_spec["before_text"]))
         material_indexes = _material_span_indexes_for_paragraph(
             subject,
             parent_ref=parent_ref,
             sentences=sentences,
+            paragraph_active_ids=paragraph_active_ids,
         )
         for index, before_text in enumerate(sentences):
             role = _target_span_role(
@@ -2396,14 +2516,13 @@ def _target_span_specs(
                 span_index=index,
                 before_text=before_text,
                 material_indexes=material_indexes,
+                paragraph_active_ids=paragraph_active_ids,
             )
             active_ids = _target_span_active_ids(
                 subject,
                 parent_ref=parent_ref,
                 role=role,
-                paragraph_active_ids=_string_tuple(
-                    paragraph_spec.get("active_target_ids")
-                ),
+                paragraph_active_ids=paragraph_active_ids,
             )
             material = index in material_indexes
             span_ref = _target_span_ref(parent_ref, index)
@@ -2470,30 +2589,65 @@ def _material_span_indexes_for_paragraph(
     *,
     parent_ref: str,
     sentences: list[str],
+    paragraph_active_ids: tuple[str, ...],
 ) -> set[int]:
-    if (
-        parent_ref != "target_p001"
-        or "thesis_visible_proof_language_reduction"
-        not in subject.normalized_brief.active_transformation_target_ids
-    ):
+    if not subject.normalized_brief.reader_state_informed:
         return set()
-    thesis_indexes = [
-        index
-        for index, sentence in enumerate(sentences)
-        if _is_thesis_framing_sentence(sentence)
-    ]
-    proof_indexes = [
-        index for index, sentence in enumerate(sentences) if _is_proof_sentence(sentence)
-    ]
-    if not thesis_indexes:
+    active_set = set(paragraph_active_ids)
+    material_indexes: set[int] = set()
+    if (
+        parent_ref == "target_p001"
+        and "thesis_visible_proof_language_reduction" in active_set
+    ):
         thesis_indexes = [
             index
             for index, sentence in enumerate(sentences)
-            if not _is_proof_sentence(sentence)
-        ][:1]
-    if not proof_indexes and sentences:
-        proof_indexes = [len(sentences) - 1]
-    return set(thesis_indexes[:1] + proof_indexes[:1])
+            if _is_thesis_framing_sentence(sentence)
+        ]
+        proof_indexes = [
+            index for index, sentence in enumerate(sentences) if _is_proof_sentence(sentence)
+        ]
+        if not thesis_indexes:
+            thesis_indexes = [
+                index
+                for index, sentence in enumerate(sentences)
+                if not _is_proof_sentence(sentence)
+            ][:1]
+        if not proof_indexes and sentences:
+            proof_indexes = [len(sentences) - 1]
+        material_indexes.update(thesis_indexes[:1] + proof_indexes[:1])
+    if "proof_no_outside_answer_refinement" in active_set:
+        proof_pressure_indexes = [
+            index
+            for index, sentence in enumerate(sentences)
+            if _is_no_outside_answer_sentence(sentence) or _is_proof_sentence(sentence)
+        ]
+        if not proof_pressure_indexes and sentences:
+            proof_pressure_indexes = [0]
+        material_indexes.update(proof_pressure_indexes[:1])
+    if {
+        "final_return_echo_reread_strength",
+        "opening_return_transformation_strengthening",
+    } & active_set:
+        return_indexes = [
+            index
+            for index, sentence in enumerate(sentences)
+            if _is_return_echo_sentence(sentence)
+        ]
+        opening_return_indexes = [
+            index
+            for index, sentence in enumerate(sentences)
+            if _is_opening_return_sentence(sentence)
+        ]
+        if not return_indexes and sentences:
+            return_indexes = [0]
+        if not opening_return_indexes and sentences:
+            opening_return_indexes = [len(sentences) - 1]
+        if "final_return_echo_reread_strength" in active_set:
+            material_indexes.update(return_indexes[:1])
+        if "opening_return_transformation_strengthening" in active_set:
+            material_indexes.update(opening_return_indexes[:1])
+    return material_indexes
 
 
 def _is_thesis_framing_sentence(sentence: str) -> bool:
@@ -2515,6 +2669,54 @@ def _is_proof_sentence(sentence: str) -> bool:
     return "proof" in normalized or "proves" in normalized
 
 
+def _is_no_outside_answer_sentence(sentence: str) -> bool:
+    normalized = " ".join(_normalized_words(sentence))
+    markers = (
+        "no answer",
+        "outside",
+        "answer",
+        "rescue",
+        "silence",
+        "line bears",
+        "evidence",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _is_return_echo_sentence(sentence: str) -> bool:
+    normalized = " ".join(_normalized_words(sentence))
+    markers = (
+        "return",
+        "morning comes back",
+        "same table",
+        "still there",
+        "table ordinary",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _is_opening_return_sentence(sentence: str) -> bool:
+    normalized = " ".join(_normalized_words(sentence))
+    markers = (
+        "opening",
+        "beginning",
+        "reread",
+        "rereadable",
+        "first line",
+        "first sentence",
+        "comes back",
+        "returning",
+        "same table",
+        "altered",
+        "changed relation",
+        "last condition",
+        "no longer a premise",
+        "not unchanged",
+        "to be read",
+    )
+    return any(marker in normalized for marker in markers)
+
+
 def _target_span_role(
     subject: MacroSubject,
     *,
@@ -2522,15 +2724,26 @@ def _target_span_role(
     span_index: int,
     before_text: str,
     material_indexes: set[int],
+    paragraph_active_ids: tuple[str, ...],
 ) -> str:
+    if not subject.normalized_brief.reader_state_informed or span_index not in material_indexes:
+        return "context_or_preserve"
+    active_set = set(paragraph_active_ids)
     if (
-        subject.normalized_brief.reader_state_informed
-        and parent_ref == "target_p001"
-        and span_index in material_indexes
+        parent_ref == "target_p001"
+        and "thesis_visible_proof_language_reduction" in active_set
     ):
         if _is_proof_sentence(before_text):
             return "proof_sentence"
         return "thesis_frame"
+    if "proof_no_outside_answer_refinement" in active_set:
+        return "proof_no_outside_answer"
+    if "opening_return_transformation_strengthening" in active_set and _is_opening_return_sentence(
+        before_text
+    ):
+        return "opening_return_transform"
+    if "final_return_echo_reread_strength" in active_set:
+        return "return_echo"
     return "context_or_preserve"
 
 
@@ -2549,6 +2762,21 @@ def _target_span_active_ids(
         in subject.normalized_brief.active_transformation_target_ids
     ):
         return ("thesis_visible_proof_language_reduction",)
+    if role == "proof_no_outside_answer":
+        ids = ["proof_no_outside_answer_refinement"]
+        if "thesis_visible_proof_language_reduction" in paragraph_active_ids:
+            ids.append("thesis_visible_proof_language_reduction")
+        return tuple(ids)
+    if role == "return_echo":
+        return ("final_return_echo_reread_strength",)
+    if role == "opening_return_transform":
+        return ("opening_return_transformation_strengthening",)
+    if (
+        subject.normalized_brief.reader_state_informed
+        and role == "context_or_preserve"
+        and "preserve_reader_state_partial_gain" in paragraph_active_ids
+    ):
+        return ("preserve_reader_state_partial_gain",)
     return paragraph_active_ids
 
 
@@ -2568,6 +2796,21 @@ def _target_span_instruction(
             "Tighten or relocate proof language so proof occurs through the object "
             "sequence rather than commentary over the scene."
         )
+    if role == "proof_no_outside_answer":
+        return (
+            "Make the no-outside-answer pressure occur through local object relation; "
+            "do not leave it as an abstract statement of isolation or proof."
+        )
+    if role == "return_echo":
+        return (
+            "Strengthen the return so the same table/room rereads as altered relation; "
+            "preserve the return function rather than the exact prose."
+        )
+    if role == "opening_return_transform":
+        return (
+            "Make the return visibly transform the opening image through local relation, "
+            "not through summary or architecture labels."
+        )
     parts = [descriptions[target_id] for target_id in active_ids if target_id in descriptions]
     return " ".join(parts) or "Preserve unless another controller target requires change."
 
@@ -2577,7 +2820,192 @@ def _target_span_allowed_operation(role: str, material: bool) -> str:
         return "remove_thesis_frame"
     if role == "proof_sentence":
         return "relocate_to_object_sequence"
+    if role == "proof_no_outside_answer":
+        return "embody_no_outside_answer_pressure"
+    if role == "return_echo":
+        return "strengthen_return_echo"
+    if role == "opening_return_transform":
+        return "make_opening_return_transformational"
     return "compress" if material else "preserve_only"
+
+
+def _target_assignment_consistency_report_for_subject(
+    subject: MacroSubject,
+) -> dict[str, object]:
+    target = _target_window(subject.base_text)
+    target_paragraphs = _target_paragraph_specs(subject, target)
+    target_spans = _target_span_specs(subject, target, target_paragraphs)
+    return _build_target_assignment_consistency_report(
+        target_paragraphs=target_paragraphs,
+        target_spans=target_spans,
+        material_required_target_ids=subject.normalized_brief.material_required_target_ids,
+        reader_state_informed=subject.normalized_brief.reader_state_informed,
+    )
+
+
+def _build_target_assignment_consistency_report(
+    *,
+    target_paragraphs: list[dict[str, object]],
+    target_spans: list[dict[str, object]],
+    material_required_target_ids: tuple[str, ...],
+    reader_state_informed: bool,
+) -> dict[str, object]:
+    if not reader_state_informed:
+        return {
+            "target_assignment_consistency_passed": True,
+            "reader_state_informed_required": False,
+            "inconsistent_target_paragraph_refs": [],
+            "paragraphs_with_material_targets_and_no_material_spans": [],
+            "material_targets_without_operational_unit": [],
+            "paragraph_level_only_targets": [],
+            "deferred_or_removed_targets_by_paragraph": {},
+            "paragraph_reports": [
+                {
+                    "target_paragraph_ref": str(
+                        paragraph.get("target_paragraph_ref") or ""
+                    ),
+                    "material_change_required": bool(
+                        paragraph.get("material_change_required")
+                    ),
+                    "material_target_ids": [],
+                    "operational_material_span_refs": [],
+                    "child_material_target_ids": [],
+                    "missing_material_target_ids": [],
+                    "deferred_or_removed_active_target_ids": [],
+                }
+                for paragraph in target_paragraphs
+            ],
+            "target_span_count": len(target_spans),
+            "material_target_span_count": 0,
+            "p003_specific_summary": {},
+            "not_applicable_reason": (
+                "target-assignment child-span consistency is required only for "
+                "reader_state_informed_macro_2"
+            ),
+            "not_finalization_eligible": True,
+            "no_phase_shift_claim": True,
+        }
+    material_ids = set(material_required_target_ids)
+    spans_by_parent: dict[str, list[dict[str, object]]] = {}
+    for span in target_spans:
+        parent_ref = str(span.get("parent_target_paragraph_ref") or "")
+        spans_by_parent.setdefault(parent_ref, []).append(span)
+
+    inconsistent_refs: list[str] = []
+    no_material_span_refs: list[str] = []
+    material_targets_without_unit: list[dict[str, object]] = []
+    deferred_by_paragraph: dict[str, list[str]] = {}
+    paragraph_reports: list[dict[str, object]] = []
+
+    for paragraph in target_paragraphs:
+        ref = str(paragraph.get("target_paragraph_ref") or "")
+        active_ids = _string_tuple(paragraph.get("active_target_ids"))
+        material_target_ids = [target_id for target_id in active_ids if target_id in material_ids]
+        deferred_ids = list(_string_tuple(paragraph.get("deferred_or_removed_active_target_ids")))
+        if deferred_ids:
+            deferred_by_paragraph[ref] = deferred_ids
+        child_spans = spans_by_parent.get(ref, [])
+        operational_spans = [
+            span
+            for span in child_spans
+            if _target_span_has_operational_material_assignment(span)
+        ]
+        child_material_target_ids = sorted(
+            {
+                target_id
+                for span in operational_spans
+                for target_id in _string_tuple(span.get("active_target_ids"))
+                if target_id in material_ids
+            }
+        )
+        missing_targets = [
+            target_id
+            for target_id in material_target_ids
+            if target_id not in child_material_target_ids
+        ]
+        if (
+            reader_state_informed
+            and bool(paragraph.get("material_change_required"))
+            and material_target_ids
+            and not operational_spans
+        ):
+            no_material_span_refs.append(ref)
+        for target_id in missing_targets:
+            material_targets_without_unit.append(
+                {
+                    "target_paragraph_ref": ref,
+                    "target_id": target_id,
+                    "reason": (
+                        "material active target is assigned to the paragraph without a "
+                        "material child span, paragraph-level-only operation, or "
+                        "deferred/removal record"
+                    ),
+                }
+            )
+        if ref in no_material_span_refs or missing_targets:
+            inconsistent_refs.append(ref)
+        paragraph_reports.append(
+            {
+                "target_paragraph_ref": ref,
+                "material_change_required": bool(
+                    paragraph.get("material_change_required")
+                ),
+                "material_target_ids": material_target_ids,
+                "operational_material_span_refs": [
+                    str(span.get("target_span_ref") or "") for span in operational_spans
+                ],
+                "child_material_target_ids": child_material_target_ids,
+                "missing_material_target_ids": missing_targets,
+                "deferred_or_removed_active_target_ids": deferred_ids,
+            }
+        )
+
+    passed = (
+        not reader_state_informed
+        or (not no_material_span_refs and not material_targets_without_unit)
+    )
+    material_span_count = len(
+        [
+            span
+            for span in target_spans
+            if _target_span_has_operational_material_assignment(span)
+        ]
+    )
+    p003_report = next(
+        (
+            report
+            for report in paragraph_reports
+            if report["target_paragraph_ref"] == "target_p003"
+        ),
+        None,
+    )
+    return {
+        "target_assignment_consistency_passed": passed,
+        "reader_state_informed_required": reader_state_informed,
+        "inconsistent_target_paragraph_refs": sorted(_unique(inconsistent_refs)),
+        "paragraphs_with_material_targets_and_no_material_spans": sorted(
+            _unique(no_material_span_refs)
+        ),
+        "material_targets_without_operational_unit": material_targets_without_unit,
+        "paragraph_level_only_targets": [],
+        "deferred_or_removed_targets_by_paragraph": deferred_by_paragraph,
+        "paragraph_reports": paragraph_reports,
+        "target_span_count": len(target_spans),
+        "material_target_span_count": material_span_count,
+        "p003_specific_summary": p003_report or {},
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+    }
+
+
+def _target_span_has_operational_material_assignment(span: dict[str, object]) -> bool:
+    instruction = str(span.get("transformation_instruction") or "").strip().lower()
+    return (
+        bool(span.get("material_change_required"))
+        and str(span.get("allowed_operation") or "") != "preserve_only"
+        and bool(instruction)
+        and not instruction.startswith("preserve unless")
+    )
 
 
 def _target_span_ref(parent_ref: str, index: int) -> str:
@@ -2595,6 +3023,12 @@ def _collect_live_macro_validation_result(
     span_failures: dict[str, dict[str, object]] = {}
     replacement_paragraphs: tuple[str, ...] = ()
     target_coverage_report: dict[str, object] = {}
+    assignment_report = _target_assignment_consistency_report_for_subject(subject)
+    if not bool(assignment_report.get("target_assignment_consistency_passed")):
+        fatal_failures.append(
+            "target assignment inconsistent before model-output validation: "
+            f"{assignment_report.get('inconsistent_target_paragraph_refs', [])}"
+        )
 
     for validator in (
         lambda: _validate_section_plan(subject, payload),

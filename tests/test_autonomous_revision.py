@@ -55,8 +55,10 @@ from abi.modules.bounded_macro_recomposition import (
     ACTIVE_TRANSFORMATION_TARGET_IDS,
     BOUNDED_MACRO_RECOMPOSITION_ARTIFACT_TYPES,
     READER_STATE_MACRO_2_ACTIVE_TARGET_IDS,
+    READER_STATE_MACRO_2_MATERIAL_REQUIRED_TARGET_IDS,
     READER_STATE_MACRO_2_TARGET_SCOPE,
     REQUIRED_SEMANTIC_CONSTRAINT_IDS,
+    _build_target_assignment_consistency_report,
     run_bounded_macro_recomposition,
 )
 from abi.modules.ablation_informed_revision import (
@@ -5778,6 +5780,13 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
     target_spans = work_order["target_spans"]
     assert target_spans
     assert work_order["active_target_units"] == target_spans
+    assignment_report = work_order["target_assignment_consistency_report"]
+    assert work_order["target_assignment_consistency_passed"] is True
+    assert assignment_report["target_assignment_consistency_passed"] is True
+    assert assignment_report["inconsistent_target_paragraph_refs"] == []
+    assert assignment_report["material_targets_without_operational_unit"] == []
+    assert assignment_report["paragraphs_with_material_targets_and_no_material_spans"] == []
+    assert assignment_report["deferred_or_removed_targets_by_paragraph"]
     p001_spans = [
         span
         for span in target_spans
@@ -5800,6 +5809,54 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
         for span in p001_spans
         if span["material_change_required"]
     } <= {"remove_thesis_frame", "relocate_to_object_sequence", "compress"}
+    spans_by_parent = {}
+    for span in target_spans:
+        spans_by_parent.setdefault(span["parent_target_paragraph_ref"], []).append(span)
+    final_ref = next(
+        paragraph["target_paragraph_ref"]
+        for paragraph in target_paragraphs
+        if "final_return_echo_reread_strength" in paragraph["active_target_ids"]
+    )
+    final_paragraph = next(
+        paragraph
+        for paragraph in target_paragraphs
+        if paragraph["target_paragraph_ref"] == final_ref
+    )
+    assert "opening_return_transformation_strengthening" in final_paragraph[
+        "active_target_ids"
+    ]
+    assert "thesis_visible_proof_language_reduction" not in final_paragraph[
+        "active_target_ids"
+    ]
+    assert "thesis_visible_proof_language_reduction" in final_paragraph[
+        "deferred_or_removed_active_target_ids"
+    ]
+    final_material_spans = [
+        span
+        for span in spans_by_parent[final_ref]
+        if span["material_change_required"]
+    ]
+    assert any(
+        "final_return_echo_reread_strength" in span["active_target_ids"]
+        and span["allowed_operation"] == "strengthen_return_echo"
+        for span in final_material_spans
+    )
+    assert any(
+        "opening_return_transformation_strengthening" in span["active_target_ids"]
+        and span["allowed_operation"] == "make_opening_return_transformational"
+        for span in final_material_spans
+    )
+    proof_ref = next(
+        paragraph["target_paragraph_ref"]
+        for paragraph in target_paragraphs
+        if "proof_no_outside_answer_refinement" in paragraph["active_target_ids"]
+    )
+    assert any(
+        span["material_change_required"]
+        and span["allowed_operation"] == "embody_no_outside_answer_pressure"
+        and "proof_no_outside_answer_refinement" in span["active_target_ids"]
+        for span in spans_by_parent[proof_ref]
+    )
     assert {
         target["target_id"] for target in work_order["active_transformation_targets"]
     } == set(READER_STATE_MACRO_2_ACTIVE_TARGET_IDS)
@@ -5825,12 +5882,18 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
     assert set(coverage["active_transformation_targets"]) == set(
         READER_STATE_MACRO_2_ACTIVE_TARGET_IDS
     )
+    assert diff["target_assignment_consistency_passed"] is True
 
     gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
     assert gate["passed"] is False
     assert gate["reader_state_informed_brief_consumed"] is True
     assert gate["macro_target_coverage_passed"] is True
     assert gate["macro_materiality_passed"] is True
+    assert gate["target_assignment_consistency_passed"] is True
+    assert gate["target_assignment_consistency_report"][
+        "target_assignment_consistency_passed"
+    ] is True
+    assert result.payload["target_assignment_consistency_passed"] is True
     assert "macro_recomposition_executed_ablation_completed" in gate["failed_gates"]
     assert "internal_operator_approval" in gate["failed_gates"]
 
@@ -5841,6 +5904,52 @@ def test_bounded_macro_recomposition_accepts_reader_state_macro_2_brief(tmp_path
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
     assert final_report.refused is True
+
+
+def test_bounded_macro_recomposition_target_assignment_consistency_rejects_all_preserve_material_spans(
+    tmp_path,
+):
+    chain = build_reader_state_macro_synthesis_chain(tmp_path)
+
+    result = run_bounded_macro_recomposition(
+        chain["config"],
+        client_name="fake",
+        synthesis_packet=Path(str(chain["synthesis"]["packet_dir"])),
+    )
+    assert result.exit_code == 0
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    work_order = read_payload(packet_dir / "macro_recomposition_work_order.json")
+    target_paragraphs = work_order["target_paragraphs"]
+    target_spans = [dict(span) for span in work_order["target_spans"]]
+    final_ref = next(
+        paragraph["target_paragraph_ref"]
+        for paragraph in target_paragraphs
+        if "final_return_echo_reread_strength" in paragraph["active_target_ids"]
+    )
+
+    for span in target_spans:
+        if span["parent_target_paragraph_ref"] == final_ref:
+            span["material_change_required"] = False
+            span["allowed_operation"] = "preserve_only"
+
+    report = _build_target_assignment_consistency_report(
+        target_paragraphs=target_paragraphs,
+        target_spans=target_spans,
+        material_required_target_ids=READER_STATE_MACRO_2_MATERIAL_REQUIRED_TARGET_IDS,
+        reader_state_informed=True,
+    )
+
+    assert report["target_assignment_consistency_passed"] is False
+    assert final_ref in report["paragraphs_with_material_targets_and_no_material_spans"]
+    missing = {
+        item["target_id"]
+        for item in report["material_targets_without_operational_unit"]
+        if item["target_paragraph_ref"] == final_ref
+    }
+    assert {
+        "final_return_echo_reread_strength",
+        "opening_return_transformation_strengthening",
+    } <= missing
 
 
 def test_bounded_macro_recomposition_openai_guards_refuse_before_model_calls(
@@ -6118,6 +6227,27 @@ def test_bounded_macro_recomposition_reader_state_macro_2_stubbed_openai_target_
         and span["material_change_required"]
         for span in prompt["work_order"]["target_spans"]
     )
+    final_ref = next(
+        paragraph["target_paragraph_ref"]
+        for paragraph in prompt["work_order"]["target_paragraphs"]
+        if "final_return_echo_reread_strength" in paragraph["active_target_ids"]
+    )
+    assert "thesis_visible_proof_language_reduction" not in next(
+        paragraph["active_target_ids"]
+        for paragraph in prompt["work_order"]["target_paragraphs"]
+        if paragraph["target_paragraph_ref"] == final_ref
+    )
+    final_material_spans = [
+        span
+        for span in prompt["work_order"]["target_spans"]
+        if span["parent_target_paragraph_ref"] == final_ref
+        and span["material_change_required"]
+    ]
+    assert {
+        "strengthen_return_echo",
+        "make_opening_return_transformational",
+    } <= {span["allowed_operation"] for span in final_material_spans}
+    assert prompt["work_order"]["target_assignment_consistency_passed"] is True
 
     section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
     assert section["controller_assembled_from_target_paragraph_replacements"] is True
@@ -6237,6 +6367,21 @@ def test_bounded_macro_recomposition_reader_state_macro_2_corrective_retry_accep
         item["target_paragraph_ref"]
         for item in retry_prompt["failed_target_paragraphs"]
     ] == ["target_p004"]
+    failed_p004 = retry_prompt["failed_target_paragraphs"][0]
+    assert failed_p004["target_paragraph_ref"] == "target_p004"
+    failed_p004_spans = failed_p004["failed_target_spans"]
+    assert {
+        "strengthen_return_echo",
+        "make_opening_return_transformational",
+    } <= {span["allowed_operation"] for span in failed_p004_spans}
+    assert any(
+        "final_return_echo_reread_strength" in span["active_target_ids"]
+        for span in failed_p004_spans
+    )
+    assert any(
+        "opening_return_transformation_strengthening" in span["active_target_ids"]
+        for span in failed_p004_spans
+    )
     packet_dir = Path(str(result.payload["packet_dir"]))
     section = read_payload(packet_dir / "macro_patch_or_section_plan.json")
     report = section["target_addressed_retry_report"]
