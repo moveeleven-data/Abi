@@ -103,6 +103,10 @@ from abi.modules.object_event_recomposition import (
     run_object_event_recomposition,
 )
 from abi.modules.pilot_artifact_set import import_pilot_rival, run_pilot_artifact_set
+from abi.modules.supervised_cycle_authorization import (
+    SUPERVISED_CYCLE_AUTHORIZATION_ARTIFACT_TYPES,
+    run_supervised_cycle_authorization,
+)
 
 
 SOURCE_NOTE = """# Source Note
@@ -7887,6 +7891,214 @@ def test_evidence_loop_review_refuses_missing_best_current_candidate(tmp_path):
     assert result.payload["artifact_ids"] == {}
     assert result.payload["counts"]["model_calls"] == 0
     assert result.payload["candidate_generated"] is False
+
+
+def test_supervised_cycle_authorization_refuses_without_operator_review(tmp_path):
+    chain = build_object_event_candidate_with_reader_state(tmp_path)
+    synthesis = run_autonomous_evidence_synthesis(chain["config"], run_id=chain["run_id"])
+    loop_review = run_evidence_loop_review(
+        chain["config"],
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+
+    with connect(chain["config"].db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_supervised_cycle_authorization(
+        chain["config"],
+        loop_review_packet=Path(str(loop_review.payload["packet_dir"])),
+        operator_reviewed=False,
+        decision=None,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["artifact_ids"] == {}
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+    with connect(chain["config"].db_path) as connection:
+        after_calls = list_model_calls(connection)
+    assert len(after_calls) == len(before_calls)
+
+
+def test_supervised_cycle_authorization_refuses_missing_loop_review_packet(tmp_path):
+    config = config_for(tmp_path)
+
+    result = run_supervised_cycle_authorization(
+        config,
+        loop_review_packet=tmp_path / "missing_loop_review_packet",
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "directory not found" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_supervised_cycle_authorization_accepts_reviewed_strategy_only_decision(
+    tmp_path,
+):
+    chain = build_object_event_candidate_with_reader_state(tmp_path)
+    config = chain["config"]
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=chain["run_id"])
+    loop_review = run_evidence_loop_review(
+        config,
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_supervised_cycle_authorization(
+        config,
+        loop_review_packet=Path(str(loop_review.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert set(result.payload["artifact_ids"]) == set(
+        SUPERVISED_CYCLE_AUTHORIZATION_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["counts"]["produced_artifacts"] == len(
+        SUPERVISED_CYCLE_AUTHORIZATION_ARTIFACT_TYPES
+    )
+    assert result.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["operator_reviewed"] is True
+    assert result.payload["decision"] == "authorize_next_strategy_only"
+    assert result.payload["next_strategy_authorized"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["ready_for_supervised_next_strategy"] is True
+    assert result.payload["ready_for_supervised_candidate_generation"] is False
+    assert result.payload["ready_for_full_autonomous_loop_controller"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        "prepare_next_residual_target_strategy_under_supervision"
+    )
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(
+        packet_dir / "supervised_cycle_authorization_subject_manifest.json"
+    )
+    assert manifest["loop_review_packet_id"] == loop_review.payload["packet_id"]
+    assert manifest["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert manifest["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert manifest["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert manifest["source_synthesis_packet_id"] == synthesis.payload["packet_id"]
+    assert manifest["completed_cycles"] == 2
+    assert manifest["finalization_eligible"] is False
+    assert manifest["no_phase_shift_claim"] is True
+
+    operator = read_payload(packet_dir / "operator_review_record.json")
+    assert operator["operator_reviewed"] is True
+    assert operator["decision"] == "authorize_next_strategy_only"
+    assert operator["not_final_operator_approval"] is True
+    assert operator["not_human_validation"] is True
+    assert operator["does_not_authorize_finalization"] is True
+
+    cleanup = read_payload(packet_dir / "cleanup_resolution_report.json")
+    assert cleanup["fresh_loop_integrity_cleanup_passed"] is True
+    assert cleanup["legacy_packet_count_quirks_nonblocking_for_supervised_cycle"] is True
+    assert cleanup["full_autonomous_loop_cleanup_complete"] is False
+    assert cleanup["supervised_strategy_step_cleanup_complete"] is True
+
+    readiness = read_payload(
+        packet_dir / "supervised_next_cycle_readiness_report.json"
+    )
+    assert readiness["ready_for_supervised_next_strategy"] is True
+    assert readiness["ready_for_supervised_candidate_generation"] is False
+    assert readiness["ready_for_full_autonomous_loop_controller"] is False
+    assert readiness["next_strategy_authorized"] is True
+    assert readiness["next_generation_authorized"] is False
+
+    constraints = read_payload(packet_dir / "next_cycle_scope_constraints.json")
+    assert constraints["next_strategy_authorized"] is True
+    assert constraints["next_generation_authorized"] is False
+    assert "no candidate generation" in constraints["scope"]
+    assert constraints["candidate_generation_requires_later_authorization_packet"] is True
+    assert constraints["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+
+    gate = read_payload(packet_dir / "authorization_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    for gate_name in (
+        "loop_review_packet_consumed",
+        "operator_review_recorded",
+        "current_best_candidate_identified",
+        "proof_packet_linked",
+        "reader_state_packet_linked",
+        "completed_cycles_present",
+        "cleanup_resolution_recorded",
+        "next_strategy_authorized",
+        "no_candidate_generated",
+        "no_openai_calls",
+        "no_final_claim",
+        "no_phase_shift_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    for gate_name in (
+        "next_candidate_generation_authorized",
+        "full_autonomous_loop_controller_ready",
+        "finalization_eligible",
+        "human_validation_present",
+        "strongest_rival_defeated",
+    ):
+        assert gate_results[gate_name]["passed"] is False
+    assert gate["ready_for_supervised_next_strategy"] is True
+    assert gate["ready_for_supervised_candidate_generation"] is False
+    assert gate["ready_for_full_autonomous_loop_controller"] is False
+    assert gate["next_generation_authorized"] is False
+    assert gate["candidate_generated"] is False
+    assert gate["model_calls"] == 0
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    packet = read_payload(packet_dir / "supervised_cycle_authorization_packet.json")
+    assert packet["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert packet["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert packet["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert packet["completed_cycles"] == 2
+    assert packet["next_strategy_authorized"] is True
+    assert packet["next_generation_authorized"] is False
+    assert packet["ready_for_full_autonomous_loop_controller"] is False
+    assert packet["candidate_generated"] is False
+    assert packet["model_calls"] == 0
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
 
 
 def test_autonomous_evidence_synthesis_keeps_macro2_without_object_event_proof(tmp_path):

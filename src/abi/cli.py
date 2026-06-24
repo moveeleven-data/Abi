@@ -61,6 +61,10 @@ from abi.modules.object_event_recomposition import (
     OBJECT_EVENT_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
     run_object_event_recomposition,
 )
+from abi.modules.supervised_cycle_authorization import (
+    SUPERVISED_CYCLE_AUTHORIZATION_DECISIONS,
+    run_supervised_cycle_authorization,
+)
 from abi.modules.live_abi_ear import (
     LIVE_ABI_EAR_CLIENTS,
     LIVE_ABI_EAR_MAX_MODEL_CALLS_DEFAULT,
@@ -468,6 +472,26 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Autonomous evidence synthesis packet directory to consume.",
     )
+    autonomous_authorize_next_cycle_parser = autonomous_subparsers.add_parser(
+        "authorize-next-cycle",
+        help="Record supervised operator review of a loop-review packet",
+    )
+    autonomous_authorize_next_cycle_parser.add_argument(
+        "--loop-review-packet",
+        type=Path,
+        required=True,
+        help="Evidence loop-review packet directory to inspect.",
+    )
+    autonomous_authorize_next_cycle_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the loop-review packet.",
+    )
+    autonomous_authorize_next_cycle_parser.add_argument(
+        "--decision",
+        choices=SUPERVISED_CYCLE_AUTHORIZATION_DECISIONS,
+        help="Supervised decision for the next cycle.",
+    )
     autonomous_object_event_parser = autonomous_subparsers.add_parser(
         "object-event-recompose",
         help="Run one bounded object-event pressure recomposition from a strategy packet",
@@ -679,6 +703,13 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_loop_review(
             config,
             synthesis_packet=args.synthesis_packet,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "authorize-next-cycle":
+        return _cmd_autonomous_authorize_next_cycle(
+            config,
+            loop_review_packet=args.loop_review_packet,
+            operator_reviewed=args.operator_reviewed,
+            decision=args.decision,
         )
     if args.command == "autonomous" and args.autonomous_command == "object-event-recompose":
         return _cmd_autonomous_object_event_recompose(
@@ -1048,6 +1079,23 @@ def _cmd_autonomous_loop_review(
     synthesis_packet: Path,
 ) -> int:
     result = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_authorize_next_cycle(
+    config: AbiConfig,
+    *,
+    loop_review_packet: Path,
+    operator_reviewed: bool,
+    decision: str | None,
+) -> int:
+    result = run_supervised_cycle_authorization(
+        config,
+        loop_review_packet=loop_review_packet,
+        operator_reviewed=operator_reviewed,
+        decision=decision,
+    )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
 
