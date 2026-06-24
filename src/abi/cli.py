@@ -62,6 +62,7 @@ from abi.modules.object_event_recomposition import (
     run_object_event_recomposition,
 )
 from abi.modules.residual_target_selection import run_residual_target_selection
+from abi.modules.residual_work_order import run_residual_work_order_planning
 from abi.modules.supervised_cycle_authorization import (
     SUPERVISED_CYCLE_AUTHORIZATION_DECISIONS,
     run_supervised_cycle_authorization,
@@ -522,6 +523,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm the operator reviewed and selected the target.",
     )
+    autonomous_plan_residual_work_order_parser = autonomous_subparsers.add_parser(
+        "plan-residual-work-order",
+        help="Plan an object-motion residual work order without generation",
+    )
+    autonomous_plan_residual_work_order_parser.add_argument(
+        "--selection-packet",
+        type=Path,
+        required=True,
+        help="Residual target selection packet directory to consume.",
+    )
     autonomous_object_event_parser = autonomous_subparsers.add_parser(
         "object-event-recompose",
         help="Run one bounded object-event pressure recomposition from a strategy packet",
@@ -748,6 +759,11 @@ def main(argv: list[str] | None = None) -> int:
             strategy_packet=args.strategy_packet,
             target=args.target,
             operator_reviewed=args.operator_reviewed,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "plan-residual-work-order":
+        return _cmd_autonomous_plan_residual_work_order(
+            config,
+            selection_packet=args.selection_packet,
         )
     if args.command == "autonomous" and args.autonomous_command == "object-event-recompose":
         return _cmd_autonomous_object_event_recompose(
@@ -1155,6 +1171,19 @@ def _cmd_autonomous_select_residual_target(
         strategy_packet=strategy_packet,
         target=target,
         operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_plan_residual_work_order(
+    config: AbiConfig,
+    *,
+    selection_packet: Path,
+) -> int:
+    result = run_residual_work_order_planning(
+        config,
+        selection_packet=selection_packet,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
