@@ -459,8 +459,17 @@ def build_parser() -> argparse.ArgumentParser:
     autonomous_plan_next_target_parser.add_argument(
         "--synthesis-packet",
         type=Path,
-        required=True,
+        required=False,
         help="Autonomous evidence synthesis packet directory to consume.",
+    )
+    autonomous_plan_next_target_parser.add_argument(
+        "--authorization-packet",
+        type=Path,
+        required=False,
+        help=(
+            "Supervised cycle authorization packet directory to consume for "
+            "authorization-aware next-target planning."
+        ),
     )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
@@ -698,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_plan_next_target(
             config,
             synthesis_packet=args.synthesis_packet,
+            authorization_packet=args.authorization_packet,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1066,9 +1076,14 @@ def _cmd_autonomous_reader_state_eval(
 def _cmd_autonomous_plan_next_target(
     config: AbiConfig,
     *,
-    synthesis_packet: Path,
+    synthesis_packet: Path | None,
+    authorization_packet: Path | None,
 ) -> int:
-    result = run_next_target_strategy(config, synthesis_packet=synthesis_packet)
+    result = run_next_target_strategy(
+        config,
+        synthesis_packet=synthesis_packet,
+        authorization_packet=authorization_packet,
+    )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
 

@@ -603,6 +603,35 @@ def build_next_target_strategy_ready_chain(tmp_path: Path):
     return chain
 
 
+def build_authorized_next_target_strategy_chain(tmp_path: Path):
+    chain = build_object_event_candidate_with_reader_state(tmp_path)
+    config = chain["config"]
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=chain["run_id"])
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["accepted"] is True
+    assert synthesis.payload["best_current_candidate"]["packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    loop_review = run_evidence_loop_review(
+        config,
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+    assert loop_review.exit_code == 0
+    authorization = run_supervised_cycle_authorization(
+        config,
+        loop_review_packet=Path(str(loop_review.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+    assert authorization.exit_code == 0
+    assert authorization.payload["next_strategy_authorized"] is True
+    assert authorization.payload["next_generation_authorized"] is False
+    chain["authorized_synthesis"] = synthesis.payload
+    chain["loop_review"] = loop_review.payload
+    chain["cycle_authorization"] = authorization.payload
+    return chain
+
+
 def build_object_event_strategy_chain(tmp_path: Path):
     chain = build_next_target_strategy_ready_chain(tmp_path)
     strategy = run_next_target_strategy(
@@ -6728,6 +6757,203 @@ def test_next_target_strategy_refuses_without_reader_state_evidence(tmp_path):
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "no reader-state evaluation" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+
+
+def test_next_target_strategy_accepts_authorization_packet_and_blocks_repeated_target(
+    tmp_path,
+):
+    chain = build_authorized_next_target_strategy_chain(tmp_path)
+    config = chain["config"]
+    authorization_packet = Path(str(chain["cycle_authorization"]["packet_dir"]))
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_next_target_strategy(
+        config,
+        authorization_packet=authorization_packet,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["source_synthesis_packet_id"] == chain["authorized_synthesis"][
+        "packet_id"
+    ]
+    assert result.payload["authorization_packet_id"] == chain["cycle_authorization"][
+        "packet_id"
+    ]
+    assert result.payload["loop_review_packet_id"] == chain["loop_review"]["packet_id"]
+    assert result.payload["completed_cycles"] == 2
+    assert result.payload["next_strategy_authorized"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["repeated_target_detected"] is True
+    assert result.payload["repeated_target_id"] == "first_read_object_event_pressure_gap"
+    assert result.payload["same_broad_target_allowed"] is False
+    assert result.payload["primary_next_target"] == (
+        "next_residual_target_requires_operator_choice"
+    )
+    assert result.payload["primary_next_subtarget"] == "operator_choice_required"
+    assert result.payload["next_recommended_action"] == (
+        "review_narrow_residual_target_options_before_generation"
+    )
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert {artifact.type for artifact in result.artifacts} == set(
+        NEXT_TARGET_STRATEGY_ARTIFACT_TYPES
+    )
+
+    subject = read_payload(packet_dir / "next_target_strategy_subject_manifest.json")
+    assert subject["input_mode"] == "authorization"
+    assert subject["authorization_packet_id"] == chain["cycle_authorization"]["packet_id"]
+    assert subject["loop_review_packet_id"] == chain["loop_review"]["packet_id"]
+    assert subject["source_synthesis_packet_id"] == chain["authorized_synthesis"][
+        "packet_id"
+    ]
+    assert subject["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert subject["next_strategy_authorized"] is True
+    assert subject["next_generation_authorized"] is False
+    assert subject["repeated_target_report"]["repeated_target_detected"] is True
+    assert subject["repeated_target_report"]["same_broad_target_allowed"] is False
+
+    residual = read_payload(packet_dir / "residual_target_option_map.json")
+    option_ids = {option["option_id"] for option in residual["specific_residual_options"]}
+    assert residual["primary_next_target"] == (
+        "next_residual_target_requires_operator_choice"
+    )
+    assert residual["primary_next_subtarget"] == "operator_choice_required"
+    assert residual["same_broad_target_allowed"] is False
+    assert residual["repeated_broad_target_authorized"] is False
+    assert "tactile_inevitability_gap" in option_ids
+    assert "object_motion_causality_specificity" in option_ids
+    assert "rival_level_first_read_vividness" in option_ids
+    assert "hostile_scaffold_visibility" in option_ids
+    assert "proof_no_answer_residue" in option_ids
+    assert "ending_explains_return_risk" in option_ids
+    assert "local_busyness_decorative_detail_risk" in option_ids
+
+    target_map = read_payload(packet_dir / "object_event_pressure_target_map.json")
+    assert target_map["target_name"] == "next_residual_target_requires_operator_choice"
+    assert target_map["broad_target_class"] == "first_read_object_event_pressure_gap"
+    assert target_map["repeated_target_detected"] is True
+    assert target_map["same_broad_target_allowed"] is False
+
+    strategy = read_payload(packet_dir / "next_intervention_strategy.json")
+    assert strategy["recommended_action"] == (
+        "review_narrow_residual_target_options_before_generation"
+    )
+    assert strategy["primary_next_target"] == (
+        "next_residual_target_requires_operator_choice"
+    )
+    assert strategy["same_broad_target_allowed"] is False
+    assert strategy["generation_allowed_by_this_packet"] is False
+
+    gate = read_payload(packet_dir / "next_target_strategy_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    for gate_name in (
+        "authorization_packet_consumed",
+        "loop_review_packet_consumed",
+        "source_synthesis_consumed",
+        "current_best_candidate_identified",
+        "proof_packet_linked",
+        "reader_state_packet_linked",
+        "repeated_target_guard_checked",
+        "no_candidate_generated",
+        "no_openai_calls",
+        "no_final_claim",
+        "no_phase_shift_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    for gate_name in (
+        "next_candidate_generation_authorized",
+        "repeated_broad_target_authorized",
+        "no_unresolved_internal_blockers",
+        "internal_operator_approval",
+        "finalization_eligible",
+    ):
+        assert gate_results[gate_name]["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["strongest_rival_still_blocks"] is True
+
+    packet = read_payload(packet_dir / "next_target_strategy_packet.json")
+    assert packet["current_best_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert packet["authorization_packet_id"] == chain["cycle_authorization"]["packet_id"]
+    assert packet["loop_review_packet_id"] == chain["loop_review"]["packet_id"]
+    assert packet["primary_next_target"] == (
+        "next_residual_target_requires_operator_choice"
+    )
+    assert packet["primary_next_subtarget"] == "operator_choice_required"
+    assert packet["repeated_target_detected"] is True
+    assert packet["same_broad_target_allowed"] is False
+    assert packet["candidate_generated"] is False
+    assert packet["counts"]["model_calls"] == 0
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_next_target_strategy_synthesis_only_refuses_after_authorization(tmp_path):
+    chain = build_authorized_next_target_strategy_chain(tmp_path)
+
+    result = run_next_target_strategy(
+        chain["config"],
+        synthesis_packet=Path(str(chain["authorized_synthesis"]["packet_dir"])),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--authorization-packet" in result.payload["message"]
+    assert chain["cycle_authorization"]["packet_id"] in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_next_target_strategy_refuses_authorization_that_enables_generation(tmp_path):
+    chain = build_authorized_next_target_strategy_chain(tmp_path)
+    invalid_packet = tmp_path / "invalid_authorization_generation_enabled"
+    shutil.copytree(Path(str(chain["cycle_authorization"]["packet_dir"])), invalid_packet)
+
+    def _enable_generation(payload):
+        payload["next_generation_authorized"] = True
+
+    rewrite_payload(
+        invalid_packet / "supervised_cycle_authorization_packet.json",
+        _enable_generation,
+    )
+
+    result = run_next_target_strategy(
+        chain["config"],
+        authorization_packet=invalid_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "authorizes generation" in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0
 
 

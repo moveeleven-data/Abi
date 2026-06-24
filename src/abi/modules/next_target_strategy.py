@@ -35,6 +35,7 @@ NEXT_TARGET_STRATEGY_ARTIFACT_TYPES = (
     "strongest_rival_pressure_delta",
     "protected_effects_and_forbidden_changes",
     "object_event_pressure_target_map",
+    "residual_target_option_map",
     "candidate_region_pressure_map",
     "next_intervention_strategy",
     "ablation_and_reader_eval_plan",
@@ -54,6 +55,68 @@ REQUIRED_SYNTHESIS_FILES = (
     "macro_recomposition_brief",
 )
 
+REQUIRED_LOOP_REVIEW_FILES = (
+    "evidence_loop_review_subject_manifest",
+    "completed_cycle_map",
+    "current_best_candidate_review",
+    "evidence_quality_review",
+    "reader_state_progress_review",
+    "strongest_rival_status_review",
+    "residual_blocker_taxonomy",
+    "drift_risk_report",
+    "loop_integrity_report",
+    "next_action_decision",
+    "loop_controller_readiness_report",
+    "evidence_loop_review_gate_report",
+    "evidence_loop_review_packet",
+)
+
+REQUIRED_AUTHORIZATION_FILES = (
+    "supervised_cycle_authorization_subject_manifest",
+    "loop_review_intake_summary",
+    "operator_review_record",
+    "cleanup_resolution_report",
+    "supervised_next_cycle_readiness_report",
+    "next_cycle_scope_constraints",
+    "authorization_gate_report",
+    "supervised_cycle_authorization_packet",
+)
+
+REPEATED_BROAD_TARGET_ID = "first_read_object_event_pressure_gap"
+SAFE_RESIDUAL_CHOICE_TARGET_ID = "next_residual_target_requires_operator_choice"
+SAFE_RESIDUAL_CHOICE_ACTION = "review_narrow_residual_target_options_before_generation"
+
+RESIDUAL_TARGET_OPTIONS = (
+    (
+        "tactile_inevitability_gap",
+        "Make the object field feel less optional on first encounter.",
+    ),
+    (
+        "object_motion_causality_specificity",
+        "Specify how object movement causes consequence before explanation.",
+    ),
+    (
+        "rival_level_first_read_vividness",
+        "Address the strongest rival's first-read vividness advantage.",
+    ),
+    (
+        "hostile_scaffold_visibility",
+        "Reduce thesis/scaffold visibility without thinning causal embodiment.",
+    ),
+    (
+        "proof_no_answer_residue",
+        "Keep no-outside-answer pressure embodied rather than abstract.",
+    ),
+    (
+        "ending_explains_return_risk",
+        "Prevent the ending from explaining the return instead of enacting it.",
+    ),
+    (
+        "local_busyness_decorative_detail_risk",
+        "Avoid adding lively details that do not carry causal pressure.",
+    ),
+)
+
 
 @dataclass(frozen=True)
 class NextTargetStrategyResult:
@@ -66,10 +129,25 @@ class NextTargetStrategyResult:
 @dataclass(frozen=True)
 class StrategySubject:
     run_id: str
+    input_mode: str
     synthesis_packet_dir: Path
     synthesis_packet_id: str
     synthesis_packet_artifact_id: str | None
     synthesis_artifact_ids: dict[str, str]
+    authorization_packet_dir: Path | None
+    authorization_packet_id: str | None
+    authorization_packet_artifact_id: str | None
+    authorization_artifact_ids: dict[str, str]
+    authorization_payloads: dict[str, dict[str, Any]]
+    loop_review_packet_dir: Path | None
+    loop_review_packet_id: str | None
+    loop_review_packet_artifact_id: str | None
+    loop_review_artifact_ids: dict[str, str]
+    loop_review_payloads: dict[str, dict[str, Any]]
+    completed_cycles: int
+    next_strategy_authorized: bool
+    next_generation_authorized: bool
+    repeated_target_report: dict[str, Any]
     payloads: dict[str, dict[str, Any]]
     selected_candidate: dict[str, Any]
     reader_state: dict[str, Any]
@@ -83,23 +161,57 @@ class StrategySubject:
 def run_next_target_strategy(
     config: AbiConfig,
     *,
-    synthesis_packet: Path | str,
+    synthesis_packet: Path | str | None = None,
+    authorization_packet: Path | str | None = None,
 ) -> NextTargetStrategyResult:
     initialize_database(config)
-    synthesis_packet_dir = _resolve_path(config, synthesis_packet)
-    if not synthesis_packet_dir.exists() or not synthesis_packet_dir.is_dir():
+    if (synthesis_packet is None) == (authorization_packet is None):
         return _refusal(
-            synthesis_packet=synthesis_packet_dir,
             message=(
-                "Next-target strategy refused; synthesis packet directory not found: "
-                f"{synthesis_packet_dir}"
+                "Next-target strategy refused; pass exactly one of "
+                "--synthesis-packet or --authorization-packet."
             ),
         )
 
     try:
-        subject = _load_subject(config, synthesis_packet_dir)
+        if authorization_packet is not None:
+            authorization_packet_dir = _resolve_path(config, authorization_packet)
+            if not authorization_packet_dir.exists() or not authorization_packet_dir.is_dir():
+                return _refusal(
+                    authorization_packet=authorization_packet_dir,
+                    message=(
+                        "Next-target strategy refused; authorization packet "
+                        f"directory not found: {authorization_packet_dir}"
+                    ),
+                )
+            subject = _load_authorized_subject(config, authorization_packet_dir)
+        else:
+            synthesis_packet_dir = _resolve_path(config, synthesis_packet or "")
+            if not synthesis_packet_dir.exists() or not synthesis_packet_dir.is_dir():
+                return _refusal(
+                    synthesis_packet=synthesis_packet_dir,
+                    message=(
+                        "Next-target strategy refused; synthesis packet directory "
+                        f"not found: {synthesis_packet_dir}"
+                    ),
+                )
+            subject = _load_synthesis_subject(config, synthesis_packet_dir)
+            stale_message = _synthesis_only_refusal_message(config, subject)
+            if stale_message is not None:
+                return _refusal(
+                    synthesis_packet=synthesis_packet_dir,
+                    message=stale_message,
+                )
     except ValueError as error:
-        return _refusal(synthesis_packet=synthesis_packet_dir, message=str(error))
+        return _refusal(
+            synthesis_packet=_resolve_path(config, synthesis_packet)
+            if synthesis_packet is not None
+            else None,
+            authorization_packet=_resolve_path(config, authorization_packet)
+            if authorization_packet is not None
+            else None,
+            message=str(error),
+        )
 
     with connect(config.db_path) as connection:
         if get_run(connection, subject.run_id) is None:
@@ -202,6 +314,19 @@ def run_next_target_strategy(
             ],
         )
 
+        payloads["residual_target_option_map"] = _build_residual_target_option_map(
+            subject
+        )
+        artifacts["residual_target_option_map"] = writer.write_artifact(
+            "residual_target_option_map",
+            payloads["residual_target_option_map"],
+            parent_ids=[
+                artifacts["object_event_pressure_target_map"].id,
+                artifacts["reader_state_blocker_summary"].id,
+                artifacts["strongest_rival_pressure_delta"].id,
+            ],
+        )
+
         payloads["candidate_region_pressure_map"] = _build_candidate_region_pressure_map(
             subject
         )
@@ -209,7 +334,7 @@ def run_next_target_strategy(
             "candidate_region_pressure_map",
             payloads["candidate_region_pressure_map"],
             parent_ids=[
-                artifacts["object_event_pressure_target_map"].id,
+                artifacts["residual_target_option_map"].id,
                 artifacts["protected_effects_and_forbidden_changes"].id,
             ],
         )
@@ -222,7 +347,7 @@ def run_next_target_strategy(
             "next_intervention_strategy",
             payloads["next_intervention_strategy"],
             parent_ids=[
-                artifacts["object_event_pressure_target_map"].id,
+                artifacts["residual_target_option_map"].id,
                 artifacts["candidate_region_pressure_map"].id,
             ],
         )
@@ -301,13 +426,29 @@ def run_next_target_strategy(
         "current_best_candidate_packet_id": subject.selected_candidate["packet_id"],
         "proof_packet_id": subject.selected_candidate.get("proof_packet_id"),
         "reader_state_packet_id": subject.reader_state.get("packet_id"),
+        "source_synthesis_packet_id": subject.synthesis_packet_id,
+        "authorization_packet_id": subject.authorization_packet_id,
+        "loop_review_packet_id": subject.loop_review_packet_id,
+        "completed_cycles": subject.completed_cycles,
+        "next_strategy_authorized": subject.next_strategy_authorized,
+        "next_generation_authorized": subject.next_generation_authorized,
         "next_recommended_action": payloads["next_intervention_strategy"][
             "recommended_action"
         ],
-        "primary_next_target": payloads["object_event_pressure_target_map"][
-            "target_name"
+        "primary_next_target": payloads["residual_target_option_map"][
+            "primary_next_target"
         ],
-        "target_name": payloads["object_event_pressure_target_map"]["target_name"],
+        "primary_next_subtarget": payloads["residual_target_option_map"][
+            "primary_next_subtarget"
+        ],
+        "target_name": payloads["residual_target_option_map"]["primary_next_target"],
+        "repeated_target_detected": subject.repeated_target_report[
+            "repeated_target_detected"
+        ],
+        "repeated_target_id": subject.repeated_target_report["repeated_target_id"],
+        "same_broad_target_allowed": subject.repeated_target_report[
+            "same_broad_target_allowed"
+        ],
         "strongest_rival_still_blocks": True,
         "candidate_generated": False,
         "model_calls": 0,
@@ -322,7 +463,7 @@ def run_next_target_strategy(
     )
 
 
-def _load_subject(config: AbiConfig, synthesis_packet_dir: Path) -> StrategySubject:
+def _load_synthesis_subject(config: AbiConfig, synthesis_packet_dir: Path) -> StrategySubject:
     payloads = _load_required_payloads(synthesis_packet_dir)
     synthesis_packet = payloads["autonomous_evidence_synthesis_packet"]
     if not isinstance(synthesis_packet.get("run_id"), str):
@@ -360,6 +501,7 @@ def _load_subject(config: AbiConfig, synthesis_packet_dir: Path) -> StrategySubj
     )
     return StrategySubject(
         run_id=run_id,
+        input_mode="synthesis",
         synthesis_packet_dir=synthesis_packet_dir,
         synthesis_packet_id=str(synthesis_packet.get("packet_id") or synthesis_packet_dir.name),
         synthesis_packet_artifact_id=packet_artifact.id if packet_artifact else None,
@@ -368,6 +510,24 @@ def _load_subject(config: AbiConfig, synthesis_packet_dir: Path) -> StrategySubj
             for key, value in synthesis_packet.get("artifact_ids", {}).items()
             if isinstance(value, str)
         },
+        authorization_packet_dir=None,
+        authorization_packet_id=None,
+        authorization_packet_artifact_id=None,
+        authorization_artifact_ids={},
+        authorization_payloads={},
+        loop_review_packet_dir=None,
+        loop_review_packet_id=None,
+        loop_review_packet_artifact_id=None,
+        loop_review_artifact_ids={},
+        loop_review_payloads={},
+        completed_cycles=0,
+        next_strategy_authorized=False,
+        next_generation_authorized=False,
+        repeated_target_report=_build_repeated_target_report(
+            selected_candidate=selected,
+            loop_review_payloads={},
+            authorization_packet_id=None,
+        ),
         payloads=payloads,
         selected_candidate=selected,
         reader_state=reader_state,
@@ -375,6 +535,137 @@ def _load_subject(config: AbiConfig, synthesis_packet_dir: Path) -> StrategySubj
         rival_pressure=payloads["rival_pressure_summary"],
         macro_brief=payloads["macro_recomposition_brief"],
         strategic_decision=payloads["strategic_decision_report"],
+        source_parent_ids=tuple(parent_ids),
+    )
+
+
+def _load_authorized_subject(
+    config: AbiConfig,
+    authorization_packet_dir: Path,
+) -> StrategySubject:
+    authorization_payloads = _load_packet_payloads(
+        authorization_packet_dir,
+        REQUIRED_AUTHORIZATION_FILES,
+        "authorization",
+    )
+    authorization_packet_payload = authorization_payloads[
+        "supervised_cycle_authorization_packet"
+    ]
+    authorization_manifest = authorization_payloads[
+        "supervised_cycle_authorization_subject_manifest"
+    ]
+    run_id = authorization_packet_payload.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("Next-target strategy refused; authorization packet missing run_id.")
+    if authorization_packet_payload.get("next_strategy_authorized") is not True:
+        raise ValueError(
+            "Next-target strategy refused; authorization packet does not authorize "
+            "next strategy planning."
+        )
+    if authorization_packet_payload.get("next_generation_authorized") is True:
+        raise ValueError(
+            "Next-target strategy refused; authorization packet authorizes generation, "
+            "which is out of scope for next-target planning."
+        )
+
+    loop_review_dir = _payload_dir(
+        config,
+        authorization_packet_payload,
+        authorization_manifest,
+        "loop_review_packet_dir",
+    )
+    if not loop_review_dir.exists() or not loop_review_dir.is_dir():
+        raise ValueError(
+            "Next-target strategy refused; linked loop-review packet directory "
+            f"not found: {loop_review_dir}"
+        )
+    loop_review_payloads = _load_packet_payloads(
+        loop_review_dir,
+        REQUIRED_LOOP_REVIEW_FILES,
+        "loop-review",
+    )
+    loop_packet = loop_review_payloads["evidence_loop_review_packet"]
+    loop_manifest = loop_review_payloads["evidence_loop_review_subject_manifest"]
+    if loop_packet.get("accepted") is False:
+        raise ValueError("Next-target strategy refused; linked loop-review refused.")
+
+    synthesis_dir = _payload_dir(
+        config,
+        authorization_packet_payload,
+        loop_manifest,
+        "source_synthesis_packet_dir",
+    )
+    subject = _load_synthesis_subject(config, synthesis_dir)
+
+    _validate_authorized_chain(
+        subject=subject,
+        authorization_packet=authorization_packet_payload,
+        authorization_manifest=authorization_manifest,
+        loop_packet=loop_packet,
+        loop_manifest=loop_manifest,
+    )
+
+    authorization_path = authorization_packet_dir / "supervised_cycle_authorization_packet.json"
+    loop_path = loop_review_dir / "evidence_loop_review_packet.json"
+    with connect(config.db_path) as connection:
+        authorization_artifact = _artifact_for_path(connection, authorization_path)
+        loop_artifact = _artifact_for_path(connection, loop_path)
+
+    authorization_artifact_ids = _artifact_ids_from_packet(authorization_packet_payload)
+    loop_artifact_ids = _artifact_ids_from_packet(loop_packet)
+    parent_ids = _unique(
+        [
+            authorization_artifact.id if authorization_artifact else None,
+            loop_artifact.id if loop_artifact else None,
+            *authorization_artifact_ids.values(),
+            *loop_artifact_ids.values(),
+            *subject.source_parent_ids,
+        ]
+    )
+    repeated_target_report = _build_repeated_target_report(
+        selected_candidate=subject.selected_candidate,
+        loop_review_payloads=loop_review_payloads,
+        authorization_packet_id=str(
+            authorization_packet_payload.get("packet_id") or authorization_packet_dir.name
+        ),
+    )
+    return StrategySubject(
+        run_id=subject.run_id,
+        input_mode="authorization",
+        synthesis_packet_dir=subject.synthesis_packet_dir,
+        synthesis_packet_id=subject.synthesis_packet_id,
+        synthesis_packet_artifact_id=subject.synthesis_packet_artifact_id,
+        synthesis_artifact_ids=subject.synthesis_artifact_ids,
+        authorization_packet_dir=authorization_packet_dir,
+        authorization_packet_id=str(
+            authorization_packet_payload.get("packet_id") or authorization_packet_dir.name
+        ),
+        authorization_packet_artifact_id=authorization_artifact.id
+        if authorization_artifact
+        else None,
+        authorization_artifact_ids=authorization_artifact_ids,
+        authorization_payloads=authorization_payloads,
+        loop_review_packet_dir=loop_review_dir,
+        loop_review_packet_id=str(loop_packet.get("packet_id") or loop_review_dir.name),
+        loop_review_packet_artifact_id=loop_artifact.id if loop_artifact else None,
+        loop_review_artifact_ids=loop_artifact_ids,
+        loop_review_payloads=loop_review_payloads,
+        completed_cycles=int(
+            authorization_packet_payload.get("completed_cycles")
+            or loop_packet.get("completed_cycle_count")
+            or loop_packet.get("completed_cycles")
+            or 0
+        ),
+        next_strategy_authorized=True,
+        next_generation_authorized=False,
+        repeated_target_report=repeated_target_report,
+        payloads=subject.payloads,
+        selected_candidate=subject.selected_candidate,
+        reader_state=subject.reader_state,
+        residual_blockers=subject.residual_blockers,
+        rival_pressure=subject.rival_pressure,
+        macro_brief=subject.macro_brief,
+        strategic_decision=subject.strategic_decision,
         source_parent_ids=tuple(parent_ids),
     )
 
@@ -402,15 +693,261 @@ def _load_required_payloads(packet_dir: Path) -> dict[str, dict[str, Any]]:
     return payloads
 
 
+def _load_packet_payloads(
+    packet_dir: Path,
+    artifact_types: tuple[str, ...],
+    packet_label: str,
+) -> dict[str, dict[str, Any]]:
+    payloads: dict[str, dict[str, Any]] = {}
+    for artifact_type in artifact_types:
+        path = packet_dir / f"{artifact_type}.json"
+        if not path.exists():
+            raise ValueError(
+                "Next-target strategy refused; "
+                f"{packet_label} packet missing {path.name}."
+            )
+        envelope = read_json_file(path)
+        if not isinstance(envelope, dict) or not isinstance(envelope.get("payload"), dict):
+            raise ValueError(
+                "Next-target strategy refused; malformed "
+                f"{packet_label} artifact: {path.name}."
+            )
+        payloads[artifact_type] = envelope["payload"]
+    return payloads
+
+
+def _payload_dir(
+    config: AbiConfig,
+    primary: dict[str, Any],
+    fallback: dict[str, Any],
+    key: str,
+) -> Path:
+    value = primary.get(key) or fallback.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Next-target strategy refused; linked {key} is missing.")
+    return _resolve_path(config, value)
+
+
+def _artifact_ids_from_packet(packet_payload: dict[str, Any]) -> dict[str, str]:
+    artifact_ids = packet_payload.get("artifact_ids")
+    if not isinstance(artifact_ids, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in artifact_ids.items()
+        if isinstance(value, str)
+    }
+
+
+def _validate_authorized_chain(
+    *,
+    subject: StrategySubject,
+    authorization_packet: dict[str, Any],
+    authorization_manifest: dict[str, Any],
+    loop_packet: dict[str, Any],
+    loop_manifest: dict[str, Any],
+) -> None:
+    expected_synthesis_id = _first_string(
+        authorization_packet.get("source_synthesis_packet_id"),
+        authorization_manifest.get("source_synthesis_packet_id"),
+        loop_packet.get("source_synthesis_packet_id"),
+        loop_manifest.get("source_synthesis_packet_id"),
+    )
+    if expected_synthesis_id and expected_synthesis_id != subject.synthesis_packet_id:
+        raise ValueError(
+            "Next-target strategy refused; authorization source synthesis does "
+            "not match the loaded synthesis packet."
+        )
+
+    expected_best = _first_string(
+        authorization_packet.get("current_best_candidate_packet_id"),
+        authorization_manifest.get("current_best_candidate_packet_id"),
+        loop_packet.get("current_best_candidate_packet_id"),
+        loop_manifest.get("current_best_candidate_packet_id"),
+    )
+    if not expected_best:
+        raise ValueError("Next-target strategy refused; current best candidate is missing.")
+    if expected_best != str(subject.selected_candidate.get("packet_id") or ""):
+        raise ValueError(
+            "Next-target strategy refused; authorization current best does not "
+            "match source synthesis."
+        )
+
+    expected_proof = _first_string(
+        authorization_packet.get("proof_packet_id"),
+        authorization_manifest.get("proof_packet_id"),
+        loop_packet.get("proof_packet_id"),
+        loop_manifest.get("proof_packet_id"),
+    )
+    if not expected_proof:
+        raise ValueError("Next-target strategy refused; proof packet is missing.")
+    if expected_proof != str(subject.selected_candidate.get("proof_packet_id") or ""):
+        raise ValueError(
+            "Next-target strategy refused; authorization proof packet does not "
+            "match source synthesis."
+        )
+
+    expected_reader = _first_string(
+        authorization_packet.get("reader_state_packet_id"),
+        authorization_manifest.get("reader_state_packet_id"),
+        loop_packet.get("reader_state_packet_id"),
+        loop_manifest.get("reader_state_packet_id"),
+    )
+    reader_id = str(
+        subject.selected_candidate.get("reader_state_packet_id")
+        or subject.reader_state.get("packet_id")
+        or ""
+    )
+    if not expected_reader:
+        raise ValueError("Next-target strategy refused; reader-state packet is missing.")
+    if expected_reader != reader_id:
+        raise ValueError(
+            "Next-target strategy refused; authorization reader-state packet does "
+            "not match source synthesis."
+        )
+
+
+def _synthesis_only_refusal_message(
+    config: AbiConfig,
+    subject: StrategySubject,
+) -> str | None:
+    authorization_dir = _latest_packet_linking_synthesis(
+        config,
+        run_id=subject.run_id,
+        family="supervised_cycle_authorization",
+        packet_artifact_type="supervised_cycle_authorization_packet",
+        source_synthesis_packet_id=subject.synthesis_packet_id,
+    )
+    if authorization_dir is not None:
+        return (
+            "Next-target strategy refused; this synthesis already has a later "
+            "supervised authorization. Use --authorization-packet "
+            f"{authorization_dir}."
+        )
+    loop_review_dir = _latest_packet_linking_synthesis(
+        config,
+        run_id=subject.run_id,
+        family="evidence_loop_review",
+        packet_artifact_type="evidence_loop_review_packet",
+        source_synthesis_packet_id=subject.synthesis_packet_id,
+    )
+    if loop_review_dir is not None:
+        return (
+            "Next-target strategy refused; this synthesis already has a later "
+            "loop-review packet. Use supervised authorization before planning "
+            f"the next target: {loop_review_dir}."
+        )
+    return None
+
+
+def _latest_packet_linking_synthesis(
+    config: AbiConfig,
+    *,
+    run_id: str,
+    family: str,
+    packet_artifact_type: str,
+    source_synthesis_packet_id: str,
+) -> Path | None:
+    base_dir = config.run_dir(run_id) / family
+    if not base_dir.exists():
+        return None
+    packet_dirs = sorted(
+        [child for child in base_dir.glob("packet_*") if child.is_dir()],
+        key=lambda path: path.name,
+    )
+    for packet_dir in reversed(packet_dirs):
+        path = packet_dir / f"{packet_artifact_type}.json"
+        if not path.exists():
+            continue
+        envelope = read_json_file(path)
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("source_synthesis_packet_id") == source_synthesis_packet_id:
+            return packet_dir
+    return None
+
+
+def _build_repeated_target_report(
+    *,
+    selected_candidate: dict[str, Any],
+    loop_review_payloads: dict[str, dict[str, Any]],
+    authorization_packet_id: str | None,
+) -> dict[str, Any]:
+    current_target = str(
+        selected_candidate.get("target_scope")
+        or selected_candidate.get("target_movement")
+        or ""
+    )
+    loop_packet = loop_review_payloads.get("evidence_loop_review_packet", {})
+    drift_guard = _as_dict(loop_packet.get("repeated_target_drift_guard"))
+    detected = (
+        current_target == REPEATED_BROAD_TARGET_ID
+        or drift_guard.get("repeated_target_drift_detected") is True
+    )
+    return {
+        "repeated_target_detected": detected,
+        "repeated_target_id": REPEATED_BROAD_TARGET_ID if detected else None,
+        "current_target_id": current_target or None,
+        "prior_target_strategy_packet_id": _prior_strategy_packet_id(selected_candidate),
+        "prior_candidate_packet_id": selected_candidate.get("packet_id"),
+        "prior_ablation_packet_id": selected_candidate.get("proof_packet_id"),
+        "prior_reader_state_packet_id": selected_candidate.get("reader_state_packet_id"),
+        "source_loop_review_packet_id": loop_packet.get("packet_id"),
+        "source_authorization_packet_id": authorization_packet_id,
+        "same_broad_target_allowed": False if detected else True,
+        "same_broad_target_justification": "",
+        "narrower_subtarget_required": bool(detected),
+        "repeated_broad_target_authorized": False,
+        "guard_checked": bool(loop_review_payloads) or detected,
+    }
+
+
+def _prior_strategy_packet_id(selected_candidate: dict[str, Any]) -> str | None:
+    packet_dir = selected_candidate.get("packet_dir")
+    if not isinstance(packet_dir, str) or not packet_dir:
+        return None
+    manifest_path = Path(packet_dir) / "macro_recomposition_subject_manifest.json"
+    if not manifest_path.exists():
+        return None
+    envelope = read_json_file(manifest_path)
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    strategy_id = payload.get("source_strategy_packet_id")
+    return str(strategy_id) if isinstance(strategy_id, str) and strategy_id else None
+
+
+def _first_string(*values: object) -> str:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _build_subject_manifest(subject: StrategySubject, packet_dir: Path) -> dict[str, object]:
     selected = subject.selected_candidate
     return {
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
+        "input_mode": subject.input_mode,
         "source_synthesis_packet_id": subject.synthesis_packet_id,
         "source_synthesis_packet_dir": str(subject.synthesis_packet_dir),
         "source_synthesis_packet_artifact_id": subject.synthesis_packet_artifact_id,
+        "authorization_packet_id": subject.authorization_packet_id,
+        "authorization_packet_dir": str(subject.authorization_packet_dir)
+        if subject.authorization_packet_dir
+        else None,
+        "authorization_packet_artifact_id": subject.authorization_packet_artifact_id,
+        "loop_review_packet_id": subject.loop_review_packet_id,
+        "loop_review_packet_dir": str(subject.loop_review_packet_dir)
+        if subject.loop_review_packet_dir
+        else None,
+        "loop_review_packet_artifact_id": subject.loop_review_packet_artifact_id,
+        "completed_cycles": subject.completed_cycles,
+        "next_strategy_authorized": subject.next_strategy_authorized,
+        "next_generation_authorized": subject.next_generation_authorized,
         "current_best_candidate_packet_id": selected.get("packet_id"),
         "current_best_candidate_packet_kind": selected.get("packet_kind"),
         "current_best_candidate_packet_dir": selected.get("packet_dir"),
@@ -420,6 +957,7 @@ def _build_subject_manifest(subject: StrategySubject, packet_dir: Path) -> dict[
         "reader_state_eval_packet_id": subject.reader_state.get("packet_id"),
         "reader_state_eval_packet_dir": subject.reader_state.get("packet_dir"),
         "prior_best_packet_id": selected.get("base_candidate_packet_id"),
+        "repeated_target_report": subject.repeated_target_report,
         "strongest_rival_still_blocks": True,
         "candidate_generated": False,
         "finalization_eligible": False,
@@ -625,9 +1163,24 @@ def _build_protected_effects_and_forbidden_changes(
 
 def _build_object_event_pressure_target_map(subject: StrategySubject) -> dict[str, object]:
     candidate_id = str(subject.selected_candidate.get("packet_id") or "current best")
+    repeated = subject.repeated_target_report["repeated_target_detected"] is True
+    target_name = (
+        SAFE_RESIDUAL_CHOICE_TARGET_ID if repeated else REPEATED_BROAD_TARGET_ID
+    )
     return {
-        "target_name": "first_read_object_event_pressure_gap",
+        "target_name": target_name,
+        "broad_target_class": REPEATED_BROAD_TARGET_ID,
+        "repeated_target_detected": repeated,
+        "same_broad_target_allowed": subject.repeated_target_report[
+            "same_broad_target_allowed"
+        ],
+        "primary_next_subtarget": "operator_choice_required" if repeated else None,
         "purpose": (
+            "Stop broad object-event targeting from repeating by inertia; require "
+            "operator choice among narrower residual subtargets."
+        )
+        if repeated
+        else (
             "Increase first-read embodied pressure without weakening reread "
             f"structure or {candidate_id}'s object-field gains."
         ),
@@ -675,7 +1228,57 @@ def _build_object_event_pressure_target_map(subject: StrategySubject) -> dict[st
     }
 
 
+def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, object]:
+    repeated = subject.repeated_target_report["repeated_target_detected"] is True
+    if repeated:
+        primary_next_target = SAFE_RESIDUAL_CHOICE_TARGET_ID
+        primary_next_subtarget = "operator_choice_required"
+        next_recommended_action = SAFE_RESIDUAL_CHOICE_ACTION
+        strategy_decision = "request_operator_choice_among_narrowed_residuals"
+    else:
+        primary_next_target = REPEATED_BROAD_TARGET_ID
+        primary_next_subtarget = "object_event_pressure_operationalization"
+        next_recommended_action = "request_operator_review_before_generation"
+        strategy_decision = "prepare_bounded_object_event_pressure_recomposition"
+    return {
+        "primary_next_target": primary_next_target,
+        "primary_next_subtarget": primary_next_subtarget,
+        "broad_blocker_class": REPEATED_BROAD_TARGET_ID,
+        "specific_residual_options": [
+            {
+                "option_id": option_id,
+                "description": description,
+                "status": "available_for_operator_selection",
+                "source_evidence_basis": _residual_option_basis(option_id, subject),
+                "candidate_generation_authorized": False,
+            }
+            for option_id, description in RESIDUAL_TARGET_OPTIONS
+        ],
+        "repeated_target_detected": repeated,
+        "repeated_target_id": subject.repeated_target_report["repeated_target_id"],
+        "same_broad_target_allowed": subject.repeated_target_report[
+            "same_broad_target_allowed"
+        ],
+        "same_broad_target_allowed_only_if_narrow_subtarget_selected": bool(repeated),
+        "repeated_broad_target_authorized": False,
+        "strategy_decision": strategy_decision,
+        "next_recommended_action": next_recommended_action,
+        "next_strategy_authorized": subject.next_strategy_authorized,
+        "next_generation_authorized": False,
+        "candidate_generated": False,
+        "model_calls": 0,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "worker": "residual_target_option_map_v1_controller",
+    }
+
+
 def _build_candidate_region_pressure_map(subject: StrategySubject) -> dict[str, object]:
+    residual_target = (
+        SAFE_RESIDUAL_CHOICE_TARGET_ID
+        if subject.repeated_target_report["repeated_target_detected"] is True
+        else REPEATED_BROAD_TARGET_ID
+    )
     return {
         "regions": [
             _region(
@@ -716,7 +1319,11 @@ def _build_candidate_region_pressure_map(subject: StrategySubject) -> dict[str, 
             ),
         ],
         "do_not_assume_final_return_is_next_region": True,
-        "primary_pressure_need": "first_read_object_event_pressure_gap",
+        "primary_pressure_need": residual_target,
+        "broad_blocker_class": REPEATED_BROAD_TARGET_ID,
+        "operator_must_select_specific_residual_subtarget": (
+            subject.repeated_target_report["repeated_target_detected"] is True
+        ),
         "not_candidate_artifact": True,
         "no_phase_shift_claim": True,
         "worker": "candidate_region_pressure_map_v1_controller",
@@ -728,21 +1335,47 @@ def _build_next_intervention_strategy(
     blocker_summary: dict[str, object],
 ) -> dict[str, object]:
     candidate_id = str(subject.selected_candidate.get("packet_id") or "current best")
+    repeated = subject.repeated_target_report["repeated_target_detected"] is True
     return {
-        "recommended_action": "request_operator_review_before_generation",
-        "secondary_recommendation": "prepare_bounded_object_event_pressure_recomposition",
+        "recommended_action": SAFE_RESIDUAL_CHOICE_ACTION
+        if repeated
+        else "request_operator_review_before_generation",
+        "secondary_recommendation": "choose_narrow_residual_subtarget_before_generation"
+        if repeated
+        else "prepare_bounded_object_event_pressure_recomposition",
         "strategy": [
             f"preserve {candidate_id} as current best candidate",
-            "prepare a bounded object-event pressure strategy brief",
+            "consume the supervised authorization packet before strategy planning"
+            if subject.input_mode == "authorization"
+            else "consume the source synthesis packet",
+            "do not repeat the broad object-event target without a narrower residual subtarget"
+            if repeated
+            else "prepare a bounded object-event pressure strategy brief",
             "require operator review before generation",
-            "if authorized, target first-read object-event pressure / lived object causality",
+            "if later authorized, target only the selected residual subtarget"
+            if repeated
+            else "if authorized, target first-read object-event pressure / lived object causality",
             "do not run another proof/no-answer macro cycle by inertia",
         ],
         "top_ranked_blocker": blocker_summary["top_blocker_id"],
         "next_creative_action_if_authorized": (
-            "bounded object-event pressure recomposition focused on first-read "
-            "lived object causality"
+            "operator-selected residual subtarget strategy before any generation"
+            if repeated
+            else (
+                "bounded object-event pressure recomposition focused on first-read "
+                "lived object causality"
+            )
         ),
+        "primary_next_target": SAFE_RESIDUAL_CHOICE_TARGET_ID
+        if repeated
+        else REPEATED_BROAD_TARGET_ID,
+        "primary_next_subtarget": "operator_choice_required"
+        if repeated
+        else "object_event_pressure_operationalization",
+        "repeated_target_detected": repeated,
+        "same_broad_target_allowed": subject.repeated_target_report[
+            "same_broad_target_allowed"
+        ],
         "generation_allowed_by_this_packet": False,
         "candidate_generated": False,
         "operator_review_required_before_generation": True,
@@ -754,9 +1387,13 @@ def _build_next_intervention_strategy(
 
 def _build_ablation_and_reader_eval_plan(subject: StrategySubject) -> dict[str, object]:
     candidate_id = str(subject.selected_candidate.get("packet_id") or "current best")
+    repeated = subject.repeated_target_report["repeated_target_detected"] is True
     return {
         "if_future_candidate_is_generated": [
             f"execute ablation against {candidate_id}",
+            "verify the operator-selected residual subtarget is actually addressed"
+            if repeated
+            else "verify first-read object-event pressure is actually addressed",
             "include a revert of the object-event pressure intervention",
             "isolate the object-event pressure intervention",
             "include an over-vividness / decorative-detail control",
@@ -777,6 +1414,13 @@ def _build_ablation_and_reader_eval_plan(subject: StrategySubject) -> dict[str, 
             "proof/no-answer carry",
             "hostile scaffold risk",
         ],
+        "requires_operator_selected_residual_subtarget": repeated,
+        "primary_next_target": SAFE_RESIDUAL_CHOICE_TARGET_ID
+        if repeated
+        else REPEATED_BROAD_TARGET_ID,
+        "primary_next_subtarget": "operator_choice_required"
+        if repeated
+        else "object_event_pressure_operationalization",
         "next_candidate_generated": False,
         "ablation_completed_for_next_candidate": False,
         "reader_state_eval_completed_for_next_candidate": False,
@@ -793,11 +1437,26 @@ def _build_gate_report(
 ) -> dict[str, object]:
     selected = subject.selected_candidate
     reader = subject.reader_state
+    repeated = subject.repeated_target_report["repeated_target_detected"] is True
+    same_broad_allowed = subject.repeated_target_report["same_broad_target_allowed"] is True
     gate_results = [
+        _gate_result(
+            "authorization_packet_consumed",
+            subject.input_mode == "authorization"
+            and bool(subject.authorization_packet_id),
+        ),
+        _gate_result(
+            "loop_review_packet_consumed",
+            subject.input_mode == "authorization" and bool(subject.loop_review_packet_id),
+        ),
         _gate_result("source_synthesis_consumed", True),
         _gate_result("current_best_candidate_identified", bool(selected.get("packet_id"))),
         _gate_result("proof_packet_linked", bool(selected.get("proof_packet_id"))),
         _gate_result("reader_state_packet_linked", bool(reader.get("packet_id"))),
+        _gate_result(
+            "repeated_target_guard_checked",
+            bool(subject.repeated_target_report["guard_checked"]),
+        ),
         _gate_result(
             "residual_blockers_ranked",
             bool(payloads["reader_state_blocker_summary"].get("ranked_blockers")),
@@ -805,12 +1464,30 @@ def _build_gate_report(
         _gate_result("strongest_rival_pressure_preserved", True),
         _gate_result("next_target_strategy_created", True),
         _gate_result("no_candidate_generated", True),
+        _gate_result("no_openai_calls", True),
         _gate_result("no_final_claim", True),
         _gate_result("no_phase_shift_claim", True),
         _gate_result(
             "next_candidate_generated",
             False,
             ["strategy packet intentionally generated no candidate"],
+            record=False,
+        ),
+        _gate_result(
+            "next_candidate_generation_authorized",
+            False,
+            ["candidate generation requires a later separate authorization packet"],
+            record=False,
+        ),
+        _gate_result(
+            "repeated_broad_target_authorized",
+            same_broad_allowed if repeated else False,
+            [
+                "same broad object-event target cannot be reused without a "
+                "narrower operator-selected residual subtarget"
+            ]
+            if repeated
+            else ["no repeated broad target authorization is needed"],
             record=False,
         ),
         _gate_result(
@@ -857,7 +1534,9 @@ def _build_gate_report(
         "next candidate has not been generated",
         "next-candidate ablation has not been completed",
         "next-candidate reader-state evaluation has not been completed",
-        "first-read object-event pressure remains unresolved",
+        "operator has not selected a narrow residual target"
+        if repeated
+        else "first-read object-event pressure remains unresolved",
         "strongest rival still blocks",
         "internal operator approval is absent",
     ]
@@ -878,6 +1557,12 @@ def _build_gate_report(
         "final_gates_marked_passed": [],
         "unresolved_blockers": blockers,
         "summary_verdict": (
+            "Next-target strategy consumed supervised authorization and blocks "
+            "repeated broad targeting until the operator chooses a narrower "
+            "residual subtarget."
+        )
+        if repeated
+        else (
             "Next-target strategy operationalizes first-read object-event "
             "pressure but remains fail-closed and generates no candidate."
         ),
@@ -913,6 +1598,11 @@ def _build_packet_summary(
             "candidate_artifacts_created": 0,
         },
         "source_synthesis_packet_id": subject.synthesis_packet_id,
+        "authorization_packet_id": subject.authorization_packet_id,
+        "loop_review_packet_id": subject.loop_review_packet_id,
+        "completed_cycles": subject.completed_cycles,
+        "next_strategy_authorized": subject.next_strategy_authorized,
+        "next_generation_authorized": subject.next_generation_authorized,
         "current_best_candidate": {
             "packet_id": subject.selected_candidate.get("packet_id"),
             "packet_kind": subject.selected_candidate.get("packet_kind"),
@@ -921,12 +1611,22 @@ def _build_packet_summary(
         "current_best_candidate_packet_id": subject.selected_candidate.get("packet_id"),
         "proof_packet_id": subject.selected_candidate.get("proof_packet_id"),
         "reader_state_packet_id": subject.reader_state.get("packet_id"),
-        "primary_next_target": payloads["object_event_pressure_target_map"][
-            "target_name"
+        "primary_next_target": payloads["residual_target_option_map"][
+            "primary_next_target"
         ],
-        "target_name": payloads["object_event_pressure_target_map"]["target_name"],
+        "primary_next_subtarget": payloads["residual_target_option_map"][
+            "primary_next_subtarget"
+        ],
+        "target_name": payloads["residual_target_option_map"]["primary_next_target"],
         "next_recommended_action": payloads["next_intervention_strategy"][
             "recommended_action"
+        ],
+        "repeated_target_detected": subject.repeated_target_report[
+            "repeated_target_detected"
+        ],
+        "repeated_target_id": subject.repeated_target_report["repeated_target_id"],
+        "same_broad_target_allowed": subject.repeated_target_report[
+            "same_broad_target_allowed"
         ],
         "operator_review_required_before_generation": True,
         "candidate_generated": False,
@@ -970,6 +1670,45 @@ def _blocker_evidence_basis(blocker_id: str, subject: StrategySubject) -> list[s
         ],
     }
     return basis.get(blocker_id, ["active residual blocker"])
+
+
+def _residual_option_basis(option_id: str, subject: StrategySubject) -> list[str]:
+    reader = subject.reader_state
+    basis = {
+        "tactile_inevitability_gap": [
+            str(reader.get("first_read_vividness_status") or ""),
+            "strongest rival still wins tactile inevitability",
+        ],
+        "object_motion_causality_specificity": [
+            str(reader.get("lived_object_causality_status") or ""),
+            "object-event pressure remains weaker than strongest rival",
+        ],
+        "rival_level_first_read_vividness": [
+            str(reader.get("strongest_rival_status") or ""),
+            "first-read vividness remains a rival pressure point",
+        ],
+        "hostile_scaffold_visibility": [
+            str(reader.get("hostile_risk_status") or ""),
+            ", ".join(str(value) for value in reader.get("hostile_active_risks", [])),
+        ],
+        "proof_no_answer_residue": [
+            str(reader.get("proof_no_outside_answer_carry_status") or ""),
+            "proof/no-answer pressure remains partial",
+        ],
+        "ending_explains_return_risk": [
+            str(reader.get("final_return_echo_status") or ""),
+            "final return still risks explaining rather than enacting return",
+        ],
+        "local_busyness_decorative_detail_risk": [
+            "object-event vividness must not become decorative local busyness",
+            "protected table/dust/spoon/saucer/ring field must remain causal",
+        ],
+    }
+    return [
+        value
+        for value in basis.get(option_id, ["active residual target option"])
+        if value
+    ]
 
 
 def _ranked_blocker_ids(subject: StrategySubject) -> list[str]:
@@ -1052,15 +1791,26 @@ def _unique(values: list[str | None]) -> list[str]:
     return result
 
 
+def _as_dict(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _refusal(
     *,
-    synthesis_packet: Path,
+    synthesis_packet: Path | None = None,
+    authorization_packet: Path | None = None,
     message: str,
 ) -> NextTargetStrategyResult:
     payload = {
         "accepted": False,
+        "refused": True,
         "message": message,
-        "synthesis_packet": str(synthesis_packet),
+        "synthesis_packet": str(synthesis_packet) if synthesis_packet else None,
+        "authorization_packet": str(authorization_packet)
+        if authorization_packet
+        else None,
+        "candidate_generated": False,
+        "counts": {"model_calls": 0, "candidate_artifacts_created": 0},
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
         "model_calls": 0,
