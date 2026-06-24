@@ -82,6 +82,10 @@ from abi.modules.executed_ablation import (
     _load_subject,
     run_executed_ablation,
 )
+from abi.modules.evidence_loop_review import (
+    EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES,
+    run_evidence_loop_review,
+)
 from abi.modules.internal_reader_lab import FakeInternalReaderLabModelClient, run_internal_reader_lab
 from abi.modules.internal_reader_state_evaluation import run_internal_reader_state_evaluation
 from abi.modules.next_target_strategy import (
@@ -7484,6 +7488,248 @@ def test_autonomous_evidence_synthesis_links_object_event_reader_state_by_hash(
 
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
+    chain = build_object_event_candidate_with_reader_state(tmp_path)
+    config = chain["config"]
+    synthesis = run_autonomous_evidence_synthesis(chain["config"], run_id=chain["run_id"])
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["best_current_candidate"]["packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert synthesis.payload["best_current_candidate"]["reader_state_evaluated"] is True
+    with connect(chain["config"].db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_evidence_loop_review(
+        chain["config"],
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert set(result.payload["artifact_ids"]) == set(EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES)
+    assert result.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["completed_cycles"] == 2
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["loop_controller_ready"] is False
+    assert result.payload["next_recommended_action"] == (
+        "prepare_loop_integrity_cleanup_before_more_generation"
+    )
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(packet_dir / "evidence_loop_review_subject_manifest.json")
+    assert manifest["source_synthesis_packet_id"] == synthesis.payload["packet_id"]
+    assert manifest["current_best_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert manifest["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert manifest["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert manifest["prior_best_packet_id"] == chain["macro2"]["packet_id"]
+    assert manifest["strongest_rival_still_blocks"] is True
+    assert manifest["finalization_eligible"] is False
+    assert manifest["no_phase_shift_claim"] is True
+
+    cycle_map = read_payload(packet_dir / "completed_cycle_map.json")
+    cycle_ids = {cycle["cycle_id"] for cycle in cycle_map["cycles"]}
+    assert cycle_ids == {
+        "cycle_a_macro2_reader_state",
+        "cycle_b_object_event_reader_state",
+    }
+    cycle_by_id = {cycle["cycle_id"]: cycle for cycle in cycle_map["cycles"]}
+    assert cycle_by_id["cycle_a_macro2_reader_state"]["candidate_packet_id"] == chain[
+        "macro2"
+    ]["packet_id"]
+    assert cycle_by_id["cycle_a_macro2_reader_state"]["proof_packet_id"] == chain[
+        "macro2_proof"
+    ]["packet_id"]
+    assert cycle_by_id["cycle_a_macro2_reader_state"]["reader_state_packet_id"] == chain[
+        "macro2_reader_state"
+    ]["packet_id"]
+    assert cycle_by_id["cycle_b_object_event_reader_state"]["strategy_packet_id"] == chain[
+        "next_target_strategy"
+    ]["packet_id"]
+    assert cycle_by_id["cycle_b_object_event_reader_state"]["candidate_packet_id"] == chain[
+        "object_event"
+    ]["packet_id"]
+    assert cycle_by_id["cycle_b_object_event_reader_state"]["proof_packet_id"] == chain[
+        "object_event_proof"
+    ]["packet_id"]
+    assert cycle_by_id["cycle_b_object_event_reader_state"]["reader_state_packet_id"] == chain[
+        "object_event_reader_state"
+    ]["packet_id"]
+
+    best = read_payload(packet_dir / "current_best_candidate_review.json")
+    assert best["selected_best_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert best["proof_linked"] is True
+    assert best["reader_state_evaluated"] is True
+    assert best["evidence_status"] == (
+        "useful_but_insufficient_with_partial_internal_reader_state_support"
+    )
+    assert any("strongest rival" in item for item in best["what_remains_unresolved"])
+    assert any("operator approval" in item for item in best["why_not_final"])
+    assert any("loop-level review" in item for item in best["why_immediate_generation_not_authorized"])
+
+    quality = read_payload(packet_dir / "evidence_quality_review.json")
+    assert quality["evidence_quality"]["candidate_model_backed"] is True
+    assert quality["evidence_quality"]["proof_model_backed"] is True
+    assert quality["evidence_quality"]["countable_ablation_evidence_exists"] is True
+    assert quality["evidence_quality"]["reader_state_evaluation_exists"] is True
+    assert quality["evidence_quality"][
+        "reader_state_is_internal_model_evidence_not_human_data"
+    ] is True
+    assert quality["nonblocking_integrity_classification"] == (
+        "loop_automation_cleanup_not_creative_blocker"
+    )
+
+    progress = read_payload(packet_dir / "reader_state_progress_review.json")
+    assert progress["progress_classification"]["object_event_pressure"] == (
+        "improved_but_insufficient"
+    )
+    assert progress["progress_classification"]["reread_transformation"] == "partial"
+    assert progress["progress_classification"]["strongest_rival"] == "still_blocks"
+    assert progress["table_dust_spoon_saucer_ring_causal_field_strengthened"] is True
+
+    rival = read_payload(packet_dir / "strongest_rival_status_review.json")
+    assert rival["strongest_rival_still_blocks"] is True
+    assert rival["strongest_rival_comparison_passed"] is False
+    assert rival["no_rival_defeat_claim"] is True
+    assert "first-read vividness" in rival["rival_still_wins_on"]
+
+    taxonomy = read_payload(packet_dir / "residual_blocker_taxonomy.json")
+    blocker_ids = {blocker["blocker_id"] for blocker in taxonomy["ranked_blockers"]}
+    assert "strongest_rival_still_winning" in blocker_ids
+    assert "reader_state_gain_still_partial" in blocker_ids
+    assert "artifact_count_or_packet_summary_cleanup_needed" in blocker_ids
+    assert "strongest_rival_still_winning" in taxonomy["creative_blockers"]
+    assert "loop_automation_not_ready" in taxonomy["automation_blockers"]
+
+    drift = read_payload(packet_dir / "drift_risk_report.json")
+    assert drift["immediate_new_generation_authorized"] is False
+    assert "high" in drift["immediate_new_generation_risk"]
+    assert chain["object_event_reader_state"]["packet_id"] in (
+        drift["why_immediate_reader_state_eval_would_be_redundant"]
+    )
+    assert chain["object_event_proof"]["packet_id"] in (
+        drift["why_immediate_ablation_would_be_redundant"]
+    )
+    assert drift["candidate_generated"] is False
+
+    integrity = read_payload(packet_dir / "loop_integrity_report.json")
+    assert integrity["ready_for_full_autonomous_loop"] is False
+    assert "loop_controller_not_ready_for_full_autonomy" in integrity["conclusions"]
+    assert integrity["checks"]["loop_review_command_exists"] is True
+    assert integrity["checks"]["manual_operator_still_required"] is True
+
+    decision = read_payload(packet_dir / "next_action_decision.json")
+    assert decision["recommended_next_action"] == (
+        "prepare_loop_integrity_cleanup_before_more_generation"
+    )
+    assert decision["immediate_creative_generation_authorized"] is False
+    assert decision["immediate_ablation_authorized"] is False
+    assert decision["immediate_reader_state_eval_authorized"] is False
+
+    readiness = read_payload(packet_dir / "loop_controller_readiness_report.json")
+    assert readiness["ready_for_autonomous_loop_controller"] is False
+    assert readiness["ready_for_supervised_next_cycle"] is False
+    assert "finalization never auto-passes" in readiness["required_before_loop_controller"]
+    assert "no finalization authority" in readiness["recommended_loop_controller_scope_if_later"]
+
+    gate = read_payload(packet_dir / "evidence_loop_review_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    for gate_name in (
+        "source_synthesis_consumed",
+        "current_best_candidate_identified",
+        "proof_packet_linked",
+        "reader_state_packet_linked",
+        "completed_cycles_mapped",
+        "residual_blockers_classified",
+        "drift_risk_assessed",
+        "loop_integrity_reviewed",
+        "no_candidate_generated",
+        "no_openai_calls",
+        "no_final_claim",
+        "no_phase_shift_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    for gate_name in (
+        "autonomous_loop_controller_ready",
+        "next_candidate_authorized",
+        "no_unresolved_internal_blockers",
+        "internal_operator_approval",
+        "finalization_eligible",
+    ):
+        assert gate_results[gate_name]["passed"] is False
+    assert gate["passed"] is False
+    assert gate["candidate_generated"] is False
+    assert gate["model_calls"] == 0
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    packet = read_payload(packet_dir / "evidence_loop_review_packet.json")
+    assert packet["current_best_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert packet["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert packet["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert packet["completed_cycle_count"] == 2
+    assert packet["candidate_generated"] is False
+    assert packet["model_calls"] == 0
+    assert packet["loop_controller_ready"] is False
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_evidence_loop_review_refuses_missing_best_current_candidate(tmp_path):
+    chain = build_object_event_candidate_with_reader_state(tmp_path)
+    synthesis = run_autonomous_evidence_synthesis(chain["config"], run_id=chain["run_id"])
+    assert synthesis.exit_code == 0
+    invalid_packet = tmp_path / "invalid_loop_review_missing_best"
+    shutil.copytree(Path(str(synthesis.payload["packet_dir"])), invalid_packet)
+
+    def _remove_packet_best(payload):
+        payload.pop("best_current_candidate", None)
+
+    def _remove_selected_best(payload):
+        payload.pop("selected_best_candidate", None)
+
+    rewrite_payload(
+        invalid_packet / "autonomous_evidence_synthesis_packet.json",
+        _remove_packet_best,
+    )
+    rewrite_payload(
+        invalid_packet / "best_current_candidate_selection.json",
+        _remove_selected_best,
+    )
+
+    result = run_evidence_loop_review(chain["config"], synthesis_packet=invalid_packet)
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "best_current_candidate" in result.payload["message"]
+    assert result.payload["artifact_ids"] == {}
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
 
 
 def test_autonomous_evidence_synthesis_keeps_macro2_without_object_event_proof(tmp_path):

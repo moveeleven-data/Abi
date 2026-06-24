@@ -44,6 +44,7 @@ from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
     run_bounded_macro_recomposition,
 )
+from abi.modules.evidence_loop_review import run_evidence_loop_review
 from abi.modules.internal_reader_lab import (
     INTERNAL_READER_LAB_CLIENTS,
     INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
@@ -457,6 +458,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Autonomous evidence synthesis packet directory to consume.",
     )
+    autonomous_loop_review_parser = autonomous_subparsers.add_parser(
+        "loop-review",
+        help="Review a completed autonomous evidence loop without generation",
+    )
+    autonomous_loop_review_parser.add_argument(
+        "--synthesis-packet",
+        type=Path,
+        required=True,
+        help="Autonomous evidence synthesis packet directory to consume.",
+    )
     autonomous_object_event_parser = autonomous_subparsers.add_parser(
         "object-event-recompose",
         help="Run one bounded object-event pressure recomposition from a strategy packet",
@@ -661,6 +672,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "autonomous" and args.autonomous_command == "plan-next-target":
         return _cmd_autonomous_plan_next_target(
+            config,
+            synthesis_packet=args.synthesis_packet,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "loop-review":
+        return _cmd_autonomous_loop_review(
             config,
             synthesis_packet=args.synthesis_packet,
         )
@@ -1022,6 +1038,16 @@ def _cmd_autonomous_plan_next_target(
     synthesis_packet: Path,
 ) -> int:
     result = run_next_target_strategy(config, synthesis_packet=synthesis_packet)
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_loop_review(
+    config: AbiConfig,
+    *,
+    synthesis_packet: Path,
+) -> int:
+    result = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
 
