@@ -16,7 +16,12 @@ from abi.controller.state import (
     set_active_phase,
 )
 from abi.db import connect, initialize_database
-from abi.packets import PacketWriter, create_packet_dir, read_json_file
+from abi.packets import (
+    PacketWriter,
+    create_packet_dir,
+    packet_artifact_count_summary,
+    read_json_file,
+)
 
 
 AUTONOMOUS_EVIDENCE_SYNTHESIS_LINEAGE_ID = "autonomous_evidence_synthesis_v1"
@@ -4268,6 +4273,11 @@ def _build_packet_summary(
     sources: list[SourcePacket],
 ) -> dict[str, object]:
     decision = payloads["strategic_decision_report"]
+    artifact_counts = packet_artifact_count_summary(
+        required_artifact_types=AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES,
+        produced_artifact_types=list(artifacts),
+        packet_artifact_type="autonomous_evidence_synthesis_packet",
+    )
     return {
         "run_id": run_id,
         "packet_id": packet_dir.name,
@@ -4277,9 +4287,10 @@ def _build_packet_summary(
         },
         "artifact_types": list(artifacts),
         "counts": {
+            **artifact_counts,
             "source_packets": len(sources),
-            "synthesis_artifacts": len(artifacts),
-            "required_synthesis_artifacts": len(AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES),
+            "synthesis_artifacts": artifact_counts["produced_artifacts"],
+            "required_synthesis_artifacts": artifact_counts["required_artifacts"],
             "model_calls": 0,
         },
         "source_chain": [_source_packet_summary(source) for source in sources],

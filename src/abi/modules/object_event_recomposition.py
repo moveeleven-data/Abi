@@ -29,7 +29,12 @@ from abi.model_schemas import (
     ModelValidationError,
     WorkerRole,
 )
-from abi.packets import PacketWriter, create_packet_dir, read_json_file
+from abi.packets import (
+    PacketWriter,
+    create_packet_dir,
+    packet_artifact_count_summary,
+    read_json_file,
+)
 
 
 OBJECT_EVENT_RECOMPOSITION_LINEAGE_ID = "object_event_pressure_recomposition_v1"
@@ -514,6 +519,14 @@ def run_object_event_recomposition(
         },
         "base_candidate_packet_id": subject.base_packet_id,
         "base_candidate_packet_dir": str(subject.base_packet_dir),
+        "current_best_candidate": {
+            "packet_id": subject.base_packet_id,
+            "packet_kind": subject.base_packet_kind,
+            "packet_dir": str(subject.base_packet_dir),
+        },
+        "current_best_candidate_packet_id": subject.base_packet_id,
+        "primary_next_target": OBJECT_EVENT_TARGET_SCOPE,
+        "target_name": OBJECT_EVENT_TARGET_SCOPE,
         "target_scope": OBJECT_EVENT_TARGET_SCOPE,
         "target_movement": OBJECT_EVENT_TARGET_SCOPE,
         "selected_region_id": subject.selected_region_id,
@@ -521,10 +534,15 @@ def run_object_event_recomposition(
         "object_event_pressure_recomposition": True,
         "full_rewrite": False,
         "counts": {
+            **packet_artifact_count_summary(
+                required_artifact_types=OBJECT_EVENT_RECOMPOSITION_ARTIFACT_TYPES,
+                produced_artifact_types=list(artifacts),
+                packet_artifact_type="macro_recomposition_packet",
+            ),
             "model_calls": len(model_results),
             "object_event_recomposition_artifacts": len(artifacts),
-            "required_object_event_recomposition_artifacts": len(
-                OBJECT_EVENT_RECOMPOSITION_ARTIFACT_TYPES
+            "required_object_event_recomposition_artifacts": (
+                len(OBJECT_EVENT_RECOMPOSITION_ARTIFACT_TYPES)
             ),
         },
         "model": configured_model if client_name == "openai" else None,
@@ -1270,6 +1288,11 @@ def _build_packet_summary(
     payloads: dict[str, dict[str, object]],
     model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
+    artifact_counts = packet_artifact_count_summary(
+        required_artifact_types=OBJECT_EVENT_RECOMPOSITION_ARTIFACT_TYPES,
+        produced_artifact_types=list(artifacts),
+        packet_artifact_type="macro_recomposition_packet",
+    )
     return {
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
@@ -1280,6 +1303,14 @@ def _build_packet_summary(
         "base_candidate_packet_id": subject.base_packet_id,
         "base_candidate_packet_dir": str(subject.base_packet_dir),
         "base_candidate_text_sha256": subject.base_text_sha256,
+        "current_best_candidate": {
+            "packet_id": subject.base_packet_id,
+            "packet_kind": subject.base_packet_kind,
+            "packet_dir": str(subject.base_packet_dir),
+        },
+        "current_best_candidate_packet_id": subject.base_packet_id,
+        "primary_next_target": OBJECT_EVENT_TARGET_SCOPE,
+        "target_name": OBJECT_EVENT_TARGET_SCOPE,
         "target_scope": OBJECT_EVENT_TARGET_SCOPE,
         "target_movement": OBJECT_EVENT_TARGET_SCOPE,
         "selected_region_id": subject.selected_region_id,
@@ -1288,11 +1319,14 @@ def _build_packet_summary(
         },
         "artifact_types": list(artifacts),
         "counts": {
+            **artifact_counts,
             "model_calls": len(model_results),
-            "object_event_recomposition_artifacts": len(artifacts),
-            "required_object_event_recomposition_artifacts": len(
-                OBJECT_EVENT_RECOMPOSITION_ARTIFACT_TYPES
-            ),
+            "object_event_recomposition_artifacts": artifact_counts[
+                "produced_artifacts"
+            ],
+            "required_object_event_recomposition_artifacts": artifact_counts[
+                "required_artifacts"
+            ],
         },
         "model": model,
         "model_call_ids": [result.model_call.id for result in model_results],

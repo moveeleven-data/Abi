@@ -72,14 +72,20 @@ def test_internal_reader_state_eval_fake_creates_fail_closed_packet(tmp_path):
     assert result.payload["client"] == "fake"
     assert result.payload["selected_candidate_packet_id"] == macro_payload["packet_id"]
     assert result.payload["strongest_rival_present"] is True
-    assert result.payload["counts"] == {
-        "internal_reader_state_eval_artifacts": len(INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES),
-        "required_internal_reader_state_eval_artifacts": len(
-            INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES
-        ),
-        "model_calls": 0,
-        "recorded_gates": 12,
-    }
+    assert result.payload["counts"]["internal_reader_state_eval_artifacts"] == len(
+        INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["required_internal_reader_state_eval_artifacts"] == len(
+        INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["produced_artifacts"] == len(
+        INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["required_artifacts"] == len(
+        INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["counts"]["recorded_gates"] == 12
     assert set(result.payload["artifact_ids"]) == set(INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES)
 
     packet_dir = Path(str(result.payload["packet_dir"]))

@@ -36,6 +36,11 @@ from abi.model_schemas import (
     parse_and_validate_structured_output,
 )
 from abi.openai_adapter import openai_response_format_for_request
+from abi.loop_integrity import (
+    build_proof_before_next_generation_guard,
+    build_repeated_target_drift_guard,
+    detect_stale_recommendations,
+)
 from abi.modules.autonomous_revision import (
     AUTONOMOUS_REVISION_ARTIFACT_TYPES,
     AUTONOMOUS_REVISION_ALLOWED_ABLATION_PROBE_IDS,
@@ -93,6 +98,7 @@ from abi.modules.next_target_strategy import (
     run_next_target_strategy,
 )
 from abi.modules.object_event_recomposition import (
+    OBJECT_EVENT_RECOMPOSITION_ARTIFACT_TYPES,
     OBJECT_EVENT_TARGET_SCOPE,
     run_object_event_recomposition,
 )
@@ -6519,6 +6525,11 @@ def test_next_target_strategy_accepts_reader_state_synthesis_and_operationalizes
         "packet_id"
     ]
     assert result.payload["target_name"] == "first_read_object_event_pressure_gap"
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["current_best_candidate"]["packet_id"] == chain["macro2"][
+        "packet_id"
+    ]
+    assert result.payload["primary_next_target"] == "first_read_object_event_pressure_gap"
     packet_dir = Path(str(result.payload["packet_dir"]))
     assert packet_dir.parent.name == "next_target_strategy"
     assert {artifact.type for artifact in result.artifacts} == set(
@@ -6653,9 +6664,13 @@ def test_next_target_strategy_accepts_reader_state_synthesis_and_operationalizes
 
     packet = read_payload(packet_dir / "next_target_strategy_packet.json")
     assert packet["current_best_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert packet["current_best_candidate"]["packet_id"] == chain["macro2"]["packet_id"]
     assert packet["proof_packet_id"] == chain["macro2_proof"]["packet_id"]
     assert packet["reader_state_packet_id"] == chain["macro2_reader_state"]["packet_id"]
+    assert packet["primary_next_target"] == "first_read_object_event_pressure_gap"
     assert packet["counts"]["model_calls"] == 0
+    assert packet["counts"]["produced_artifacts"] == len(NEXT_TARGET_STRATEGY_ARTIFACT_TYPES)
+    assert packet["counts"]["required_artifacts"] == len(NEXT_TARGET_STRATEGY_ARTIFACT_TYPES)
     assert packet["counts"]["candidate_artifacts_created"] == 0
     assert packet["counts"]["strategy_artifacts"] == len(NEXT_TARGET_STRATEGY_ARTIFACT_TYPES)
     assert packet["candidate_generated"] is False
@@ -6731,6 +6746,11 @@ def test_object_event_recomposition_fake_accepts_strategy_and_preserves_base(tmp
     assert result.payload["base_candidate_packet_id"] == chain["macro2"]["packet_id"]
     assert result.payload["base_candidate_packet_id"] != chain["macro_payload"]["packet_id"]
     assert result.payload["target_scope"] == OBJECT_EVENT_TARGET_SCOPE
+    assert result.payload["target_name"] == OBJECT_EVENT_TARGET_SCOPE
+    assert result.payload["primary_next_target"] == OBJECT_EVENT_TARGET_SCOPE
+    assert result.payload["current_best_candidate"]["packet_id"] == chain["macro2"][
+        "packet_id"
+    ]
     assert result.payload["selected_region_id"] == "middle_recurrence_ordinary_trace_logic"
     assert result.payload["candidate_generated"] is True
     packet_dir = Path(str(result.payload["packet_dir"]))
@@ -6815,8 +6835,12 @@ def test_object_event_recomposition_fake_accepts_strategy_and_preserves_base(tmp
 
     packet = read_payload(packet_dir / "macro_recomposition_packet.json")
     assert packet["base_candidate_packet_id"] == chain["macro2"]["packet_id"]
+    assert packet["current_best_candidate"]["packet_id"] == chain["macro2"]["packet_id"]
+    assert packet["target_name"] == OBJECT_EVENT_TARGET_SCOPE
+    assert packet["primary_next_target"] == OBJECT_EVENT_TARGET_SCOPE
     assert packet["target_scope"] == OBJECT_EVENT_TARGET_SCOPE
     assert packet["counts"]["model_calls"] == 0
+    assert packet["counts"]["produced_artifacts"] == len(OBJECT_EVENT_RECOMPOSITION_ARTIFACT_TYPES)
     assert packet["requires_executed_ablation_before_improvement_claim"] is True
 
     with connect(config.db_path) as connection:
@@ -7490,6 +7514,85 @@ def test_autonomous_evidence_synthesis_links_object_event_reader_state_by_hash(
     assert final_report.refused is True
 
 
+def test_stale_recommendation_detector_catches_reader_state_eval_after_packet_exists():
+    report = detect_stale_recommendations(
+        selected_candidate={
+            "packet_id": "packet_candidate",
+            "reader_state_packet_id": "packet_reader_state",
+        },
+        synthesis_packet={
+            "object_event_reader_state_eval_needed": True,
+            "next_recommended_action": "run_object_event_reader_state_evaluation",
+        },
+        source_chain=[],
+        reader_state_packet={"packet_id": "packet_reader_state"},
+    )
+
+    assert report["stale_recommendation_detected"] is True
+    assert report["stale_recommendations"][0]["stale_recommendation_type"] == (
+        "reader_state_eval_needed_but_packet_exists"
+    )
+
+
+def test_stale_recommendation_detector_catches_strategy_after_candidate_exists():
+    report = detect_stale_recommendations(
+        selected_candidate={
+            "packet_id": "packet_candidate",
+            "source_strategy_packet_id": "packet_strategy",
+        },
+        synthesis_packet={"next_recommended_action": "prepare_next_target_strategy"},
+        source_chain=[
+            {
+                "packet_kind": "bounded_macro_recomposition",
+                "packet_id": "packet_candidate",
+                "source_strategy_packet_id": "packet_strategy",
+            }
+        ],
+        strategy_packet={"packet_id": "packet_strategy"},
+    )
+
+    assert report["stale_recommendation_detected"] is True
+    assert report["stale_recommendations"][0]["stale_recommendation_type"] == (
+        "strategy_needed_but_strategy_or_candidate_exists"
+    )
+
+
+def test_proof_before_next_generation_guard_blocks_when_loop_cleanup_required():
+    guard = build_proof_before_next_generation_guard(
+        selected_candidate={
+            "packet_id": "packet_candidate",
+            "proof_packet_id": "packet_proof",
+            "reader_state_packet_id": "packet_reader_state",
+        },
+        proof_packet={"packet_id": "packet_proof"},
+        reader_state_packet={"packet_id": "packet_reader_state"},
+        latest_loop_review_requires_cleanup_first=True,
+        prior_generated_candidate_synthesized=True,
+        stale_recommendation_active=False,
+    )
+
+    assert guard["next_generation_authorized"] is False
+    assert guard["proof_status_current"] is True
+    assert guard["reader_state_status_current"] is True
+    assert "latest loop review requires cleanup before generation" in guard[
+        "next_generation_blockers"
+    ]
+
+
+def test_repeated_target_drift_guard_flags_stale_target_repetition():
+    guard = build_repeated_target_drift_guard(
+        current_target_class="proof_no_answer_compression",
+        previous_target_class="proof_no_answer_compression",
+        evidence_shifted_to_target_class="first_read_object_event_pressure_gap",
+        loop_integrity_cleanup_required=True,
+    )
+
+    assert guard["repeated_target_drift_detected"] is True
+    finding_ids = {finding["finding_id"] for finding in guard["findings"]}
+    assert "target_repeated_after_evidence_shift" in finding_ids
+    assert "target_recommended_while_loop_cleanup_required" in finding_ids
+
+
 def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
     chain = build_object_event_candidate_with_reader_state(tmp_path)
     config = chain["config"]
@@ -7518,9 +7621,18 @@ def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
         "packet_id"
     ]
     assert result.payload["completed_cycles"] == 2
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["counts"]["produced_artifacts"] == len(
+        EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES
+    )
     assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0
     assert result.payload["loop_controller_ready"] is False
+    assert result.payload["ready_for_full_autonomous_loop_controller"] is False
+    assert result.payload["ready_for_supervised_next_cycle"] is False
+    assert result.payload["loop_integrity_cleanup_required"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["next_generation_blockers"]
     assert result.payload["next_recommended_action"] == (
         "prepare_loop_integrity_cleanup_before_more_generation"
     )
@@ -7614,6 +7726,8 @@ def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
 
     drift = read_payload(packet_dir / "drift_risk_report.json")
     assert drift["immediate_new_generation_authorized"] is False
+    assert drift["next_generation_authorized"] is False
+    assert drift["loop_integrity_cleanup_required"] is True
     assert "high" in drift["immediate_new_generation_risk"]
     assert chain["object_event_reader_state"]["packet_id"] in (
         drift["why_immediate_reader_state_eval_would_be_redundant"]
@@ -7621,12 +7735,37 @@ def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
     assert chain["object_event_proof"]["packet_id"] in (
         drift["why_immediate_ablation_would_be_redundant"]
     )
+    assert drift["freshness_report"]["stale_recommendation_detected"] is False
+    assert drift["proof_before_next_generation_guard"]["proof_status_current"] is True
+    assert drift["proof_before_next_generation_guard"][
+        "reader_state_status_current"
+    ] is True
+    assert drift["proof_before_next_generation_guard"][
+        "next_generation_authorized"
+    ] is False
+    assert "latest loop review requires cleanup before generation" in drift[
+        "proof_before_next_generation_guard"
+    ]["next_generation_blockers"]
+    assert drift["reader_state_before_synthesis_guard"][
+        "reader_state_before_synthesis_warning"
+    ] is False
+    assert drift["repeated_target_drift_guard"][
+        "repeated_target_drift_detected"
+    ] is True
     assert drift["candidate_generated"] is False
 
     integrity = read_payload(packet_dir / "loop_integrity_report.json")
     assert integrity["ready_for_full_autonomous_loop"] is False
+    assert integrity["ready_for_full_autonomous_loop_controller"] is False
+    assert integrity["ready_for_supervised_next_cycle"] is False
+    assert integrity["loop_integrity_cleanup_required"] is True
+    assert integrity["next_generation_authorized"] is False
+    assert integrity["next_generation_blockers"]
+    assert integrity["cleanup_blockers"]
+    assert integrity["automation_blockers"]
     assert "loop_controller_not_ready_for_full_autonomy" in integrity["conclusions"]
     assert integrity["checks"]["loop_review_command_exists"] is True
+    assert integrity["checks"]["command_output_shape_aliases_present"] is True
     assert integrity["checks"]["manual_operator_still_required"] is True
 
     decision = read_payload(packet_dir / "next_action_decision.json")
@@ -7636,10 +7775,18 @@ def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
     assert decision["immediate_creative_generation_authorized"] is False
     assert decision["immediate_ablation_authorized"] is False
     assert decision["immediate_reader_state_eval_authorized"] is False
+    assert decision["next_generation_authorized"] is False
+    assert decision["loop_integrity_cleanup_required"] is True
+    assert decision["next_generation_blockers"]
+    assert decision["cleanup_blockers"]
+    assert decision["automation_blockers"]
 
     readiness = read_payload(packet_dir / "loop_controller_readiness_report.json")
+    assert readiness["ready_for_full_autonomous_loop_controller"] is False
     assert readiness["ready_for_autonomous_loop_controller"] is False
     assert readiness["ready_for_supervised_next_cycle"] is False
+    assert readiness["loop_integrity_cleanup_required"] is True
+    assert readiness["next_generation_authorized"] is False
     assert "finalization never auto-passes" in readiness["required_before_loop_controller"]
     assert "no finalization authority" in readiness["recommended_loop_controller_scope_if_later"]
 
@@ -7669,6 +7816,10 @@ def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
     ):
         assert gate_results[gate_name]["passed"] is False
     assert gate["passed"] is False
+    assert gate["next_generation_authorized"] is False
+    assert gate["loop_integrity_cleanup_required"] is True
+    assert gate["cleanup_blockers"]
+    assert gate["automation_blockers"]
     assert gate["candidate_generated"] is False
     assert gate["model_calls"] == 0
     assert gate["finalization_eligible"] is False
@@ -7681,6 +7832,12 @@ def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
         "packet_id"
     ]
     assert packet["completed_cycle_count"] == 2
+    assert packet["counts"]["model_calls"] == 0
+    assert packet["counts"]["produced_artifacts"] == len(EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES)
+    assert packet["counts"]["required_artifacts"] == len(EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES)
+    assert packet["loop_integrity_cleanup_required"] is True
+    assert packet["next_generation_authorized"] is False
+    assert packet["next_generation_blockers"]
     assert packet["candidate_generated"] is False
     assert packet["model_calls"] == 0
     assert packet["loop_controller_ready"] is False

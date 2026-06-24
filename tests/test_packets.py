@@ -3,7 +3,7 @@ import json
 from abi.config import AbiConfig
 from abi.controller.state import ensure_active_run
 from abi.db import connect
-from abi.packets import PacketWriter, create_packet_dir
+from abi.packets import PacketWriter, create_packet_dir, packet_artifact_count_summary
 
 
 def config_for(tmp_path):
@@ -62,3 +62,19 @@ def test_packet_writer_writes_normalized_envelope_and_registers_artifact(tmp_pat
         "model_call_id": None,
         "payload": payload,
     }
+
+
+def test_packet_artifact_count_summary_includes_packet_self_artifact():
+    summary = packet_artifact_count_summary(
+        required_artifact_types=("a", "b", "packet"),
+        produced_artifact_types=("a", "b"),
+        packet_artifact_type="packet",
+    )
+
+    assert summary["required_artifacts"] == 3
+    assert summary["produced_artifacts"] == 3
+    assert summary["packet_artifact_type"] == "packet"
+    assert summary["packet_artifact_included_in_counts"] is True
+    assert summary["packet_artifact_present"] is True
+    assert summary["missing_artifact_types"] == []
+    assert summary["artifact_count_consistent"] is True

@@ -16,7 +16,18 @@ from abi.controller.state import (
     set_active_phase,
 )
 from abi.db import connect, initialize_database
-from abi.packets import PacketWriter, create_packet_dir, read_json_file
+from abi.loop_integrity import (
+    build_proof_before_next_generation_guard,
+    build_reader_state_before_synthesis_guard,
+    build_repeated_target_drift_guard,
+    detect_stale_recommendations,
+)
+from abi.packets import (
+    PacketWriter,
+    create_packet_dir,
+    packet_artifact_count_summary,
+    read_json_file,
+)
 
 
 EVIDENCE_LOOP_REVIEW_LINEAGE_ID = "evidence_loop_review_v1"
@@ -211,7 +222,10 @@ def run_evidence_loop_review(
             ],
         )
 
-        payloads["loop_integrity_report"] = _build_loop_integrity_report(subject)
+        payloads["loop_integrity_report"] = _build_loop_integrity_report(
+            subject,
+            payloads["drift_risk_report"],
+        )
         artifacts["loop_integrity_report"] = writer.write_artifact(
             "loop_integrity_report",
             payloads["loop_integrity_report"],
@@ -237,7 +251,11 @@ def run_evidence_loop_review(
         )
 
         payloads["loop_controller_readiness_report"] = (
-            _build_loop_controller_readiness_report(subject)
+            _build_loop_controller_readiness_report(
+                subject,
+                payloads["drift_risk_report"],
+                payloads["loop_integrity_report"],
+            )
         )
         artifacts["loop_controller_readiness_report"] = writer.write_artifact(
             "loop_controller_readiness_report",
@@ -309,12 +327,31 @@ def run_evidence_loop_review(
         "reader_state_packet_id": subject.selected_candidate.get("reader_state_packet_id")
         or subject.payloads["reader_state_evidence_adjudication"].get("packet_id"),
         "completed_cycles": payloads["completed_cycle_map"]["cycle_count"],
+        "counts": payloads["evidence_loop_review_packet"]["counts"],
         "next_recommended_action": payloads["next_action_decision"][
             "recommended_next_action"
         ],
         "loop_controller_ready": payloads["loop_controller_readiness_report"][
             "ready_for_autonomous_loop_controller"
         ],
+        "ready_for_full_autonomous_loop_controller": payloads[
+            "loop_controller_readiness_report"
+        ]["ready_for_full_autonomous_loop_controller"],
+        "ready_for_supervised_next_cycle": payloads["loop_controller_readiness_report"][
+            "ready_for_supervised_next_cycle"
+        ],
+        "loop_integrity_cleanup_required": payloads["loop_integrity_report"][
+            "loop_integrity_cleanup_required"
+        ],
+        "next_generation_authorized": payloads["next_action_decision"][
+            "next_generation_authorized"
+        ],
+        "next_generation_blockers": payloads["next_action_decision"][
+            "next_generation_blockers"
+        ],
+        "stale_recommendation_detected": payloads["drift_risk_report"][
+            "freshness_report"
+        ]["stale_recommendation_detected"],
         "candidate_generated": False,
         "model_calls": 0,
         "gate_report": payloads["evidence_loop_review_gate_report"],
@@ -746,6 +783,35 @@ def _build_drift_risk_report(subject: LoopReviewSubject) -> dict[str, object]:
         or subject.payloads["reader_state_evidence_adjudication"].get("packet_id")
         or ""
     )
+    freshness_report = detect_stale_recommendations(
+        selected_candidate=subject.selected_candidate,
+        synthesis_packet=subject.payloads["autonomous_evidence_synthesis_packet"],
+        source_chain=subject.source_chain,
+        proof_packet=subject.proof_packet,
+        reader_state_packet=subject.reader_state_packet,
+        strategy_packet=subject.strategy_packet,
+    )
+    proof_guard = build_proof_before_next_generation_guard(
+        selected_candidate=subject.selected_candidate,
+        proof_packet=subject.proof_packet,
+        reader_state_packet=subject.reader_state_packet,
+        latest_loop_review_requires_cleanup_first=True,
+        prior_generated_candidate_synthesized=True,
+        stale_recommendation_active=bool(
+            freshness_report["stale_recommendation_detected"]
+        ),
+    )
+    reader_state_guard = build_reader_state_before_synthesis_guard(
+        selected_candidate=subject.selected_candidate,
+        available_reader_state_packet=subject.reader_state_packet,
+        consumed_reader_state_packet_id=reader_state_packet_id,
+    )
+    target_guard = build_repeated_target_drift_guard(
+        current_target_class=str(subject.selected_candidate.get("target_scope") or ""),
+        previous_target_class=str((subject.prior_best_packet or {}).get("target_scope") or ""),
+        evidence_shifted_to_target_class="loop_integrity_cleanup_before_generation",
+        loop_integrity_cleanup_required=True,
+    )
     return {
         "immediate_new_generation_authorized": False,
         "immediate_new_generation_risk": (
@@ -789,6 +855,16 @@ def _build_drift_risk_report(subject: LoopReviewSubject) -> dict[str, object]:
             "reader-state gains plateau or regress",
             "operator decides preservation/review is preferable",
         ],
+        "freshness_report": freshness_report,
+        "proof_before_next_generation_guard": proof_guard,
+        "reader_state_before_synthesis_guard": reader_state_guard,
+        "repeated_target_drift_guard": target_guard,
+        "stale_recommendation_detected": freshness_report[
+            "stale_recommendation_detected"
+        ],
+        "next_generation_authorized": proof_guard["next_generation_authorized"],
+        "next_generation_blockers": proof_guard["next_generation_blockers"],
+        "loop_integrity_cleanup_required": True,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -797,7 +873,17 @@ def _build_drift_risk_report(subject: LoopReviewSubject) -> dict[str, object]:
     }
 
 
-def _build_loop_integrity_report(subject: LoopReviewSubject) -> dict[str, object]:
+def _build_loop_integrity_report(
+    subject: LoopReviewSubject,
+    drift_risk: dict[str, object],
+) -> dict[str, object]:
+    freshness = _as_dict(drift_risk.get("freshness_report"))
+    proof_guard = _as_dict(drift_risk.get("proof_before_next_generation_guard"))
+    target_guard = _as_dict(drift_risk.get("repeated_target_drift_guard"))
+    nonblocking_quirks = _nonblocking_integrity_quirks(
+        subject,
+        _as_dict(subject.payloads["autonomous_evidence_synthesis_packet"].get("counts")),
+    )
     checks = {
         "candidate_generation_command_exists": True,
         "ablation_command_exists": True,
@@ -809,12 +895,31 @@ def _build_loop_integrity_report(subject: LoopReviewSubject) -> dict[str, object
         "finalization_still_refuses": True,
         "live_model_paths_are_guarded": True,
         "evidence_pairing_works_across_candidate_proof_reader_state": True,
-        "packet_self_count_reporting_quirks_remain": bool(
-            _nonblocking_integrity_quirks(subject, _as_dict(subject.payloads["autonomous_evidence_synthesis_packet"].get("counts")))
+        "packet_self_count_reporting_quirks_remain": bool(nonblocking_quirks),
+        "stale_recommendation_detected": bool(
+            freshness.get("stale_recommendation_detected")
         ),
-        "stale_command_output_shape_issues_remain": True,
+        "proof_before_next_generation_guard_exists": True,
+        "reader_state_before_synthesis_guard_exists": True,
+        "repeated_target_drift_guard_exists": True,
+        "repeated_target_drift_detected": bool(
+            target_guard.get("repeated_target_drift_detected")
+        ),
+        "command_output_shape_aliases_present": True,
+        "stale_command_output_shape_issues_remain": False,
         "manual_operator_still_required": True,
     }
+    cleanup_blockers = [
+        "loop review must be inspected before any next creative command",
+        "artifact/command output consistency must remain stable in fresh command output",
+    ]
+    if nonblocking_quirks:
+        cleanup_blockers.append("legacy packet count quirks remain in older source packets")
+    automation_blockers = [
+        "autonomous loop controller is not implemented",
+        "manual operator approval remains required",
+        "freshness and repeated-target guards are diagnostic only",
+    ]
     return {
         "checks": checks,
         "conclusions": [
@@ -822,8 +927,18 @@ def _build_loop_integrity_report(subject: LoopReviewSubject) -> dict[str, object
             "loop_scaffold_ready_for_manual_supervised_repetition",
             "loop_integrity_cleanup_required_before_automation",
         ],
+        "ready_for_full_autonomous_loop_controller": False,
         "ready_for_full_autonomous_loop": False,
-        "ready_for_manual_supervised_repetition": True,
+        "ready_for_supervised_next_cycle": False,
+        "ready_for_manual_supervised_repetition": False,
+        "loop_integrity_cleanup_required": True,
+        "next_generation_authorized": False,
+        "next_generation_blockers": proof_guard.get("next_generation_blockers", []),
+        "cleanup_blockers": cleanup_blockers,
+        "automation_blockers": automation_blockers,
+        "stale_recommendation_report": freshness,
+        "proof_before_next_generation_guard": proof_guard,
+        "repeated_target_drift_guard": target_guard,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -837,12 +952,21 @@ def _build_next_action_decision(
     drift_risk: dict[str, object],
     loop_integrity: dict[str, object],
 ) -> dict[str, object]:
+    proof_guard = _as_dict(drift_risk.get("proof_before_next_generation_guard"))
     return {
         "recommended_next_action": "prepare_loop_integrity_cleanup_before_more_generation",
         "allowed_next_action_family": "loop_integrity_cleanup_or_supervised_operator_review",
         "immediate_creative_generation_authorized": False,
         "immediate_ablation_authorized": False,
         "immediate_reader_state_eval_authorized": False,
+        "next_generation_authorized": False,
+        "next_generation_blockers": proof_guard.get("next_generation_blockers", []),
+        "cleanup_blockers": loop_integrity.get("cleanup_blockers", []),
+        "automation_blockers": loop_integrity.get("automation_blockers", []),
+        "loop_integrity_cleanup_required": True,
+        "stale_recommendation_detected": _as_dict(
+            drift_risk.get("freshness_report")
+        ).get("stale_recommendation_detected", False),
         "basis": [
             "current best candidate remains packet "
             f"{subject.selected_candidate.get('packet_id')}",
@@ -861,10 +985,22 @@ def _build_next_action_decision(
     }
 
 
-def _build_loop_controller_readiness_report(subject: LoopReviewSubject) -> dict[str, object]:
+def _build_loop_controller_readiness_report(
+    subject: LoopReviewSubject,
+    drift_risk: dict[str, object],
+    loop_integrity: dict[str, object],
+) -> dict[str, object]:
     return {
+        "ready_for_full_autonomous_loop_controller": False,
         "ready_for_autonomous_loop_controller": False,
         "ready_for_supervised_next_cycle": False,
+        "loop_integrity_cleanup_required": True,
+        "next_generation_authorized": False,
+        "next_generation_blockers": _as_dict(
+            drift_risk.get("proof_before_next_generation_guard")
+        ).get("next_generation_blockers", []),
+        "cleanup_blockers": loop_integrity.get("cleanup_blockers", []),
+        "automation_blockers": loop_integrity.get("automation_blockers", []),
         "required_before_loop_controller": [
             "artifact-count/self-count cleanup",
             "stable command output shape",
@@ -959,12 +1095,33 @@ def _build_gate_report(
         "next candidate is not authorized",
         "strongest rival still blocks",
         "reader-state gain remains partial",
+        "loop-integrity cleanup is required before generation",
         "internal operator approval is absent",
         "finalization remains ineligible",
     ]
     return {
         "passed": False,
         "eligible": False,
+        "ready_for_full_autonomous_loop_controller": False,
+        "ready_for_supervised_next_cycle": False,
+        "loop_integrity_cleanup_required": True,
+        "next_generation_authorized": False,
+        "next_generation_blockers": payloads["next_action_decision"].get(
+            "next_generation_blockers",
+            [],
+        ),
+        "cleanup_blockers": payloads["next_action_decision"].get(
+            "cleanup_blockers",
+            [],
+        ),
+        "automation_blockers": payloads["next_action_decision"].get(
+            "automation_blockers",
+            [],
+        ),
+        "stale_recommendation_detected": payloads["next_action_decision"].get(
+            "stale_recommendation_detected",
+            False,
+        ),
         "finalization_eligible": False,
         "not_finalization_eligible": True,
         "not_human_validated": True,
@@ -994,6 +1151,11 @@ def _build_packet_summary(
     payloads: dict[str, dict[str, object]],
     artifacts: dict[str, ArtifactRecord],
 ) -> dict[str, object]:
+    artifact_counts = packet_artifact_count_summary(
+        required_artifact_types=EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES,
+        produced_artifact_types=list(artifacts),
+        packet_artifact_type="evidence_loop_review_packet",
+    )
     return {
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
@@ -1003,8 +1165,9 @@ def _build_packet_summary(
         },
         "artifact_types": [*artifacts, "evidence_loop_review_packet"],
         "counts": {
-            "loop_review_artifacts": len(artifacts) + 1,
-            "required_loop_review_artifacts": len(EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES),
+            **artifact_counts,
+            "loop_review_artifacts": artifact_counts["produced_artifacts"],
+            "required_loop_review_artifacts": artifact_counts["required_artifacts"],
             "model_calls": 0,
             "candidate_artifacts_created": 0,
         },
@@ -1023,6 +1186,36 @@ def _build_packet_summary(
         ],
         "loop_controller_ready": payloads["loop_controller_readiness_report"][
             "ready_for_autonomous_loop_controller"
+        ],
+        "ready_for_full_autonomous_loop_controller": payloads[
+            "loop_controller_readiness_report"
+        ]["ready_for_full_autonomous_loop_controller"],
+        "ready_for_supervised_next_cycle": payloads["loop_controller_readiness_report"][
+            "ready_for_supervised_next_cycle"
+        ],
+        "loop_integrity_cleanup_required": payloads["loop_integrity_report"][
+            "loop_integrity_cleanup_required"
+        ],
+        "next_generation_authorized": payloads["next_action_decision"][
+            "next_generation_authorized"
+        ],
+        "next_generation_blockers": payloads["next_action_decision"][
+            "next_generation_blockers"
+        ],
+        "cleanup_blockers": payloads["next_action_decision"]["cleanup_blockers"],
+        "automation_blockers": payloads["next_action_decision"]["automation_blockers"],
+        "stale_recommendation_detected": payloads["next_action_decision"][
+            "stale_recommendation_detected"
+        ],
+        "freshness_report": payloads["drift_risk_report"]["freshness_report"],
+        "proof_before_next_generation_guard": payloads["drift_risk_report"][
+            "proof_before_next_generation_guard"
+        ],
+        "reader_state_before_synthesis_guard": payloads["drift_risk_report"][
+            "reader_state_before_synthesis_guard"
+        ],
+        "repeated_target_drift_guard": payloads["drift_risk_report"][
+            "repeated_target_drift_guard"
         ],
         "next_recommended_action": payloads["next_action_decision"][
             "recommended_next_action"
@@ -1214,7 +1407,7 @@ def _nonblocking_integrity_quirks(
     findings: list[dict[str, object]] = []
     required = int(synthesis_counts.get("required_synthesis_artifacts") or 0)
     actual = int(synthesis_counts.get("synthesis_artifacts") or 0)
-    if required and actual and required != actual:
+    if _count_is_inconsistent_after_packet_policy(required=required, actual=actual):
         findings.append(
             {
                 "finding_id": "synthesis_artifact_count_self_count_mismatch",
@@ -1228,7 +1421,10 @@ def _nonblocking_integrity_quirks(
         counts = _as_dict(source.get("counts"))
         required_ablation = int(counts.get("required_executed_ablation_artifacts") or 0)
         actual_ablation = int(counts.get("executed_ablation_artifacts") or 0)
-        if required_ablation and actual_ablation and required_ablation != actual_ablation:
+        if _count_is_inconsistent_after_packet_policy(
+            required=required_ablation,
+            actual=actual_ablation,
+        ):
             findings.append(
                 {
                     "finding_id": "executed_ablation_packet_self_count_mismatch",
@@ -1255,6 +1451,12 @@ def _nonblocking_integrity_quirks(
         }
     )
     return findings
+
+
+def _count_is_inconsistent_after_packet_policy(*, required: int, actual: int) -> bool:
+    if not required or not actual or required == actual:
+        return False
+    return actual + 1 != required
 
 
 def _artifact_for_path(connection: sqlite3.Connection, path: Path) -> ArtifactRecord | None:

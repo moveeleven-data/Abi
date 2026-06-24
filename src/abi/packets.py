@@ -52,6 +52,43 @@ def build_artifact_envelope(
     }
 
 
+def packet_artifact_count_summary(
+    *,
+    required_artifact_types: tuple[str, ...] | list[str],
+    produced_artifact_types: tuple[str, ...] | list[str],
+    packet_artifact_type: str,
+    packet_artifact_included_in_counts: bool = True,
+) -> dict[str, object]:
+    """Return a normalized packet/self artifact count summary.
+
+    Packet builders usually call this before the final packet artifact has been
+    written, while command payloads often see the final artifact included. This
+    helper makes that inclusion policy explicit and avoids one-off self-count
+    mismatches.
+    """
+
+    required = list(required_artifact_types)
+    produced = list(produced_artifact_types)
+    if packet_artifact_included_in_counts and packet_artifact_type not in produced:
+        produced = [*produced, packet_artifact_type]
+    required_set = set(required)
+    produced_set = set(produced)
+    missing = [artifact_type for artifact_type in required if artifact_type not in produced_set]
+    extras = [
+        artifact_type for artifact_type in produced if artifact_type not in required_set
+    ]
+    return {
+        "required_artifacts": len(required),
+        "produced_artifacts": len(produced),
+        "packet_artifact_type": packet_artifact_type,
+        "packet_artifact_included_in_counts": packet_artifact_included_in_counts,
+        "packet_artifact_present": packet_artifact_type in produced_set,
+        "missing_artifact_types": missing,
+        "extra_artifact_types": extras,
+        "artifact_count_consistent": not missing,
+    }
+
+
 class PacketWriter:
     def __init__(
         self,

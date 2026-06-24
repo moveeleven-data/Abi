@@ -23,7 +23,12 @@ from abi.model_schemas import (
     ModelValidationError,
     WorkerRole,
 )
-from abi.packets import PacketWriter, create_packet_dir, read_json_file
+from abi.packets import (
+    PacketWriter,
+    create_packet_dir,
+    packet_artifact_count_summary,
+    read_json_file,
+)
 
 
 EXECUTED_ABLATION_LINEAGE_ID = "executed_counterfactual_ablation_v1"
@@ -2502,6 +2507,11 @@ def _build_packet_summary(
     model_results: list[ModelDriverResult],
     fixture_only: bool,
 ) -> dict[str, Any]:
+    artifact_counts = packet_artifact_count_summary(
+        required_artifact_types=EXECUTED_ABLATION_ARTIFACT_TYPES,
+        produced_artifact_types=list(artifacts),
+        packet_artifact_type="executed_ablation_packet",
+    )
     return {
         "worker": "executed_ablation_packet_v1",
         "run_id": subject.run_id,
@@ -2519,8 +2529,9 @@ def _build_packet_summary(
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
         },
         "counts": {
-            "executed_ablation_artifacts": len(artifacts),
-            "required_executed_ablation_artifacts": len(EXECUTED_ABLATION_ARTIFACT_TYPES),
+            **artifact_counts,
+            "executed_ablation_artifacts": artifact_counts["produced_artifacts"],
+            "required_executed_ablation_artifacts": artifact_counts["required_artifacts"],
             "actual_variant_count": payloads["ablation_execution_report"][
                 "actual_variant_count"
             ],
@@ -3521,6 +3532,11 @@ def _summary_payload(
     model: str | None,
     model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
+    artifact_counts = packet_artifact_count_summary(
+        required_artifact_types=EXECUTED_ABLATION_ARTIFACT_TYPES,
+        produced_artifact_types=list(artifacts),
+        packet_artifact_type="executed_ablation_packet",
+    )
     return {
         "accepted": accepted,
         "refused": False,
@@ -3541,8 +3557,9 @@ def _summary_payload(
         },
         "required_artifact_types": list(EXECUTED_ABLATION_ARTIFACT_TYPES),
         "counts": {
-            "executed_ablation_artifacts": len(artifacts),
-            "required_executed_ablation_artifacts": len(EXECUTED_ABLATION_ARTIFACT_TYPES),
+            **artifact_counts,
+            "executed_ablation_artifacts": artifact_counts["produced_artifacts"],
+            "required_executed_ablation_artifacts": artifact_counts["required_artifacts"],
             "model_calls": len(model_results),
             "countable_evidence_variant_count": (
                 payloads.get("ablation_execution_report", {}).get(

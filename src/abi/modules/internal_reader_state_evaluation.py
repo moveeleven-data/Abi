@@ -30,7 +30,12 @@ from abi.model_schemas import (
     WorkerRole,
     WorkerSchema,
 )
-from abi.packets import PacketWriter, create_packet_dir, read_json_file
+from abi.packets import (
+    PacketWriter,
+    create_packet_dir,
+    packet_artifact_count_summary,
+    read_json_file,
+)
 
 
 INTERNAL_READER_STATE_EVAL_LINEAGE_ID = "internal_reader_state_evaluation_v1"
@@ -1075,6 +1080,11 @@ def _build_packet_summary(
     model_results: list[ModelDriverResult],
 ) -> dict[str, Any]:
     gate = payloads["internal_reader_state_eval_gate_report"]
+    artifact_counts = packet_artifact_count_summary(
+        required_artifact_types=INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES,
+        produced_artifact_types=list(artifacts),
+        packet_artifact_type="internal_reader_state_eval_packet",
+    )
     return {
         "worker": "internal_reader_state_eval_packet_v1_controller",
         "run_id": subject.run_id,
@@ -1096,10 +1106,11 @@ def _build_packet_summary(
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
         },
         "counts": {
-            "internal_reader_state_eval_artifacts": len(artifacts),
-            "required_internal_reader_state_eval_artifacts": len(
-                INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES
-            ),
+            **artifact_counts,
+            "internal_reader_state_eval_artifacts": artifact_counts["produced_artifacts"],
+            "required_internal_reader_state_eval_artifacts": artifact_counts[
+                "required_artifacts"
+            ],
             "model_calls": len(model_results),
         },
         "model_call_ids": [result.model_call.id for result in model_results],
@@ -1482,6 +1493,11 @@ def _summary_payload(
     model_results: list[ModelDriverResult],
     message: str | None,
 ) -> dict[str, object]:
+    artifact_counts = packet_artifact_count_summary(
+        required_artifact_types=INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES,
+        produced_artifact_types=list(artifacts),
+        packet_artifact_type="internal_reader_state_eval_packet",
+    )
     return {
         "accepted": accepted,
         "refused": refused,
@@ -1502,10 +1518,11 @@ def _summary_payload(
             artifact_type: artifact.path for artifact_type, artifact in artifacts.items()
         },
         "counts": {
-            "internal_reader_state_eval_artifacts": len(artifacts),
-            "required_internal_reader_state_eval_artifacts": len(
-                INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES
-            ),
+            **artifact_counts,
+            "internal_reader_state_eval_artifacts": artifact_counts["produced_artifacts"],
+            "required_internal_reader_state_eval_artifacts": artifact_counts[
+                "required_artifacts"
+            ],
             "model_calls": len(model_results),
             "recorded_gates": len(gate_records),
         },

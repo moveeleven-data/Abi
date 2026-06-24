@@ -16,7 +16,12 @@ from abi.controller.state import (
     set_active_phase,
 )
 from abi.db import connect, initialize_database
-from abi.packets import PacketWriter, create_packet_dir, read_json_file
+from abi.packets import (
+    PacketWriter,
+    create_packet_dir,
+    packet_artifact_count_summary,
+    read_json_file,
+)
 
 
 NEXT_TARGET_STRATEGY_LINEAGE_ID = "next_target_strategy_v1"
@@ -287,11 +292,20 @@ def run_next_target_strategy(
             artifact_type: str(packet_dir / f"{artifact_type}.json")
             for artifact_type in artifacts
         },
+        "counts": payloads["next_target_strategy_packet"]["counts"],
+        "current_best_candidate": {
+            "packet_id": subject.selected_candidate["packet_id"],
+            "packet_kind": subject.selected_candidate.get("packet_kind"),
+            "packet_dir": subject.selected_candidate.get("packet_dir"),
+        },
         "current_best_candidate_packet_id": subject.selected_candidate["packet_id"],
         "proof_packet_id": subject.selected_candidate.get("proof_packet_id"),
         "reader_state_packet_id": subject.reader_state.get("packet_id"),
         "next_recommended_action": payloads["next_intervention_strategy"][
             "recommended_action"
+        ],
+        "primary_next_target": payloads["object_event_pressure_target_map"][
+            "target_name"
         ],
         "target_name": payloads["object_event_pressure_target_map"]["target_name"],
         "strongest_rival_still_blocks": True,
@@ -878,6 +892,11 @@ def _build_packet_summary(
     payloads: dict[str, dict[str, object]],
     artifacts: dict[str, ArtifactRecord],
 ) -> dict[str, object]:
+    artifact_counts = packet_artifact_count_summary(
+        required_artifact_types=NEXT_TARGET_STRATEGY_ARTIFACT_TYPES,
+        produced_artifact_types=list(artifacts),
+        packet_artifact_type="next_target_strategy_packet",
+    )
     return {
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
@@ -887,15 +906,24 @@ def _build_packet_summary(
         },
         "artifact_types": [*artifacts, "next_target_strategy_packet"],
         "counts": {
-            "strategy_artifacts": len(artifacts) + 1,
-            "required_strategy_artifacts": len(NEXT_TARGET_STRATEGY_ARTIFACT_TYPES),
+            **artifact_counts,
+            "strategy_artifacts": artifact_counts["produced_artifacts"],
+            "required_strategy_artifacts": artifact_counts["required_artifacts"],
             "model_calls": 0,
             "candidate_artifacts_created": 0,
         },
         "source_synthesis_packet_id": subject.synthesis_packet_id,
+        "current_best_candidate": {
+            "packet_id": subject.selected_candidate.get("packet_id"),
+            "packet_kind": subject.selected_candidate.get("packet_kind"),
+            "packet_dir": subject.selected_candidate.get("packet_dir"),
+        },
         "current_best_candidate_packet_id": subject.selected_candidate.get("packet_id"),
         "proof_packet_id": subject.selected_candidate.get("proof_packet_id"),
         "reader_state_packet_id": subject.reader_state.get("packet_id"),
+        "primary_next_target": payloads["object_event_pressure_target_map"][
+            "target_name"
+        ],
         "target_name": payloads["object_event_pressure_target_map"]["target_name"],
         "next_recommended_action": payloads["next_intervention_strategy"][
             "recommended_action"
