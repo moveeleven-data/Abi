@@ -66,6 +66,9 @@ KNOWN_PACKET_CHAIN = (
     ("executed_ablation", "packet_0019"),
     ("autonomous_evidence_synthesis", "packet_0010"),
     ("internal_reader_state_evaluation", "packet_0005"),
+    ("autonomous_evidence_synthesis", "packet_0013"),
+    ("bounded_macro_recomposition", "packet_0059"),
+    ("executed_ablation", "packet_0021"),
 )
 
 SOURCE_PACKET_FILES = {
@@ -87,6 +90,8 @@ CANDIDATE_PACKET_KINDS = (
 
 PROOF_PACKET_KINDS = ("executed_ablation",)
 READER_STATE_MACRO_2_TARGET_SCOPE = "reader_state_informed_macro_2"
+OBJECT_EVENT_TARGET_SCOPE = "first_read_object_event_pressure_gap"
+OBJECT_EVENT_SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
 USEFUL_OR_STRONGER_CAUSAL_STATUSES = {
     "useful_but_insufficient",
     "causal",
@@ -603,6 +608,23 @@ def _build_subject_manifest(
                 )
             }
         ],
+        "object_event_candidate_packets_consumed": [
+            source.packet_id
+            for source in sources
+            if _is_object_event_source_packet(source)
+        ],
+        "object_event_ablation_packets_consumed": [
+            source.packet_id
+            for source in sources
+            if source.packet_kind == "executed_ablation"
+            and _subject_kind(source) == "bounded_macro_recomposition"
+            and source.payload.get("source_revision_packet_id")
+            in {
+                candidate.packet_id
+                for candidate in sources
+                if _is_object_event_source_packet(candidate)
+            }
+        ],
         "reader_state_evaluation_packets_consumed": [
             source.packet_id
             for source in sources
@@ -711,6 +733,15 @@ def _build_repair_history(sources: list[SourcePacket]) -> dict[str, object]:
             for row in rows
             if row["packet_kind"] == "executed_ablation"
             and row.get("subject_kind") == "bounded_macro_recomposition"
+        ),
+        "object_event_candidate_event_count": sum(
+            1 for row in rows if _is_object_event_candidate(row)
+        ),
+        "object_event_ablation_event_count": sum(
+            1
+            for row in rows
+            if row["packet_kind"] == "executed_ablation"
+            and _is_object_event_proof(row, rows)
         ),
         "reader_state_evaluation_event_count": sum(
             1 for row in rows if row["packet_kind"] == "internal_reader_state_evaluation"
@@ -837,10 +868,25 @@ def _bounded_macro_history_row(source: SourcePacket) -> dict[str, object]:
     candidate = _optional_payload(source.packet_dir, "macro_recomposed_candidate_text.json")
     rival = _optional_payload(source.packet_dir, "macro_rival_pressure_check.json")
     gate_report = _optional_payload(source.packet_dir, "macro_recomposition_gate_report.json")
+    target_selection = _optional_payload(source.packet_dir, "object_event_pressure_target_selection.json")
     coverage = _as_dict(
         diff_report.get("target_coverage_report")
         or patch_plan.get("target_coverage_report")
         or source.payload.get("target_coverage_report")
+    )
+    object_event_recomposition = bool(
+        source.payload.get("object_event_pressure_recomposition")
+        or patch_plan.get("object_event_pressure_recomposition")
+        or candidate.get("object_event_pressure_recomposition")
+        or gate_report.get("object_event_pressure_recomposition")
+        or coverage.get("object_event_pressure_mapping_exists")
+        or target_selection.get("target_name") == OBJECT_EVENT_TARGET_SCOPE
+    )
+    selected_region_id = (
+        source.payload.get("selected_region_id")
+        or target_selection.get("selected_region_id")
+        or coverage.get("selected_region_id")
+        or gate_report.get("selected_region_id")
     )
     target_movement = (
         source.payload.get("target_movement")
@@ -869,6 +915,12 @@ def _bounded_macro_history_row(source: SourcePacket) -> dict[str, object]:
         "target_submovement": source.payload.get("target_submovement")
         or subject_manifest.get("target_submovement")
         or patch_plan.get("target_submovement"),
+        "selected_region_id": selected_region_id,
+        "object_event_pressure_recomposition": object_event_recomposition,
+        "object_event_pressure_mapping_exists": bool(
+            coverage.get("object_event_pressure_mapping_exists")
+            or target_selection.get("target_name") == OBJECT_EVENT_TARGET_SCOPE
+        ),
         "selected_base": source.payload.get("base_candidate_packet_id")
         or subject_manifest.get("base_candidate_packet_id"),
         "base_candidate_packet_id": source.payload.get("base_candidate_packet_id")
@@ -1060,6 +1112,8 @@ def _executed_ablation_history_row(source: SourcePacket) -> dict[str, object]:
     consistency = _optional_payload(source.packet_dir, "comparison_consistency_report.json")
     variant_set = _optional_payload(source.packet_dir, "actual_ablation_variant_set.json")
     gate_report = _as_dict(source.payload.get("gate_report"))
+    subject_coverage = _as_dict(subject.get("macro_target_coverage"))
+    counts = _as_dict(source.payload.get("counts"))
     causal_status = (
         source.payload.get("selected_repair_causal_status")
         or causal.get("selected_repair_causal_status")
@@ -1075,18 +1129,28 @@ def _executed_ablation_history_row(source: SourcePacket) -> dict[str, object]:
         "source_revision_packet_id": source.payload.get("source_revision_packet_id"),
         "source_revision_packet_kind": source.payload.get("source_revision_packet_kind")
         or subject_kind,
-        "source_revision_packet_dir": subject.get("revision_packet_dir")
+        "source_revision_packet_dir": source.payload.get("source_revision_packet_dir")
+        or subject.get("revision_packet_dir")
         or subject.get("subject_packet_dir"),
+        "source_revision_text_sha256": subject.get("candidate_text_sha256")
+        or _nested_text(subject, ("revised_candidate", "text_sha256")),
         "subject_kind": subject_kind,
         "normalized_subject_kind": subject_kind,
         "source_packet_kind": source.payload.get("source_revision_packet_kind")
         or subject_kind,
-        "target_scope": source.payload.get("target_scope") or subject.get("target_scope"),
+        "target_scope": (
+            source.payload.get("target_scope")
+            or subject_coverage.get("target_scope")
+            or subject.get("target_movement")
+            or subject.get("target_scope")
+        ),
+        "selected_region_id": subject_coverage.get("selected_region_id"),
         "selected_handle": None,
         "selected_base": None,
         "proposed_patch_count": None,
         "applied_patch_count": None,
         "causal_status": causal_status,
+        "selected_repair_causal_status": causal_status,
         "selected_repair_appears_causal": causal.get("selected_repair_appears_causal"),
         "repair_has_causal_support": comparison.get("repair_has_causal_support"),
         "revert_performs_same_or_better": comparison.get("revert_performs_same_or_better"),
@@ -1107,6 +1171,7 @@ def _executed_ablation_history_row(source: SourcePacket) -> dict[str, object]:
         "strongest_rival_still_beats_candidate": comparison.get(
             "strongest_rival_still_beats_candidate"
         ),
+        "model_calls": int(counts.get("model_calls") or len(source.model_call_ids)),
         "comparison_internal_consistency": source.payload.get(
             "comparison_internal_consistency"
         )
@@ -1184,6 +1249,19 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
     ]
     macro_candidate_rows = [
         row for row in rows if row["packet_kind"] == "bounded_macro_recomposition"
+    ]
+    object_event_candidate_rows = [
+        row for row in macro_candidate_rows if _is_object_event_candidate(row)
+    ]
+    object_event_proof_rows = [
+        row
+        for row in macro_ablation_rows
+        if _is_object_event_proof(row, rows)
+    ]
+    object_event_useful_rows = [
+        row
+        for row in object_event_proof_rows
+        if row.get("causal_status") == "useful_but_insufficient"
     ]
     reader_state_rows = [
         row for row in rows if row["packet_kind"] == "internal_reader_state_evaluation"
@@ -1296,6 +1374,22 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
             ),
         },
         {
+            "finding_id": "object_event_candidate_proof",
+            "status": "useful_but_insufficient"
+            if object_event_useful_rows
+            else "not_observed",
+            "evidence_packet_ids": [
+                str(row["packet_id"])
+                for row in [*object_event_candidate_rows, *object_event_proof_rows]
+            ],
+            "summary": (
+                "Object-event recomposition can supersede macro-2 only when its "
+                "own linked executed ablation supplies live, countable, internally "
+                "consistent causal support while preserving strongest-rival pressure "
+                "as blocking."
+            ),
+        },
+        {
             "finding_id": "flattened_summary_macro_variant_cautionary",
             "status": "rejected_or_cautionary" if flattened_summary_rows else "not_observed",
             "evidence_packet_ids": [
@@ -1347,6 +1441,34 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
             for row in macro_ablation_rows
             if _is_reader_state_macro_2_proof(row, rows)
         ],
+        "object_event_candidate_packet_ids": [
+            str(row["packet_id"]) for row in object_event_candidate_rows
+        ],
+        "object_event_proof_packet_ids": [
+            str(row["packet_id"]) for row in object_event_proof_rows
+        ],
+        "object_event_causal_summary": {
+            "prior_macro2_candidate_packet_ids": [
+                str(row["packet_id"])
+                for row in macro_candidate_rows
+                if _is_reader_state_macro_2_candidate(row)
+            ],
+            "object_event_candidate_packet_ids": [
+                str(row["packet_id"]) for row in object_event_candidate_rows
+            ],
+            "object_event_proof_packet_ids": [
+                str(row["packet_id"]) for row in object_event_proof_rows
+            ],
+            "object_event_repair_status": "useful_but_insufficient"
+            if object_event_useful_rows
+            else "not_observed",
+            "strongest_rival_still_blocks": any(
+                row.get("strongest_rival_pressure_remains_blocking")
+                for row in object_event_proof_rows
+            ),
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+        },
         "weak_repairs_detected": any(row.get("classification") == "weak" for row in rows),
         "useful_repairs_detected": bool(useful_rows),
         "macro_useful_but_insufficient_detected": bool(macro_useful_rows),
@@ -1355,6 +1477,7 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
             for row in macro_ablation_rows
             if _is_reader_state_macro_2_proof(row, rows)
         ),
+        "object_event_useful_but_insufficient_detected": bool(object_event_useful_rows),
         "reader_state_evidence_detected": bool(reader_state_rows),
         "reader_state_partial_transformation_detected": bool(reader_state_partial_rows),
         "exhausted_handles_detected": bool(exhausted_rows),
@@ -1394,6 +1517,10 @@ def _build_candidate_proof_pairs(rows: list[dict[str, object]]) -> list[dict[str
                 "candidate_packet_dir": candidate["packet_dir"],
                 "candidate_target_scope": candidate.get("target_scope"),
                 "candidate_target_movement": candidate.get("target_movement"),
+                "candidate_selected_region_id": candidate.get("selected_region_id"),
+                "candidate_object_event_pressure_recomposition": _is_object_event_candidate(
+                    candidate
+                ),
                 "candidate_base_packet_id": candidate.get("base_candidate_packet_id")
                 or candidate.get("source_revision_packet_id"),
                 "candidate_model_backed": candidate.get("model_backed"),
@@ -1429,14 +1556,30 @@ def _proof_matches_candidate(
     proof: dict[str, object],
     candidate: dict[str, object],
 ) -> bool:
-    if str(proof.get("source_revision_packet_id")) != str(candidate.get("packet_id")):
-        return False
     proof_source_kind = proof.get("source_revision_packet_kind") or proof.get(
         "source_packet_kind"
     )
-    if not proof_source_kind:
+    kind_matches = not proof_source_kind or str(proof_source_kind) == str(
+        candidate.get("packet_kind")
+    )
+    if not kind_matches:
+        return False
+
+    proof_packet_id = str(proof.get("source_revision_packet_id") or "")
+    candidate_packet_id = str(candidate.get("packet_id") or "")
+    if proof_packet_id and proof_packet_id == candidate_packet_id:
         return True
-    return str(proof_source_kind) == str(candidate.get("packet_kind"))
+
+    proof_dir = _normalized_path_text(proof.get("source_revision_packet_dir"))
+    candidate_dir = _normalized_path_text(candidate.get("packet_dir"))
+    if proof_dir and candidate_dir and proof_dir == candidate_dir:
+        return True
+
+    proof_sha = str(proof.get("source_revision_text_sha256") or "")
+    candidate_sha = str(
+        candidate.get("candidate_text_sha256") or candidate.get("text_sha256") or ""
+    )
+    return bool(proof_sha and candidate_sha and proof_sha == candidate_sha)
 
 
 def _candidate_supersession_result(
@@ -1509,6 +1652,24 @@ def _is_reader_state_macro_2_candidate(row: dict[str, object]) -> bool:
     )
 
 
+def _is_object_event_candidate(row: dict[str, object]) -> bool:
+    return row.get("packet_kind") == "bounded_macro_recomposition" and (
+        row.get("target_scope") == OBJECT_EVENT_TARGET_SCOPE
+        or row.get("target_movement") == OBJECT_EVENT_TARGET_SCOPE
+        or bool(row.get("object_event_pressure_recomposition"))
+    )
+
+
+def _is_object_event_source_packet(source: SourcePacket) -> bool:
+    if source.packet_kind != "bounded_macro_recomposition":
+        return False
+    if source.payload.get("target_scope") == OBJECT_EVENT_TARGET_SCOPE:
+        return True
+    if source.payload.get("target_movement") == OBJECT_EVENT_TARGET_SCOPE:
+        return True
+    return bool(source.payload.get("object_event_pressure_recomposition"))
+
+
 def _is_reader_state_macro_2_proof(
     proof_row: dict[str, object],
     rows: list[dict[str, object]],
@@ -1516,6 +1677,16 @@ def _is_reader_state_macro_2_proof(
     return any(
         _is_reader_state_macro_2_candidate(row)
         and _proof_matches_candidate(proof_row, row)
+        for row in rows
+    )
+
+
+def _is_object_event_proof(
+    proof_row: dict[str, object],
+    rows: list[dict[str, object]],
+) -> bool:
+    return any(
+        _is_object_event_candidate(row) and _proof_matches_candidate(proof_row, row)
         for row in rows
     )
 
@@ -1605,6 +1776,10 @@ def _build_best_candidate_selection(
             "base_candidate_packet_id": row.get("base_candidate_packet_id"),
             "target_movement": row.get("target_movement"),
             "target_scope": row.get("target_scope"),
+            "selected_region_id": row.get("selected_region_id"),
+            "object_event_pressure_recomposition": row.get(
+                "object_event_pressure_recomposition"
+            ),
             "macro_target_coverage_passed": row.get("macro_target_coverage_passed"),
             "macro_materiality_passed": row.get("macro_materiality_passed"),
             "model_backed": row.get("model_backed"),
@@ -1715,6 +1890,15 @@ def _build_best_candidate_selection(
             or selected_payload.get("target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
         )
     )
+    selected_is_object_event = (
+        isinstance(selected_payload, dict)
+        and selected_payload.get("packet_kind") == "bounded_macro_recomposition"
+        and (
+            selected_payload.get("target_scope") == OBJECT_EVENT_TARGET_SCOPE
+            or selected_payload.get("target_movement") == OBJECT_EVENT_TARGET_SCOPE
+            or bool(selected_payload.get("object_event_pressure_recomposition"))
+        )
+    )
     if selected_payload is not None:
         selected_payload.update(
             {
@@ -1734,8 +1918,45 @@ def _build_best_candidate_selection(
                 "selected_by_candidate_proof_supersession": supersession_applied,
                 "superseded_candidate_packet_id": superseded_candidate_packet_id,
                 "selected_macro2_candidate": selected_is_macro2,
+                "selected_object_event_candidate": selected_is_object_event,
             }
         )
+    object_event_pairs = [
+        pair
+        for pair in candidate_proof_pairs
+        if pair.get("candidate_target_scope") == OBJECT_EVENT_TARGET_SCOPE
+        or pair.get("candidate_target_movement") == OBJECT_EVENT_TARGET_SCOPE
+        or pair.get("candidate_object_event_pressure_recomposition")
+    ]
+    object_event_supersession_applied = bool(
+        selected_is_object_event
+        and selected_payload is not None
+        and selected_payload.get("candidate_proof_linked")
+        and selected_payload.get("supersession_eligible")
+    )
+    if object_event_supersession_applied:
+        object_event_supersession_rationale = [
+            "object-event candidate superseded the prior best because linked live executed-ablation proof was useful-but-insufficient, countable, and internally consistent",
+            "reader-state evaluation is still required before any improvement or finalization claim",
+        ]
+    elif object_event_pairs:
+        object_event_supersession_rationale = [
+            "object-event candidate did not supersede the prior best",
+            *[
+                f"{pair.get('candidate_packet_id')}: "
+                + ", ".join(
+                    str(blocker)
+                    for blocker in pair.get("supersession_blockers", [])
+                    if isinstance(pair.get("supersession_blockers"), list)
+                )
+                for pair in object_event_pairs
+            ],
+            "do not run another object-event candidate without new strategy or evidence",
+        ]
+    else:
+        object_event_supersession_rationale = [
+            "no object-event candidate/proof pair was available for supersession"
+        ]
     return {
         "candidate_options": candidates,
         "candidate_proof_pairs": candidate_proof_pairs,
@@ -1750,12 +1971,22 @@ def _build_best_candidate_selection(
             and selected_payload.get("candidate_proof_linked")
             and selected_payload.get("supersession_eligible")
         ),
+        "best_current_candidate_updated_from_object_event_proof": bool(
+            object_event_supersession_applied
+        ),
         "macro2_candidate_proof_linked": any(
             pair.get("proof_linked")
             for pair in candidate_proof_pairs
             if pair.get("candidate_target_scope") == READER_STATE_MACRO_2_TARGET_SCOPE
             or pair.get("candidate_target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
         ),
+        "object_event_candidate_proof_linked": any(
+            pair.get("proof_linked")
+            for pair in object_event_pairs
+        ),
+        "object_event_candidate_supersession_evaluated": bool(object_event_pairs),
+        "object_event_candidate_supersession_applied": object_event_supersession_applied,
+        "object_event_candidate_supersession_rationale": object_event_supersession_rationale,
         "candidate_is_final": False,
         "requires_further_testing": True,
         "not_finalization_eligible": True,
@@ -2403,7 +2634,18 @@ def _build_residual_blocker_map(
             or selected.get("target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
         )
     )
+    selected_is_object_event = bool(
+        isinstance(selected, dict)
+        and selected.get("packet_kind") == "bounded_macro_recomposition"
+        and (
+            selected.get("target_scope") == OBJECT_EVENT_TARGET_SCOPE
+            or selected.get("target_movement") == OBJECT_EVENT_TARGET_SCOPE
+            or selected.get("selected_object_event_candidate")
+            or selected.get("object_event_pressure_recomposition")
+        )
+    )
     macro2_reader_state_present = selected_is_macro2 and reader_state_present
+    object_event_reader_state_needed = selected_is_object_event and not reader_state_present
     reader_state_tensions_present = int(reader_state_tension_report.get("tension_count", 0)) > 0
     blockers = [
         _blocker(
@@ -2552,12 +2794,62 @@ def _build_residual_blocker_map(
                 ),
             ]
         )
+    if object_event_reader_state_needed:
+        selected_packet_id = str(selected.get("packet_id"))
+        base_packet_id = str(selected.get("base_candidate_packet_id") or "packet_0056")
+        blockers.extend(
+            [
+                _blocker(
+                    f"reader_state_evaluation_needed_for_{selected_packet_id}",
+                    "high",
+                    "object-event candidate has live ablation support but no internal reader-state evaluation",
+                    False,
+                    status="needs_reader_state_evaluation",
+                ),
+                _blocker(
+                    "object_event_pressure_gain_unproven_by_reader_state",
+                    "high",
+                    "structural ablation does not prove first-read object-event pressure changes reader state",
+                    False,
+                    status="needs_reader_state_evaluation",
+                ),
+                _blocker(
+                    "first_read_vividness_requires_reader_state_confirmation",
+                    "high",
+                    "first-read vividness gain must be checked against internal reader-state traces",
+                    False,
+                    status="needs_reader_state_evaluation",
+                ),
+                _blocker(
+                    f"preserve_{base_packet_id}_macro2_gains",
+                    "high",
+                    "object-event candidate must preserve macro-2 gains while adding first-read pressure",
+                    False,
+                    status="protected_effect",
+                ),
+                _blocker(
+                    "avoid_decorative_vividness",
+                    "medium",
+                    "future evaluation must detect whether object-event detail is causal rather than decorative",
+                    False,
+                    status="active_constraint",
+                ),
+                _blocker(
+                    "no_finalization",
+                    "high",
+                    "object-event proof is useful but insufficient and cannot satisfy finalization",
+                    False,
+                    status="fail_closed",
+                ),
+            ]
+        )
     return {
         "residual_blockers": blockers,
         "blocker_count": len(blockers),
         "macro_recomposition_recommended": not macro_active,
         "immediate_macro_recomposition_recommended": False if macro_active else True,
         "internal_reader_state_evaluation_recommended": macro_active and not reader_state_present,
+        "object_event_reader_state_eval_needed": object_event_reader_state_needed,
         "reader_state_evidence_consumed": reader_state_present,
         "macro2_reader_state_evidence_consumed": macro2_reader_state_present,
         "next_target_strategy_recommended": macro2_reader_state_present,
@@ -2588,6 +2880,11 @@ def _build_local_law_case_notes(
         for row in rows
         if row["packet_kind"] == "bounded_macro_recomposition"
         or row.get("subject_kind") == "bounded_macro_recomposition"
+    ]
+    object_event_packet_ids = [
+        str(row["packet_id"])
+        for row in rows
+        if _is_object_event_candidate(row) or _is_object_event_proof(row, rows)
     ]
     notes = [
         {
@@ -2725,6 +3022,36 @@ def _build_local_law_case_notes(
                     "source_evidence_packet_ids": reader_packet_ids,
                 }
             )
+    if object_event_packet_ids:
+        notes.extend(
+            [
+                {
+                    "law_id": "object_event_recomposition_can_gain_countable_causal_support",
+                    "case_note": "Object-event recomposition can produce countable causal support when bounded to the middle recurrence region and linked executed ablation supports it.",
+                    "source_evidence_packet_ids": object_event_packet_ids,
+                },
+                {
+                    "law_id": "object_event_pressure_requires_reader_state_test",
+                    "case_note": "Adding object-event pressure must be tested for reader-state effect; structural ablation is not enough.",
+                    "source_evidence_packet_ids": object_event_packet_ids,
+                },
+                {
+                    "law_id": "object_event_gain_can_coexist_with_rival_blocker",
+                    "case_note": "Object-event pressure may improve first-read vividness while strongest-rival pressure still blocks.",
+                    "source_evidence_packet_ids": object_event_packet_ids,
+                },
+                {
+                    "law_id": "useful_but_insufficient_ablation_is_not_finality",
+                    "case_note": "Do not infer finality from useful-but-insufficient object-event ablation.",
+                    "source_evidence_packet_ids": object_event_packet_ids,
+                },
+                {
+                    "law_id": "future_reader_state_eval_tests_object_event_preservation",
+                    "case_note": "Future reader-state evaluation must test whether object-event gains improve first-read vividness without damaging reread transformation.",
+                    "source_evidence_packet_ids": object_event_packet_ids,
+                },
+            ]
+        )
     return {
         "case_notes": notes,
         "case_note_count": len(notes),
@@ -2754,11 +3081,33 @@ def _build_strategic_decision_report(
             or selected.get("target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
         )
     )
+    selected_is_object_event = bool(
+        isinstance(selected, dict)
+        and selected_kind == "bounded_macro_recomposition"
+        and (
+            selected.get("target_scope") == OBJECT_EVENT_TARGET_SCOPE
+            or selected.get("target_movement") == OBJECT_EVENT_TARGET_SCOPE
+            or selected.get("selected_object_event_candidate")
+            or selected.get("object_event_pressure_recomposition")
+        )
+    )
     reader_state_present = bool(reader_state_adjudication.get("reader_state_evidence_present"))
     reader_state_partial = (
         reader_state_adjudication.get("reread_transformation_strength") == "partial"
     )
-    if selected_is_macro2 and reader_state_present:
+    if selected_is_object_event and not reader_state_present:
+        recommendation = "preserve_object_event_candidate_and_run_reader_state_evaluation"
+        next_action = "run_internal_reader_state_evaluation_on_object_event_candidate"
+        do_not_patch = True
+        basis = [
+            "object-event candidate supersedes macro-2 only because linked live executed ablation supplies useful-but-insufficient support",
+            "packet_0059 targets first-read object-event pressure in a bounded middle recurrence region",
+            "packet_0056 macro-2 gains must be preserved as the base evidence",
+            "structural ablation is not reader-state proof",
+            "the strongest rival still blocks first-read vividness and lived object-event pressure",
+            "the next evidence need is internal reader-state evaluation, not another recomposition",
+        ]
+    elif selected_is_macro2 and reader_state_present:
         recommendation = "preserve_macro2_candidate_and_prepare_next_reader_state_target_strategy"
         next_action = "review_macro2_reader_state_synthesis_before_new_candidate"
         do_not_patch = True
@@ -2832,6 +3181,8 @@ def _build_strategic_decision_report(
         "internal_reader_state_evaluation_recommended": selected_kind
         == "bounded_macro_recomposition"
         and not reader_state_present,
+        "object_event_reader_state_evaluation_recommended": selected_is_object_event
+        and not reader_state_present,
         "reader_state_evidence_consumed": reader_state_present,
         "reader_state_informed_recomposition_recommended": reader_state_present
         and reader_state_partial
@@ -2898,6 +3249,59 @@ def _build_macro_recomposition_brief(
             or selected.get("target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
         )
     )
+    selected_is_object_event = bool(
+        isinstance(selected, dict)
+        and selected_kind == "bounded_macro_recomposition"
+        and (
+            selected.get("target_scope") == OBJECT_EVENT_TARGET_SCOPE
+            or selected.get("target_movement") == OBJECT_EVENT_TARGET_SCOPE
+            or selected.get("selected_object_event_candidate")
+            or selected.get("object_event_pressure_recomposition")
+        )
+    )
+    if selected_is_object_event:
+        return {
+            "brief_type": "object_event_reader_state_evaluation_brief_not_artifact",
+            "current_best_candidate": selected,
+            "current_best_candidate_packet_id": selected.get("packet_id"),
+            "current_best_candidate_packet_kind": selected.get("packet_kind"),
+            "base_prior_packet_id": selected.get("base_candidate_packet_id"),
+            "proof_basis_packet_id": selected.get("proof_packet_id"),
+            "proof_causal_status": selected.get("proof_causal_status"),
+            "proof_countable_evidence_variant_count": selected.get(
+                "proof_countable_evidence_variant_count"
+            ),
+            "next_evidence_need": "internal_reader_state_evaluation",
+            "reader_state_eval_focus": [
+                "evaluate whether object-event intervention improves first-read object-event pressure",
+                "evaluate whether the object-event candidate preserves packet_0056 partial reread transformation",
+                "compare the object-event candidate against the strongest rival",
+                "compare against the prior macro-2 best candidate where supported",
+            ],
+            "what_not_to_do_next": [
+                "do not write another candidate",
+                "do not run another object-event recomposition without new reader-state evidence",
+                "do not treat useful-but-insufficient ablation as finality",
+                "do not claim strongest-rival defeat",
+                "do not make a phase-shift claim",
+            ],
+            "protected_effects": [
+                "preserve packet_0056 macro-2 gains",
+                "preserve table/dust/spoon/saucer/ring causal field",
+                "preserve reduced overexplanation",
+                "preserve partial reread transformation",
+                "preserve strongest-rival pressure as active constraint",
+            ],
+            "run_internal_reader_state_evaluation_before_further_recomposition": True,
+            "run_another_macro_recomposition_now": False,
+            "run_another_object_event_recomposition_now": False,
+            "candidate_is_non_final": True,
+            "not_candidate_artifact": True,
+            "not_finalization_eligible": True,
+            "not_human_validated": True,
+            "no_phase_shift_claim": True,
+            "worker": "object_event_reader_state_evaluation_brief_v1_controller",
+        }
     if selected_is_macro2 and reader_state_present:
         return {
             "brief_type": "macro2_reader_state_next_strategy_brief_not_artifact",
@@ -3234,6 +3638,25 @@ def _build_gate_report(
         and str(source.get("source_revision_packet_id")) in macro2_candidate_ids
         for source in source_summaries
     )
+    object_event_candidate_ids = {
+        str(source.get("packet_id"))
+        for source in source_summaries
+        if isinstance(source, dict)
+        and source.get("packet_kind") == "bounded_macro_recomposition"
+        and (
+            source.get("target_scope") == OBJECT_EVENT_TARGET_SCOPE
+            or source.get("target_movement") == OBJECT_EVENT_TARGET_SCOPE
+            or source.get("object_event_pressure_recomposition")
+        )
+    }
+    object_event_candidate_consumed = bool(object_event_candidate_ids)
+    object_event_ablation_consumed = any(
+        isinstance(source, dict)
+        and source.get("packet_kind") == "executed_ablation"
+        and source.get("source_revision_packet_kind") == "bounded_macro_recomposition"
+        and str(source.get("source_revision_packet_id")) in object_event_candidate_ids
+        for source in source_summaries
+    )
     selected = best_candidate["selected_best_candidate"]
     macro_candidate_selected = isinstance(selected, dict) and selected.get(
         "packet_kind"
@@ -3246,12 +3669,31 @@ def _build_gate_report(
             or selected.get("target_movement") == READER_STATE_MACRO_2_TARGET_SCOPE
         )
     )
+    selected_is_object_event = bool(
+        isinstance(selected, dict)
+        and selected.get("packet_kind") == "bounded_macro_recomposition"
+        and (
+            selected.get("target_scope") == OBJECT_EVENT_TARGET_SCOPE
+            or selected.get("target_movement") == OBJECT_EVENT_TARGET_SCOPE
+            or selected.get("selected_object_event_candidate")
+            or selected.get("object_event_pressure_recomposition")
+        )
+    )
     macro2_candidate_proof_linked = bool(best_candidate.get("macro2_candidate_proof_linked"))
+    object_event_candidate_proof_linked = bool(
+        best_candidate.get("object_event_candidate_proof_linked")
+    )
     candidate_supersession_evaluated = bool(
         best_candidate.get("candidate_supersession_evaluated")
     )
     best_updated_from_macro2_proof = bool(
         best_candidate.get("best_current_candidate_updated_from_macro2_proof")
+    )
+    best_updated_from_object_event_proof = bool(
+        best_candidate.get("best_current_candidate_updated_from_object_event_proof")
+    )
+    object_event_supersession_evaluated = bool(
+        best_candidate.get("object_event_candidate_supersession_evaluated")
     )
     strongest_rival_pressure_preserved = bool(
         rival_pressure["future_recomposition_must_preserve_rival_pressure"]
@@ -3275,6 +3717,9 @@ def _build_gate_report(
             selected.get("reader_state_packet_id")
             == reader_state_adjudication.get("packet_id")
         )
+    )
+    object_event_reader_state_eval_needed = bool(
+        selected_is_object_event and not selected.get("reader_state_evaluated")
     )
     gate_results = [
         _gate_result("synthesis_packet_exists", True),
@@ -3324,7 +3769,33 @@ def _build_gate_report(
         _gate_result("candidate_supersession_evaluated", candidate_supersession_evaluated),
         _gate_result(
             "best_current_candidate_updated_from_macro2_proof",
-            best_updated_from_macro2_proof if macro2_candidate_ids else True,
+            (best_updated_from_macro2_proof or best_updated_from_object_event_proof)
+            if macro2_candidate_ids
+            else True,
+        ),
+        _gate_result(
+            "object_event_candidate_consumed",
+            object_event_candidate_consumed if object_event_candidate_ids else True,
+        ),
+        _gate_result(
+            "object_event_ablation_consumed",
+            object_event_ablation_consumed if object_event_candidate_ids else True,
+        ),
+        _gate_result(
+            "object_event_candidate_proof_linked",
+            object_event_candidate_proof_linked if object_event_candidate_ids else True,
+        ),
+        _gate_result(
+            "object_event_candidate_supersession_evaluated",
+            object_event_supersession_evaluated if object_event_candidate_ids else True,
+        ),
+        _gate_result(
+            "best_current_candidate_updated_from_object_event_proof",
+            best_updated_from_object_event_proof if object_event_candidate_ids else True,
+        ),
+        _gate_result(
+            "object_event_reader_state_eval_needed",
+            object_event_reader_state_eval_needed if selected_is_object_event else True,
         ),
         _gate_result(
             "strongest_rival_pressure_preserved",
@@ -3403,6 +3874,14 @@ def _build_gate_report(
         "macro2_candidate_proof_linked": macro2_candidate_proof_linked,
         "candidate_supersession_evaluated": candidate_supersession_evaluated,
         "best_current_candidate_updated_from_macro2_proof": best_updated_from_macro2_proof,
+        "object_event_candidate_consumed": object_event_candidate_consumed,
+        "object_event_ablation_consumed": object_event_ablation_consumed,
+        "object_event_candidate_proof_linked": object_event_candidate_proof_linked,
+        "object_event_candidate_supersession_evaluated": object_event_supersession_evaluated,
+        "best_current_candidate_updated_from_object_event_proof": (
+            best_updated_from_object_event_proof
+        ),
+        "object_event_reader_state_eval_needed": object_event_reader_state_eval_needed,
         "strongest_rival_pressure_preserved": strongest_rival_pressure_preserved,
         "macro2_reader_state_evidence_consumed": macro2_reader_state_evidence_consumed,
         "macro2_reader_state_eval_linked": macro2_reader_state_eval_linked,
@@ -3472,6 +3951,12 @@ def _build_packet_summary(
         "macro2_ablation_packets_consumed": payloads[
             "autonomous_evidence_synthesis_subject_manifest"
         ].get("macro2_ablation_packets_consumed", []),
+        "object_event_candidate_packets_consumed": payloads[
+            "autonomous_evidence_synthesis_subject_manifest"
+        ].get("object_event_candidate_packets_consumed", []),
+        "object_event_ablation_packets_consumed": payloads[
+            "autonomous_evidence_synthesis_subject_manifest"
+        ].get("object_event_ablation_packets_consumed", []),
         "reader_state_evaluation_packets_consumed": [
             source.packet_id
             for source in sources
@@ -3502,6 +3987,15 @@ def _build_packet_summary(
         "best_current_candidate_updated_from_macro2_proof": payloads[
             "best_current_candidate_selection"
         ]["best_current_candidate_updated_from_macro2_proof"],
+        "best_current_candidate_updated_from_object_event_proof": payloads[
+            "best_current_candidate_selection"
+        ]["best_current_candidate_updated_from_object_event_proof"],
+        "object_event_reader_state_eval_needed": payloads["synthesis_gate_report"][
+            "object_event_reader_state_eval_needed"
+        ],
+        "object_event_candidate_supersession_rationale": payloads[
+            "best_current_candidate_selection"
+        ]["object_event_candidate_supersession_rationale"],
         "macro2_reader_state_evidence_consumed": payloads["synthesis_gate_report"][
             "macro2_reader_state_evidence_consumed"
         ],
@@ -3531,6 +4025,7 @@ def _source_packet_summary(source: SourcePacket) -> dict[str, object]:
         "subject_kind": _subject_kind(source),
         "source_revision_packet_id": source.payload.get("source_revision_packet_id"),
         "source_revision_packet_kind": source.payload.get("source_revision_packet_kind"),
+        "source_revision_packet_dir": source.payload.get("source_revision_packet_dir"),
         "source_synthesis_packet_id": source.payload.get("source_synthesis_packet_id"),
         "selected_candidate_packet_id": source.payload.get("selected_candidate_packet_id"),
         "selected_candidate_packet_kind": source.payload.get("selected_candidate_packet_kind"),
@@ -3539,6 +4034,11 @@ def _source_packet_summary(source: SourcePacket) -> dict[str, object]:
         "base_candidate_packet_id": source.payload.get("base_candidate_packet_id"),
         "target_scope": source.payload.get("target_scope"),
         "target_movement": source.payload.get("target_movement"),
+        "selected_region_id": source.payload.get("selected_region_id"),
+        "object_event_pressure_recomposition": bool(
+            source.payload.get("object_event_pressure_recomposition")
+        ),
+        "counts": source.payload.get("counts"),
         "candidate_text_sha256": _candidate_text_sha_for_source(source),
         "artifact_ids": source.artifact_ids,
         "model_backed": source.model_backed,
