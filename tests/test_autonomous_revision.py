@@ -660,6 +660,126 @@ def build_object_event_candidate_with_optional_proof(
     return chain
 
 
+def build_object_event_candidate_with_reader_state(
+    tmp_path: Path,
+    *,
+    strip_reader_identity_to_hash_only: bool = False,
+):
+    chain = build_object_event_candidate_with_optional_proof(
+        tmp_path,
+        proof_mode="useful",
+        object_event_client="openai",
+    )
+    synthesis = run_autonomous_evidence_synthesis(chain["config"], run_id=chain["run_id"])
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["best_current_candidate"]["packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert synthesis.payload["best_current_candidate"]["reader_state_evaluated"] is False
+
+    def _reader_state_client_factory(model: str) -> FakeInternalReaderLabModelClient:
+        return FakeInternalReaderLabModelClient(provider="openai", model=model)
+
+    reader_state = run_internal_reader_state_evaluation(
+        chain["config"],
+        client_name="openai",
+        synthesis_packet=synthesis.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-reader-state-model",
+        client_factory=_reader_state_client_factory,
+    )
+    assert reader_state.exit_code == 0
+    assert reader_state.payload["accepted"] is True
+    assert reader_state.payload["selected_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    object_candidate = read_payload(
+        Path(str(chain["object_event"]["packet_dir"])) / "macro_recomposed_candidate_text.json"
+    )
+    reader_packet_dir = Path(str(reader_state.payload["packet_dir"]))
+    reader_packet = read_payload(reader_packet_dir / "internal_reader_state_eval_packet.json")
+    chain["object_event_candidate_text_sha256"] = object_candidate["text_sha256"]
+    assert reader_packet["selected_candidate_text_sha256"] == object_candidate["text_sha256"]
+
+    def _make_object_event_first_pass(payload):
+        payload["first_read_summary"] = (
+            "The strongest effect is object-event pressure: table, dust, spoon, "
+            "saucer, and ring begin to lean on one another before the explanation."
+        )
+
+    def _make_object_event_reread(payload):
+        payload["opening_becomes_more_necessary_after_return"] = True
+        payload["ending_changes_opening"] = False
+        payload["return_without_regression"] = False
+        payload["proof_no_outside_answer_logic"] = (
+            "partly_structural_but_still_explicit"
+        )
+        payload["reread_summary"] = (
+            "On reread, the object-event pressure is more coherent, but the "
+            "return remains partial and the rival pressure is still active."
+        )
+
+    def _make_object_event_opening(payload):
+        payload["opening_return_transformation_strength"] = "partial"
+        payload["ending_changes_opening"] = False
+
+    def _make_object_event_delta(payload):
+        payload["post_reread_reader_state"] = "partial_opening_return_transformation"
+        payload["reread_gain_estimate"] = "partial"
+        payload["motifs_that_became_causal_after_reread"] = [
+            "table",
+            "dust",
+            "spoon",
+            "saucer",
+            "ring",
+        ]
+        payload["selected_candidate_text_sha256"] = object_candidate["text_sha256"]
+
+    def _make_object_event_rival(payload):
+        payload["strongest_rival_still_blocks"] = True
+        payload["macro_candidate_narrowed_rival_gap"] = True
+        payload["rival_still_wins_on_first_read_vividness"] = True
+        payload["rival_still_wins_on_lived_object_event_pressure"] = True
+
+    def _make_object_event_hostile(payload):
+        payload["blocking_or_active_risks"] = [
+            "overexplanation",
+            "thesis_replacing_artifact",
+            "scaffold_leakage",
+        ]
+
+    rewrite_payload(
+        reader_packet_dir / "first_pass_reader_state_trace.json",
+        _make_object_event_first_pass,
+    )
+    rewrite_payload(reader_packet_dir / "reread_reader_state_trace.json", _make_object_event_reread)
+    rewrite_payload(
+        reader_packet_dir / "opening_return_transformation_report.json",
+        _make_object_event_opening,
+    )
+    rewrite_payload(reader_packet_dir / "reader_delta_report.json", _make_object_event_delta)
+    rewrite_payload(reader_packet_dir / "rival_reader_state_comparison.json", _make_object_event_rival)
+    rewrite_payload(reader_packet_dir / "hostile_reader_state_report.json", _make_object_event_hostile)
+
+    if strip_reader_identity_to_hash_only:
+
+        def _strip_identity(payload):
+            payload["source_synthesis_packet_id"] = "packet_stale_source_for_hash_link_test"
+            payload["selected_candidate_packet_id"] = ""
+            payload["selected_candidate_packet_dir"] = ""
+
+        rewrite_payload(reader_packet_dir / "internal_reader_state_eval_packet.json", _strip_identity)
+        rewrite_payload(
+            reader_packet_dir / "internal_reader_state_eval_subject_manifest.json",
+            _strip_identity,
+        )
+
+    chain["object_event_synthesis"] = synthesis.payload
+    chain["object_event_reader_state"] = reader_state.payload
+    return chain
+
+
 def _rewrite_macro2_proof(proof_payload: dict[str, object], *, useful: bool) -> None:
     def _causal(payload):
         payload["selected_repair_causal_status"] = (
@@ -7066,6 +7186,293 @@ def test_autonomous_evidence_synthesis_supersedes_with_object_event_proof(tmp_pa
     )
     assert packet["finalization_eligible"] is False
     assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_consumes_object_event_reader_state(tmp_path):
+    chain = build_object_event_candidate_with_reader_state(tmp_path)
+    config = chain["config"]
+    run_id = chain["run_id"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_autonomous_evidence_synthesis(config, run_id=run_id)
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["object_event_reader_state_evidence_consumed"] is True
+    assert result.payload["object_event_reader_state_eval_linked"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(packet_dir / "autonomous_evidence_synthesis_subject_manifest.json")
+    assert chain["object_event"]["packet_id"] in manifest[
+        "object_event_candidate_packets_consumed"
+    ]
+    assert chain["object_event_proof"]["packet_id"] in manifest[
+        "object_event_ablation_packets_consumed"
+    ]
+    assert chain["object_event_reader_state"]["packet_id"] in manifest[
+        "object_event_reader_state_evaluation_packets_consumed"
+    ]
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    reader_rows = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "internal_reader_state_evaluation"
+        and row["packet_id"] == chain["object_event_reader_state"]["packet_id"]
+    ]
+    assert reader_rows
+    reader_row = reader_rows[0]
+    assert reader_row["selected_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert reader_row["selected_candidate_text_sha256"] == chain[
+        "object_event_candidate_text_sha256"
+    ]
+    assert reader_row["fixture_only"] is False
+    assert reader_row["model_calls"] == 5
+    assert reader_row["first_pass_trace_exists"] is True
+    assert reader_row["reread_trace_exists"] is True
+    assert reader_row["reader_delta_report_exists"] is True
+    assert reader_row["proof_constraint_carry_report_exists"] is True
+    assert reader_row["hostile_reader_report_exists"] is True
+    assert reader_row["forensic_grounding_report_exists"] is True
+    assert reader_row["rival_reader_state_comparison_exists"] is True
+    assert reader_row["post_reread_reader_state"] == "partial_opening_return_transformation"
+    assert reader_row["reread_gain_estimate"] == "partial"
+    assert reader_row["strongest_rival_still_blocks"] is True
+    assert reader_row["finalization_eligible"] is False
+    assert reader_row["no_phase_shift_claim"] is True
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == chain["object_event"]["packet_id"]
+    assert selected["selected_object_event_candidate"] is True
+    assert selected["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert selected["reader_state_evaluated"] is True
+    assert selected["reader_state_packet_id"] == chain["object_event_reader_state"]["packet_id"]
+    assert selected["reader_state_fixture_only"] is False
+    assert selected["reader_state_model_calls"] == 5
+    assert selected["reader_state_post_reread_state"] == (
+        "partial_opening_return_transformation"
+    )
+    assert selected["reader_state_reread_transformation_strength"] == "partial"
+    assert selected["reader_state_transformation_is_partial_not_decisive"] is True
+    assert selected["reader_state_strongest_rival_still_blocks"] is True
+    assert selected["selected_candidate_is_final"] is False
+
+    adjudication = read_payload(packet_dir / "reader_state_evidence_adjudication.json")
+    assert adjudication["reader_state_evidence_present"] is True
+    assert adjudication["packet_id"] == chain["object_event_reader_state"]["packet_id"]
+    assert adjudication["selected_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert adjudication["selected_object_event_candidate"] is True
+    assert adjudication["object_event_pressure_gain_status"] == "improved_but_insufficient"
+    assert adjudication["first_read_object_event_pressure_status"] == (
+        "gap_narrowed_but_rival_still_blocks"
+    )
+    assert adjudication["lived_object_causality_status"] == (
+        "improved_but_still_weaker_than_rival"
+    )
+    assert adjudication["first_read_vividness_status"] == (
+        "gap_narrowed_but_rival_still_blocks"
+    )
+    assert adjudication["reread_transformation_status"] == "partial"
+    assert adjudication["packet_0056_macro2_gains_preserved_status"] == (
+        "preserved_as_base_but_partial"
+    )
+    assert adjudication["proof_no_outside_answer_carry_status"] == "partial_or_unresolved"
+    assert adjudication["final_return_echo_status"] == "improved_but_unproven"
+    assert adjudication["strongest_rival_status"] == "still_blocks"
+    assert adjudication["hostile_risk_status"] == "active"
+    assert adjudication["not_human_data"] is True
+    assert adjudication["no_phase_shift_claim"] is True
+
+    tensions = read_payload(packet_dir / "reader_state_tension_report.json")
+    tension_ids = {tension["tension_id"] for tension in tensions["tensions"]}
+    assert "object_event_pressure_improved_but_rival_still_blocks" in tension_ids
+    assert "object_event_gain_preserves_macro2_but_reread_partial" in tension_ids
+    assert "object_event_pressure_risks_busy_or_decorative_causality" in tension_ids
+    assert "object_event_gain_must_protect_proof_and_return" in tension_ids
+    assert "internal_reader_evidence_not_human_data" in tension_ids
+
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    blocker_ids = {blocker["blocker_id"] for blocker in blockers["residual_blockers"]}
+    assert f"reader_state_evaluation_needed_for_{chain['object_event']['packet_id']}" not in (
+        blocker_ids
+    )
+    assert "reader_state_gain_still_partial" in blocker_ids
+    assert "first_read_vividness_gap_still_active" in blocker_ids
+    assert "lived_object_event_pressure_still_weaker_than_rival" in blocker_ids
+    assert "proof_no_outside_answer_carry_still_partial" in blocker_ids
+    assert "final_return_echo_reread_strength_still_partial" in blocker_ids
+    assert "hostile_scaffold_or_overexplanation_risk" in blocker_ids
+    assert blockers["object_event_reader_state_eval_needed"] is False
+    assert blockers["object_event_reader_state_evidence_consumed"] is True
+    assert blockers["object_event_review_before_new_candidate_recommended"] is True
+    assert blockers["strongest_rival_still_blocks"] is True
+
+    laws = read_payload(packet_dir / "local_law_case_notes.json")
+    law_ids = {law["law_id"] for law in laws["case_notes"]}
+    assert "object_event_pressure_can_strengthen_first_read_without_finality" in law_ids
+    assert "object_event_gains_must_preserve_macro2_gains" in law_ids
+    assert "object_event_causality_can_improve_while_rival_blocks" in law_ids
+    assert "ablation_plus_partial_reader_state_supports_preservation_not_finality" in law_ids
+    assert "do_not_continue_generating_by_inertia" in law_ids
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["recommendation"] == (
+        "preserve_object_event_candidate_and_pause_for_loop_level_review"
+    )
+    assert decision["next_recommended_action"] == (
+        "review_object_event_reader_state_synthesis_before_new_candidate"
+    )
+    assert decision["next_recommended_action"] != (
+        "run_internal_reader_state_evaluation_on_object_event_candidate"
+    )
+    assert decision["object_event_reader_state_evaluation_recommended"] is False
+    assert decision["object_event_reader_state_evidence_consumed"] is True
+    assert decision["object_event_review_before_new_candidate_recommended"] is True
+    assert decision["reader_state_informed_macro_2_recomposition_recommended"] is False
+    assert decision["no_phase_shift_claim"] is True
+
+    brief = read_payload(packet_dir / "macro_recomposition_brief.json")
+    assert brief["brief_type"] == "object_event_reader_state_synthesis_review_brief_not_artifact"
+    assert brief["current_best_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert brief["evidence_basis"]["ablation_packet_id"] == chain["object_event_proof"][
+        "packet_id"
+    ]
+    assert brief["evidence_basis"]["reader_state_packet_id"] == chain[
+        "object_event_reader_state"
+    ]["packet_id"]
+    assert brief["operator_review_required_before_new_creative_action"] is True
+    assert brief["run_internal_reader_state_evaluation_before_further_recomposition"] is False
+    assert brief["run_another_object_event_recomposition_now"] is False
+    assert brief["no_phase_shift_claim"] is True
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    assert gate_results["object_event_reader_state_evidence_consumed"]["passed"] is True
+    assert gate_results["object_event_reader_state_eval_linked"]["passed"] is True
+    assert gate_results["reader_state_transformation_classified"]["passed"] is True
+    assert gate_results["best_candidate_reader_state_status_current"]["passed"] is True
+    assert gate_results["strongest_rival_pressure_preserved"]["passed"] is True
+    assert gate["object_event_reader_state_evidence_consumed"] is True
+    assert gate["object_event_reader_state_eval_linked"] is True
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    packet = read_payload(packet_dir / "autonomous_evidence_synthesis_packet.json")
+    assert packet["best_current_candidate"]["packet_id"] == chain["object_event"]["packet_id"]
+    assert packet["best_current_candidate"]["reader_state_evaluated"] is True
+    assert chain["object_event_reader_state"]["packet_id"] in packet[
+        "object_event_reader_state_evaluation_packets_consumed"
+    ]
+    assert packet["object_event_reader_state_evidence_consumed"] is True
+    assert packet["object_event_reader_state_eval_linked"] is True
+    assert packet["next_recommended_action"] == (
+        "review_object_event_reader_state_synthesis_before_new_candidate"
+    )
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_links_object_event_reader_state_by_hash(
+    tmp_path,
+):
+    chain = build_object_event_candidate_with_reader_state(
+        tmp_path,
+        strip_reader_identity_to_hash_only=True,
+    )
+    config = chain["config"]
+    run_id = chain["run_id"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_autonomous_evidence_synthesis(config, run_id=run_id)
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(packet_dir / "autonomous_evidence_synthesis_subject_manifest.json")
+    assert chain["object_event_reader_state"]["packet_id"] in manifest[
+        "object_event_reader_state_evaluation_packets_consumed"
+    ]
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    reader_row = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "internal_reader_state_evaluation"
+        and row["packet_id"] == chain["object_event_reader_state"]["packet_id"]
+    ][0]
+    assert reader_row["source_synthesis_packet_id"] == "packet_stale_source_for_hash_link_test"
+    assert reader_row["selected_candidate_packet_id"] == ""
+    assert reader_row["selected_candidate_packet_dir"] == ""
+    assert reader_row["selected_candidate_text_sha256"] == chain[
+        "object_event_candidate_text_sha256"
+    ]
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == chain["object_event"]["packet_id"]
+    assert selected["reader_state_evaluated"] is True
+    assert selected["reader_state_packet_id"] == chain["object_event_reader_state"]["packet_id"]
+    assert selected["reader_state_selected_candidate_text_sha256"] == chain[
+        "object_event_candidate_text_sha256"
+    ]
+    assert selected["reader_state_strongest_rival_still_blocks"] is True
+
+    adjudication = read_payload(packet_dir / "reader_state_evidence_adjudication.json")
+    assert adjudication["packet_id"] == chain["object_event_reader_state"]["packet_id"]
+    assert adjudication["selected_candidate_packet_id"] == ""
+    assert adjudication["selected_candidate_text_sha256"] == chain[
+        "object_event_candidate_text_sha256"
+    ]
+    assert adjudication["selected_object_event_candidate"] is True
+    assert adjudication["object_event_pressure_gain_status"] == "improved_but_insufficient"
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["next_recommended_action"] == (
+        "review_object_event_reader_state_synthesis_before_new_candidate"
+    )
+    assert decision["next_recommended_action"] != (
+        "run_internal_reader_state_evaluation_on_object_event_candidate"
+    )
+
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    blocker_ids = {blocker["blocker_id"] for blocker in blockers["residual_blockers"]}
+    assert f"reader_state_evaluation_needed_for_{chain['object_event']['packet_id']}" not in (
+        blocker_ids
+    )
+    assert blockers["object_event_reader_state_evidence_consumed"] is True
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    assert gate["object_event_reader_state_evidence_consumed"] is True
+    assert gate["object_event_reader_state_eval_linked"] is True
+    assert gate["passed"] is False
 
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
