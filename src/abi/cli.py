@@ -61,6 +61,7 @@ from abi.modules.object_event_recomposition import (
     OBJECT_EVENT_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
     run_object_event_recomposition,
 )
+from abi.modules.residual_target_selection import run_residual_target_selection
 from abi.modules.supervised_cycle_authorization import (
     SUPERVISED_CYCLE_AUTHORIZATION_DECISIONS,
     run_supervised_cycle_authorization,
@@ -501,6 +502,26 @@ def build_parser() -> argparse.ArgumentParser:
         choices=SUPERVISED_CYCLE_AUTHORIZATION_DECISIONS,
         help="Supervised decision for the next cycle.",
     )
+    autonomous_select_residual_target_parser = autonomous_subparsers.add_parser(
+        "select-residual-target",
+        help="Record operator selection of a narrow residual target without generation",
+    )
+    autonomous_select_residual_target_parser.add_argument(
+        "--strategy-packet",
+        type=Path,
+        required=True,
+        help="Next-target strategy packet directory to consume.",
+    )
+    autonomous_select_residual_target_parser.add_argument(
+        "--target",
+        required=True,
+        help="Residual target option ID to select.",
+    )
+    autonomous_select_residual_target_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed and selected the target.",
+    )
     autonomous_object_event_parser = autonomous_subparsers.add_parser(
         "object-event-recompose",
         help="Run one bounded object-event pressure recomposition from a strategy packet",
@@ -720,6 +741,13 @@ def main(argv: list[str] | None = None) -> int:
             loop_review_packet=args.loop_review_packet,
             operator_reviewed=args.operator_reviewed,
             decision=args.decision,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "select-residual-target":
+        return _cmd_autonomous_select_residual_target(
+            config,
+            strategy_packet=args.strategy_packet,
+            target=args.target,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "object-event-recompose":
         return _cmd_autonomous_object_event_recompose(
@@ -1110,6 +1138,23 @@ def _cmd_autonomous_authorize_next_cycle(
         loop_review_packet=loop_review_packet,
         operator_reviewed=operator_reviewed,
         decision=decision,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_select_residual_target(
+    config: AbiConfig,
+    *,
+    strategy_packet: Path,
+    target: str,
+    operator_reviewed: bool,
+) -> int:
+    result = run_residual_target_selection(
+        config,
+        strategy_packet=strategy_packet,
+        target=target,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
