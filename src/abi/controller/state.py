@@ -40,6 +40,9 @@ AUTONOMOUS_RESIDUAL_WORK_ORDER_ACTIVE_PHASE = "residual_work_order_v1"
 AUTONOMOUS_RESIDUAL_GENERATION_AUTHORIZATION_ACTIVE_PHASE = (
     "residual_generation_authorization_v1"
 )
+AUTONOMOUS_RESIDUAL_CANDIDATE_GENERATION_ACTIVE_PHASE = (
+    "residual_candidate_generation_v1"
+)
 AUTONOMOUS_OBJECT_EVENT_RECOMPOSITION_ACTIVE_PHASE = "object_event_recomposition_v1"
 
 

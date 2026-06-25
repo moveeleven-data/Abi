@@ -66,6 +66,11 @@ from abi.modules.residual_generation_authorization import (
     RESIDUAL_GENERATION_AUTHORIZATION_DECISIONS,
     run_residual_generation_authorization,
 )
+from abi.modules.residual_candidate_generation import (
+    RESIDUAL_CANDIDATE_GENERATION_CLIENTS,
+    RESIDUAL_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
+    run_residual_candidate_generation,
+)
 from abi.modules.residual_work_order import run_residual_work_order_planning
 from abi.modules.supervised_cycle_authorization import (
     SUPERVISED_CYCLE_AUTHORIZATION_DECISIONS,
@@ -557,6 +562,33 @@ def build_parser() -> argparse.ArgumentParser:
         choices=RESIDUAL_GENERATION_AUTHORIZATION_DECISIONS,
         help="Supervised decision for residual generation.",
     )
+    autonomous_generate_residual_candidate_parser = autonomous_subparsers.add_parser(
+        "generate-residual-candidate",
+        help="Run one bounded residual candidate generation attempt",
+    )
+    autonomous_generate_residual_candidate_parser.add_argument(
+        "--client",
+        choices=RESIDUAL_CANDIDATE_GENERATION_CLIENTS,
+        required=True,
+        help="Residual candidate generation client path to use.",
+    )
+    autonomous_generate_residual_candidate_parser.add_argument(
+        "--authorization-packet",
+        type=Path,
+        required=True,
+        help="Residual generation authorization packet directory to consume.",
+    )
+    autonomous_generate_residual_candidate_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow the guarded OpenAI path.",
+    )
+    autonomous_generate_residual_candidate_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=RESIDUAL_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for residual candidate generation.",
+    )
     autonomous_object_event_parser = autonomous_subparsers.add_parser(
         "object-event-recompose",
         help="Run one bounded object-event pressure recomposition from a strategy packet",
@@ -798,6 +830,17 @@ def main(argv: list[str] | None = None) -> int:
             work_order_packet=args.work_order_packet,
             operator_reviewed=args.operator_reviewed,
             decision=args.decision,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "generate-residual-candidate"
+    ):
+        return _cmd_autonomous_generate_residual_candidate(
+            config,
+            client_name=args.client,
+            authorization_packet=args.authorization_packet,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
         )
     if args.command == "autonomous" and args.autonomous_command == "object-event-recompose":
         return _cmd_autonomous_object_event_recompose(
@@ -1235,6 +1278,25 @@ def _cmd_autonomous_authorize_residual_generation(
         work_order_packet=work_order_packet,
         operator_reviewed=operator_reviewed,
         decision=decision,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_generate_residual_candidate(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    authorization_packet: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_residual_candidate_generation(
+        config,
+        client_name=client_name,
+        authorization_packet=authorization_packet,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code

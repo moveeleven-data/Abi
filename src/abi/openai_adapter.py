@@ -16,6 +16,7 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_MODEL_SCHEMAS,
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     LIVE_MODEL_WORKER_SCHEMAS,
+    OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     PILOT_ABI_CANDIDATE_SCHEMA,
     PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
     PILOT_MODEL_SCHEMAS,
@@ -152,6 +153,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_ablation_informed_revision_prompt
     if schema == BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
         return _build_bounded_macro_recomposition_prompt
+    if schema == OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA:
+        return _build_object_motion_causality_generation_prompt
     return _build_live_packet_prompt
 
 
@@ -292,6 +295,23 @@ def _build_bounded_macro_recomposition_prompt(input_text: str) -> str:
         "defeat. Preserve the domestic table/dust/spoon/saucer field, proof arising "
         "from inside the line, cosmic silence/no outside answer as formal isolation, "
         "return without regression, and strongest-rival pressure. Prompt packet:\n"
+        f"{input_text}"
+    )
+
+
+def _build_object_motion_causality_generation_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema for one bounded object-motion "
+        "causality generation worker. Produce only replacement_region_text for "
+        "the controller-selected region, never the full artifact. Include one "
+        "target_unit_mapping entry for every authorized unit_id supplied in the "
+        "prompt. The controller owns source IDs, target IDs, selected region, final "
+        "assembly, diffing, gates, finalization, and claims. The replacement must "
+        "make object movement or state change produce visible consequence before "
+        "explanation. Do not add decorative vividness, a new object list, rival "
+        "mimicry, nonselected-region edits, finality claims, phase-shift claims, "
+        "human-validation claims, or JSON/procedural leakage inside the replacement "
+        "text. Prompt packet:\n"
         f"{input_text}"
     )
 

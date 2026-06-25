@@ -66,6 +66,7 @@ class WorkerRole(str, Enum):
     ABLATION_INFORMED_HANDLE_SELECTOR = "ablation_informed_handle_selector"
     ABLATION_INFORMED_PATCH_PROPOSER = "ablation_informed_patch_proposer"
     BOUNDED_MACRO_RECOMPOSER = "bounded_macro_recomposer"
+    OBJECT_MOTION_CAUSALITY_GENERATOR = "object_motion_causality_generator"
 
 
 @dataclass(frozen=True)
@@ -468,7 +469,16 @@ BOUNDED_MACRO_RECOMPOSITION_SCHEMA = WorkerSchema(
     artifact_type="model_bounded_macro_recomposition",
 )
 
-BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS = (BOUNDED_MACRO_RECOMPOSITION_SCHEMA,)
+OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA = WorkerSchema(
+    name="ObjectMotionCausalityGenerationOutput",
+    version="1",
+    artifact_type="model_object_motion_causality_generation",
+)
+
+BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS = (
+    BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+    OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
+)
 
 LIVE_MODEL_WORKER_SCHEMAS = (
     LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
@@ -2274,6 +2284,49 @@ def bounded_macro_recomposition_json_schema() -> dict[str, Any]:
     )
 
 
+def object_motion_causality_generation_json_schema() -> dict[str, Any]:
+    unit_mapping_item = _object_schema(
+        {
+            "unit_id": {"type": "string"},
+            "before_text_excerpt": {"type": "string"},
+            "replacement_text_excerpt": {"type": "string"},
+            "object_motion_or_action": {"type": "string"},
+            "visible_consequence": {"type": "string"},
+            "how_reader_infers_pressure_before_explanation": {"type": "string"},
+            "forbidden_change_avoided": {"type": "string"},
+        },
+        [
+            "unit_id",
+            "before_text_excerpt",
+            "replacement_text_excerpt",
+            "object_motion_or_action",
+            "visible_consequence",
+            "how_reader_infers_pressure_before_explanation",
+            "forbidden_change_avoided",
+        ],
+    )
+    return _schema_with_properties(
+        {
+            "replacement_region_text": {"type": "string"},
+            "object_motion_generation_plan": _string_array_schema(),
+            "target_unit_mapping": {"type": "array", "items": unit_mapping_item},
+            "protected_effects_preservation_notes": _string_array_schema(),
+            "uncertainty": {"type": "string"},
+            "predicted_reader_effect": {"type": "string"},
+            "forbidden_change_self_check": _string_array_schema(),
+        },
+        [
+            "replacement_region_text",
+            "object_motion_generation_plan",
+            "target_unit_mapping",
+            "protected_effects_preservation_notes",
+            "uncertainty",
+            "predicted_reader_effect",
+            "forbidden_change_self_check",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -2369,6 +2422,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return ablation_informed_patch_proposal_json_schema()
     if schema == BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
         return bounded_macro_recomposition_json_schema()
+    if schema == OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA:
+        return object_motion_causality_generation_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -2474,6 +2529,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_ablation_informed_patch_proposal(payload)
     if schema == BOUNDED_MACRO_RECOMPOSITION_SCHEMA:
         return _validate_bounded_macro_recomposition(payload)
+    if schema == OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA:
+        return _validate_object_motion_causality_generation(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -3920,6 +3977,58 @@ def _validate_bounded_macro_recomposition(payload: dict[str, Any]) -> dict[str, 
     result["target_paragraph_replacements"] = target_paragraph_replacements
     result["target_span_replacements"] = target_span_replacements
     return result
+
+
+def _validate_object_motion_causality_generation(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    for key in (
+        "replacement_region_text",
+        "uncertainty",
+        "predicted_reader_effect",
+    ):
+        _require_type(payload, key, str)
+        if not payload[key].strip():
+            raise ModelValidationError(f"{key} must not be empty")
+    _require_string_list(payload, "object_motion_generation_plan")
+    if not payload["object_motion_generation_plan"]:
+        raise ModelValidationError("object_motion_generation_plan must not be empty")
+    _require_object_list(payload, "target_unit_mapping")
+    target_unit_mapping = []
+    for index, item in enumerate(payload["target_unit_mapping"]):
+        validated = _validate_object(
+            item,
+            f"target_unit_mapping[{index}]",
+            (
+                "unit_id",
+                "before_text_excerpt",
+                "replacement_text_excerpt",
+                "object_motion_or_action",
+                "visible_consequence",
+                "how_reader_infers_pressure_before_explanation",
+                "forbidden_change_avoided",
+            ),
+        )
+        target_unit_mapping.append(validated)
+    _require_string_list(payload, "protected_effects_preservation_notes")
+    if not payload["protected_effects_preservation_notes"]:
+        raise ModelValidationError(
+            "protected_effects_preservation_notes must not be empty"
+        )
+    _require_string_list(payload, "forbidden_change_self_check")
+    if not payload["forbidden_change_self_check"]:
+        raise ModelValidationError("forbidden_change_self_check must not be empty")
+    return {
+        "replacement_region_text": payload["replacement_region_text"],
+        "object_motion_generation_plan": list(payload["object_motion_generation_plan"]),
+        "target_unit_mapping": target_unit_mapping,
+        "protected_effects_preservation_notes": list(
+            payload["protected_effects_preservation_notes"]
+        ),
+        "uncertainty": payload["uncertainty"],
+        "predicted_reader_effect": payload["predicted_reader_effect"],
+        "forbidden_change_self_check": list(payload["forbidden_change_self_check"]),
+    }
 
 
 def _validate_revision_span_ref(payload: dict[str, Any], label: str) -> dict[str, str]:

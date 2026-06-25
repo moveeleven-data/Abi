@@ -30,6 +30,7 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS,
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+    OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     ModelValidationError,
     WorkerRole,
     json_schema_for_worker_schema,
@@ -113,6 +114,11 @@ from abi.modules.residual_generation_authorization import (
     NEXT_RECOMMENDED_ACTION as RESIDUAL_GENERATION_AUTHORIZATION_NEXT_ACTION,
     RESIDUAL_GENERATION_AUTHORIZATION_ARTIFACT_TYPES,
     run_residual_generation_authorization,
+)
+from abi.modules.residual_candidate_generation import (
+    BOUNDED_MACRO_COMPATIBLE_ARTIFACT_TYPES as RESIDUAL_CANDIDATE_ARTIFACT_TYPES,
+    FakeObjectMotionCausalityModelClient,
+    run_residual_candidate_generation,
 )
 from abi.modules.residual_work_order import (
     NEXT_RECOMMENDED_ACTION as RESIDUAL_WORK_ORDER_NEXT_RECOMMENDED_ACTION,
@@ -695,6 +701,27 @@ def build_residual_generation_authorization_ready_chain(tmp_path: Path):
     return chain
 
 
+def build_residual_candidate_authorization_chain(
+    tmp_path: Path,
+    *,
+    fixture_only: bool = False,
+):
+    chain = build_residual_generation_authorization_ready_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    assert authorization.payload["accepted"] is True
+    packet_dir = Path(str(authorization.payload["packet_dir"]))
+    if fixture_only:
+        mark_packet_fixture_only(packet_dir)
+    chain["residual_generation_authorization"] = authorization.payload
+    return chain
+
+
 def build_object_event_strategy_chain(tmp_path: Path):
     chain = build_next_target_strategy_ready_chain(tmp_path)
     strategy = run_next_target_strategy(
@@ -961,6 +988,21 @@ def rewrite_payload(path: str | Path, mutator) -> None:
     envelope = json.loads(artifact_path.read_text(encoding="utf-8"))
     mutator(envelope["payload"])
     artifact_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+
+def rewrite_envelope(path: str | Path, mutator) -> None:
+    artifact_path = Path(path)
+    envelope = json.loads(artifact_path.read_text(encoding="utf-8"))
+    mutator(envelope)
+    artifact_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+
+def mark_packet_fixture_only(packet_dir: Path) -> None:
+    for artifact_path in packet_dir.glob("*.json"):
+        rewrite_envelope(
+            artifact_path,
+            lambda envelope: envelope.__setitem__("fixture_only", True),
+        )
 
 
 MULTI_PARAGRAPH_MACRO_BASE_TEXT = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
@@ -1909,6 +1951,30 @@ class StubObjectEventRecompositionClient:
 def object_event_stub_factory(clients, *, mode: str = "valid"):
     def _factory(model: str) -> StubObjectEventRecompositionClient:
         client = StubObjectEventRecompositionClient(model=model, mode=mode)
+        clients.append(client)
+        return client
+
+    return _factory
+
+
+class StubObjectMotionCausalityClient(FakeObjectMotionCausalityModelClient):
+    provider = "openai"
+
+    def __init__(self, *, model: str, mode: str = "valid") -> None:
+        super().__init__(mode=mode)
+        self.model = model
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        if request.schema != OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA:
+            raise AssertionError(f"unexpected schema: {request.schema.name}")
+        return super().generate(request)
+
+
+def object_motion_causality_stub_factory(clients, *, mode: str = "valid"):
+    def _factory(model: str) -> StubObjectMotionCausalityClient:
+        client = StubObjectMotionCausalityClient(model=model, mode=mode)
         clients.append(client)
         return client
 
@@ -7804,6 +7870,404 @@ def test_residual_generation_authorization_accepts_one_bounded_attempt(
 
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_residual_candidate_generation_openai_refuses_without_allow_live(tmp_path):
+    config = config_for(tmp_path)
+    clients = []
+
+    result = run_residual_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=tmp_path / "missing_authorization",
+        allow_live_model=False,
+        client_factory=object_motion_causality_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--allow-live-model" in result.payload["message"]
+    assert clients == []
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_residual_candidate_generation_openai_refuses_without_api_key(
+    tmp_path,
+    monkeypatch,
+):
+    config = config_for(tmp_path)
+    clients = []
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    result = run_residual_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=tmp_path / "missing_authorization",
+        allow_live_model=True,
+        client_factory=object_motion_causality_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "OPENAI_API_KEY is not set" in result.payload["message"]
+    assert clients == []
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_residual_candidate_generation_fake_refuses_live_authorization(tmp_path):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    config = chain["config"]
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "fake mode refuses non-fixture" in result.payload["message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+    assert len(after_calls) == len(before_calls)
+
+
+def test_residual_candidate_generation_fake_accepts_fixture_authorization(
+    tmp_path,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path, fixture_only=True)
+    config = chain["config"]
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["authorization_consumed"] is True
+    assert result.payload["candidate_generated"] is True
+    assert result.payload["source_authorization_packet_id"] == chain[
+        "residual_generation_authorization"
+    ]["packet_id"]
+    assert result.payload["base_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert result.payload["selected_residual_target_id"] == (
+        OBJECT_MOTION_CAUSALITY_TARGET_ID
+    )
+    assert result.payload["selected_region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    assert result.payload["target_unit_count"] == 3
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "bounded_macro_recomposition"
+    assert {artifact.type for artifact in result.artifacts} == set(
+        RESIDUAL_CANDIDATE_ARTIFACT_TYPES
+    )
+
+    for artifact_type in RESIDUAL_CANDIDATE_ARTIFACT_TYPES:
+        envelope = json.loads(
+            (packet_dir / f"{artifact_type}.json").read_text(encoding="utf-8")
+        )
+        assert envelope["artifact_type"] == artifact_type
+        assert envelope["fixture_only"] is True
+        assert envelope["model_call_id"] is None
+
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["source_authorization_packet_id"] == chain[
+        "residual_generation_authorization"
+    ]["packet_id"]
+    assert candidate["object_motion_causality_generation"] is True
+    assert candidate["candidate_only"] is True
+    assert candidate["non_final"] is True
+    assert candidate["not_human_validated"] is True
+    assert candidate["fixture_only"] is True
+    assert candidate["finalization_eligible"] is False
+    assert "cup comes down" in candidate["text"]
+
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    assert diff["target_coverage_report"]["object_motion_causality_mapping_exists"] is True
+    assert diff["target_coverage_report"]["no_nonselected_region_edits"] is True
+    assert diff["ready_for_executed_ablation"] is True
+
+    gate = read_payload(packet_dir / "macro_recomposition_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    for gate_name in (
+        "authorization_packet_consumed",
+        "work_order_packet_consumed",
+        "selected_region_hash_verified",
+        "target_units_mapped",
+        "one_bounded_replacement_generated",
+        "object_motion_causality_mapping_exists",
+        "no_nonselected_region_edits",
+        "no_final_claim",
+        "no_phase_shift_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["strongest_rival_still_blocks"] is True
+
+    packet = read_payload(packet_dir / "macro_recomposition_packet.json")
+    assert packet["counts"]["produced_artifacts"] == len(
+        RESIDUAL_CANDIDATE_ARTIFACT_TYPES
+    )
+    assert packet["counts"]["model_calls"] == 0
+    assert packet["object_motion_causality_generation"] is True
+    assert packet["requires_executed_ablation_before_improvement_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_residual_candidate_generation_refuses_invalid_authorization(tmp_path):
+    chain = build_residual_candidate_authorization_chain(tmp_path, fixture_only=True)
+    invalid_packet = tmp_path / "invalid_residual_generation_authorization_target"
+    shutil.copytree(
+        Path(str(chain["residual_generation_authorization"]["packet_dir"])),
+        invalid_packet,
+    )
+
+    def _wrong_target(payload):
+        payload["selected_residual_target_id"] = "proof_no_answer_residue"
+
+    rewrite_payload(
+        invalid_packet / "residual_generation_authorization_packet.json",
+        _wrong_target,
+    )
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="fake",
+        authorization_packet=invalid_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "selected residual target" in result.payload["message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_residual_candidate_generation_refuses_consumed_authorization(tmp_path):
+    chain = build_residual_candidate_authorization_chain(tmp_path, fixture_only=True)
+    consumed_packet = tmp_path / "consumed_residual_generation_authorization"
+    shutil.copytree(
+        Path(str(chain["residual_generation_authorization"]["packet_dir"])),
+        consumed_packet,
+    )
+
+    def _consume(payload):
+        payload["authorization_consumed"] = True
+
+    rewrite_payload(
+        consumed_packet / "residual_generation_authorization_packet.json",
+        _consume,
+    )
+    rewrite_payload(consumed_packet / "generation_attempt_budget.json", _consume)
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="fake",
+        authorization_packet=consumed_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "already consumed" in result.payload["message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+
+
+def test_residual_candidate_generation_refuses_duplicate_authorization_use(tmp_path):
+    chain = build_residual_candidate_authorization_chain(tmp_path, fixture_only=True)
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    first = run_residual_candidate_generation(
+        chain["config"],
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+    assert first.exit_code == 0
+    assert first.payload["accepted"] is True
+
+    second = run_residual_candidate_generation(
+        chain["config"],
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+
+    assert second.exit_code == 1
+    assert second.payload["accepted"] is False
+    assert "existing later candidate already references this authorization" in second.payload[
+        "message"
+    ]
+    assert second.payload["authorization_consumed"] is False
+    assert second.payload["candidate_generated"] is False
+
+
+def test_residual_candidate_generation_refuses_selected_region_hash_mismatch(
+    tmp_path,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path, fixture_only=True)
+    invalid_packet = tmp_path / "invalid_residual_generation_authorization_hash"
+    shutil.copytree(
+        Path(str(chain["residual_generation_authorization"]["packet_dir"])),
+        invalid_packet,
+    )
+
+    def _bad_hash(payload):
+        payload["selected_region_sha256"] = "not-the-selected-region-hash"
+
+    rewrite_payload(
+        invalid_packet / "residual_generation_authorization_packet.json",
+        _bad_hash,
+    )
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="fake",
+        authorization_packet=invalid_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "selected region text hash does not match" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_residual_candidate_generation_stubbed_openai_success(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert len(clients) == 1
+    assert len(clients[0].requests) == 1
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["authorization_consumed"] is True
+    assert result.payload["candidate_generated"] is True
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    model_call = result.payload["model_calls"][0]
+    assert model_call["provider"] == "openai"
+    assert model_call["model"] == "stub-object-motion-model"
+    assert model_call["worker_role"] == WorkerRole.OBJECT_MOTION_CAUSALITY_GENERATOR.value
+    assert model_call["schema_name"] == OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA.name
+    assert model_call["status"] == MODEL_CALL_SUCCESS
+    assert model_call["parsed_output_artifact_id"] == result.payload["artifact_ids"][
+        "macro_patch_or_section_plan"
+    ]
+
+    plan_envelope = json.loads(
+        (packet_dir / "macro_recomposition_plan.json").read_text(encoding="utf-8")
+    )
+    patch_envelope = json.loads(
+        (packet_dir / "macro_patch_or_section_plan.json").read_text(encoding="utf-8")
+    )
+    assert plan_envelope["fixture_only"] is False
+    assert plan_envelope["model_call_id"] == result.payload["model_call_ids"][0]
+    assert patch_envelope["fixture_only"] is False
+    assert patch_envelope["model_call_id"] == result.payload["model_call_ids"][0]
+
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["source_model_call_id"] == result.payload["model_call_ids"][0]
+    assert candidate["fixture_only"] is False
+    assert candidate["candidate_only"] is True
+    assert candidate["non_final"] is True
+    assert candidate["not_human_validated"] is True
+    assert candidate["finalization_eligible"] is False
+    assert candidate["no_phase_shift_claim"] is True
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+@pytest.mark.parametrize(
+        ("mode", "expected_message"),
+        [
+            ("missing_mapping", "missing target unit IDs"),
+            ("invented_unit", "invented or unsupported target unit"),
+            ("decorative", "decorative object listing"),
+            ("full_rewrite", "full rewrite"),
+            ("finality", "forbidden claim/leakage"),
+        ],
+)
+def test_residual_candidate_generation_stubbed_openai_validation_failures(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected_message,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory(clients, mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert not (packet_dir / "macro_recomposed_candidate_text.json").exists()
 
 
 def test_object_event_recomposition_fake_accepts_strategy_and_preserves_base(tmp_path):
