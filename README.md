@@ -4,20 +4,11 @@ Abi is an autonomous creative engine built around one repeating pattern:
 
 germ -> differentiation -> pressure -> crisis -> recomposition -> return
 
-That same pattern appears three times.
+The same pattern is used in three places at once: the machine process, the artifact's subject and form, and the reader-state transformation Abi is trying to cause. Abi begins in a narrow literary-metaphysical domain so those three layers can stay aligned while the system learns how to generate, read, diagnose, revise, ablate, compare, and preserve creative work.
 
-1. Abi's **architecture** follows it while it grows a work from a small beginning, tests it under pressure, revises it, and returns with a stronger version.
+## How Abi Works
 
-2. The **essay** follows it in form and subject. A small opening image unfolds into separation, tension, and return.
-
-2. Abi’s **internal reader** follows it too. It begins with fragments, feels pressure as the work develops, reorganizes its understanding, and returns to the opening with a changed view.
-
-Abi starts in one narrow literary-metaphysical domain so the machine, the artifact, and the reader transformation can be aligned as tightly as possible. The long-term aim is to generalize that same creative loop into a broader system for making and improving art.
-
-## How It Works
-
-Abi stores work in packet directories under `runs/<run_id>/.../packet_NNNN/`.
-Each packet contains JSON artifacts with a normalized envelope:
+Abi stores work as immutable packet directories under `runs/<run_id>/.../packet_NNNN/`. Each packet contains JSON artifacts with a normalized envelope:
 
 ```text
 schema_version
@@ -31,49 +22,49 @@ model_call_id
 payload
 ```
 
-The SQLite registry records artifact IDs, hashes, parent IDs, run state, gates, and
-model-call records. This gives Abi a durable memory outside the model context.
+SQLite records runs, artifact IDs, hashes, parent lineage, gates, blocker reports, and model-call records. This gives Abi a durable memory outside the model context.
 
 Most pipelines follow the same shape:
 
-1. Build or load a source packet.
-2. Create candidate, baseline, and rival artifacts.
-3. Run internal reader analysis over the candidate set.
-4. Diagnose failures and choose a bounded repair target.
-5. Apply a controller-owned revision.
-6. Compare old, new, rival, and ablated variants.
-7. Record gate reports and blocker reports without silently finalizing anything.
+1. Load a source packet and controller-owned constraints.
+2. Produce or import candidate, baseline, rival, or evidence artifacts.
+3. Run internal reader and ablation checks.
+4. Diagnose failures and select a bounded target.
+5. Recompose only the authorized region.
+6. Compare candidate, prior versions, rival pressure, and ablated variants.
+7. Record gates and blockers without silently finalizing anything.
 
-## What Is Implemented
+## Current Capabilities
 
-The current repo includes:
+The repo currently includes:
 
 - The `abi` Python package and CLI.
-- SQLite-backed runs, artifacts, gates, and model-call records.
-- Immutable JSON artifacts with hashes and parent lineage.
+- SQLite-backed run state, artifact registry, gate records, and model-call logs.
 - Deterministic Abi Ear and Minimal Reread demos.
-- Production-harness and pilot artifact-set packet scaffolds.
-- Strongest-rival import and counterbalanced private reader-kit export.
-- Autonomous internal reader-lab packets.
-- Autonomous closed-loop revision packets.
-- Executed counterfactual ablation packets.
-- Policy-driven controller and finalization profiles.
+- Production-harness and pilot artifact-set scaffolds.
+- Strongest-rival import and private reader-kit export.
+- Internal reader-lab and reader-state evaluation packets.
+- Autonomous evidence synthesis and loop-level review.
+- Bounded macro recomposition with target coverage and materiality checks.
+- Executed counterfactual ablation over supported candidate packet types.
+- Ablation-informed revision and synthesis-guided macro recomposition.
+- Supervised next-cycle authorization and authorization-aware target planning.
+- Narrow residual target selection, object-motion work-order planning, one-shot residual generation, and materiality feedback for failed attempts.
+- Policy-driven controller and fail-closed finalization profiles.
 
-Workers can produce artifacts, comparisons, diagnoses, and blocker reports. Finalization
-is controlled separately by the controller/finalization layer.
+Model-shaped work is routed through a structured model-driver layer. Live model paths are guarded by explicit opt-in, while tests use fake or stub clients.
 
 ## Repository Layout
 
 ```text
-src/abi/                      runtime package
-src/abi/controller/           controller decisions, gates, finalization policy
+src/abi/                      runtime package and CLI
+src/abi/controller/           controller decisions, gates, and finalization policy
 src/abi/modules/              packet-producing pipelines
 tests/                        regression tests
 fixtures/                     non-private fixture inputs
 context/                      frozen phase specs and historical context
-docs/                         operator handoff and protocol notes
+docs/                         changelog, handoff notes, and operator documents
 tools/setup_context_scripts/  context setup utilities
 ```
 
-Runtime state, generated packets, outputs, private source material, and environment
-files are intentionally kept out of Git.
+Runtime databases, generated packets, outputs, private source material, caches, virtual environments, and local environment files are intentionally kept out of Git.

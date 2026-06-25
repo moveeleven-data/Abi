@@ -10,9 +10,9 @@ preserved across the build.
 
 Current endpoint in Git history:
 
-- `544e967 Allow executed ablation of ablation-informed revision packets`
+- `5dcf829 Fix object-motion generation materiality feedback`
 - Active branch during latest changelog update:
-  `fix/revise-from-ablation-source-packet-adapter`
+  `main`
 - The active runtime direction is the autonomous creative-engine path.
 
 ## Standing Invariants
@@ -1110,6 +1110,213 @@ Verification:
   `abi autonomous revise-from-ablation --client openai --executed-ablation-packet runs\run_8fa54199f23f3d8e\executed_ablation\packet_0008`
 - `autonomous_creative_candidate` finalization remained refused.
 
+## Updates Since Last Changelog Refresh
+
+Current endpoint:
+
+- `5dcf829 Fix object-motion generation materiality feedback`
+
+The work since the previous changelog refresh moved Abi from a recursive
+ablation-informed revision path into a broader autonomous evidence loop with
+macro recomposition, reader-state evaluation, supervised authorization, narrow
+residual targeting, and one-shot object-motion generation.
+
+### Ablation Evidence And Pivot Policy
+
+Commits:
+
+- `15f90f6 Add ablation evidence dominance policy`
+- `820a304 Add residual blocker pivot policy`
+- `a3acabd Lock pivot base selection to preserve useful repair`
+
+Implemented:
+
+- Evidence dominance rules for ablation-informed revision.
+- Residual-blocker pivot logic so the system can pivot from a weak or noncausal
+  prior repair without treating it as proven.
+- Controller-owned base selection for pivot repairs.
+- Preservation of useful embodied gains while keeping strongest-rival pressure
+  active.
+- Tests proving gate failure remains correct and finalization remains
+  fail-closed.
+
+### Autonomous Evidence Synthesis v1
+
+Commit:
+
+- `d07031e Add autonomous evidence synthesis`
+
+Implemented:
+
+- Evidence synthesis packets that aggregate reader-lab, revision,
+  executed-ablation, rival, and blocker evidence.
+- Candidate/proof summaries and evidence-weighted current-best selection.
+- Explicit distinction between useful evidence, weak evidence, predicted-only
+  claims, and unresolved blockers.
+- Non-final synthesis gate reports.
+
+### Bounded Macro Recomposition
+
+Commits:
+
+- `e07acbc Implement bounded macro recomposition`
+- `709c926 Add guarded live bounded macro recomposition`
+- `122a12b Enforce macro recomposition target coverage`
+- `57e0621 Add generic executed ablation subject adapter`
+
+Implemented:
+
+- Bounded macro recomposition packets from synthesis-selected candidates.
+- Fake and guarded OpenAI paths using structured outputs.
+- Controller-owned final assembly and diff reports.
+- Macro target coverage checks.
+- Generic executed-ablation subject adapter so executed ablation can read
+  multiple supported revision packet kinds.
+- Guarded live path refusing without explicit opt-in or required environment.
+
+### Evidence Synthesis Timeline And Reader-State Evaluation
+
+Commits:
+
+- `fae44bf Update evidence synthesis for macro proof timeline`
+- `556cf17 Add internal reader state evaluation`
+- `92d0cbf Add reader-state evidence adjudication`
+- `b73f2cc Support synthesis-guided macro recomposition briefs`
+
+Implemented:
+
+- Evidence synthesis subject timeline v2.
+- Internal reader-state evaluation packets over synthesis-selected macro
+  candidates.
+- Reader-state evidence adjudication inside synthesis.
+- Synthesis-guided macro recomposition briefs that preserve the selected macro
+  candidate and route next work through reader-state evidence rather than
+  blind generation.
+
+### Target-Addressed Macro Recomposition Hardening
+
+Commits:
+
+- `fb468aa Add target-addressed live macro recomposition`
+- `338b304 Fix OpenAI structured output schema parity`
+- `190adb2 Add target-addressed macro corrective retry`
+- `ba5715d Add span-level macro active target validation`
+- `6a9b30e Fix finality claim validator semantics`
+- `4aa697c Fix macro retry failure-set consistency`
+- `92910db Fix macro target assignment consistency`
+- `f7e3cc9 Tighten macro2 materiality feedback contract`
+- `ebe12c0 Normalize model active-target claims`
+
+Implemented:
+
+- Target-addressed live macro recomposition with guarded OpenAI support.
+- OpenAI structured-output schema parity fixes.
+- Bounded corrective retry behavior for target-addressed macro recomposition.
+- Span-level active-target granularity and validation.
+- Field-aware, negation-aware finality/phase-shift claim validation.
+- Retry failure-set consistency checks.
+- Macro target-assignment consistency checks.
+- Macro-2 materiality feedback contract.
+- Controller-owned active-target normalization so model claims cannot redefine
+  active targets.
+
+### Macro-2 And Object-Event Evidence Synthesis
+
+Commits:
+
+- `bb919a7 Add macro2 proof supersession to evidence synthesis`
+- `96c6328 Consume macro2 reader-state evidence in synthesis`
+- `b712c22 Add evidence-grounded next target strategy`
+- `d3e0ba9 Add bounded object-event pressure recomposition`
+- `305fdba Add object-event proof-aware synthesis`
+- `afa3b52 Consume object-event reader-state evidence in synthesis`
+
+Implemented:
+
+- Candidate/proof supersession logic for macro-2 evidence.
+- Reader-state-aware synthesis for macro-2 packets.
+- Evidence-grounded next-target strategy planning.
+- Bounded object-event pressure recomposition.
+- Object-event proof-aware synthesis.
+- Object-event reader-state-aware synthesis.
+
+### Loop Integrity And Supervised Authorization
+
+Commits:
+
+- `7b35686 Add evidence loop-level review`
+- `c6334f9 Clean up evidence loop integrity before generation`
+- `d9cfdef Add supervised next-cycle authorization`
+- `2938935 Make next-target strategy authorization-aware`
+
+Implemented:
+
+- Loop-level evidence review packets.
+- Loop-integrity cleanup before further generation.
+- Supervised next-cycle authorization packets.
+- Authorization-aware next-target strategy planning.
+- Guardrails that prevent generation from proceeding when proof, reader-state,
+  or operator authorization prerequisites are not satisfied.
+
+### Narrow Residual Targeting And Object-Motion Generation
+
+Commits:
+
+- `1dc1306 Add narrow residual target selection`
+- `b90dec0 Add object-motion causality work-order planning`
+- `ba9f485 Add residual generation authorization`
+- `0622c6d Add bounded object-motion causality generation`
+- `5dcf829 Fix object-motion generation materiality feedback`
+
+Implemented:
+
+- Operator-selected narrow residual target packets.
+- Object-motion causality work-order packets identifying selected region,
+  target units, protected effects, and future generation contract.
+- Supervised residual generation authorization with one-attempt budget and
+  explicit operator review.
+- One-shot bounded residual candidate generation for object-motion causality.
+- Artifact-driven object/action/consequence term validation based on the
+  work-order target-unit map rather than permanent hardcoded production terms.
+- Explicit model prompt and work-order materiality feedback:
+  - selected-region materiality required
+  - replacement must be genuinely re-authored
+  - protected effects do not require preserving sentence architecture
+  - lexical substitutions are insufficient
+  - target-unit mappings are necessary but insufficient
+  - required changed unique word count is `10`
+  - required changed ratio is `0.12`
+  - overlapping units must be reconciled in one integrated replacement
+- Materiality failure reporting with:
+  - before word count
+  - replacement word count
+  - changed unique word count
+  - changed unique word ratio
+  - required thresholds
+  - exact-copy flag
+  - near-copy / under-materiality classification
+  - failed materiality reason
+  - target unit IDs
+- Failed-attempt hygiene:
+  - failed packets do not assert actual `authorization_consumed: true`
+  - failed packets do not assert actual `candidate_generated: true`
+  - planned intent is recorded separately
+  - refused outputs retain `authorization_consumed: false`,
+    `candidate_generated: false`, and `candidate_artifact_id: null`
+- Duplicate prevention now distinguishes accepted/generated candidates from
+  validation-failed attempts.
+
+Verification at the object-motion materiality endpoint:
+
+- `ruff check .` passed.
+- `pytest` passed with 370 tests.
+- Guarded residual OpenAI generation without `--allow-live-model` refused before
+  model calls with `model_calls: 0`.
+- `gate list` succeeded.
+- `finalization status --profile autonomous_creative_candidate` remained
+  ineligible.
+- `finalize --profile autonomous_creative_candidate` refused.
+
 ## Current Runtime Surface
 
 The current repo includes these active areas:
@@ -1130,6 +1337,17 @@ The current repo includes these active areas:
 - autonomous closed-loop revision
 - executed ablation
 - ablation-informed revision
+- autonomous evidence synthesis
+- loop-level evidence review
+- bounded macro recomposition
+- internal reader-state evaluation
+- object-event pressure recomposition
+- supervised next-cycle authorization
+- authorization-aware next-target planning
+- narrow residual target selection
+- object-motion residual work-order planning
+- supervised residual generation authorization
+- one-shot object-motion residual candidate generation
 - model-driver demos and model-call inspection
 - guarded live paths behind explicit opt-in
 
