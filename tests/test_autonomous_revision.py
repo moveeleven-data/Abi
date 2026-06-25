@@ -118,6 +118,8 @@ from abi.modules.residual_generation_authorization import (
 from abi.modules.residual_candidate_generation import (
     BOUNDED_MACRO_COMPATIBLE_ARTIFACT_TYPES as RESIDUAL_CANDIDATE_ARTIFACT_TYPES,
     FakeObjectMotionCausalityModelClient,
+    REQUIRED_CHANGED_RATIO,
+    REQUIRED_CHANGED_UNIQUE_WORD_COUNT,
     run_residual_candidate_generation,
 )
 from abi.modules.residual_work_order import (
@@ -1975,6 +1977,99 @@ class StubObjectMotionCausalityClient(FakeObjectMotionCausalityModelClient):
 def object_motion_causality_stub_factory(clients, *, mode: str = "valid"):
     def _factory(model: str) -> StubObjectMotionCausalityClient:
         client = StubObjectMotionCausalityClient(model=model, mode=mode)
+        clients.append(client)
+        return client
+
+    return _factory
+
+
+class DynamicObjectMotionCausalityClient:
+    provider = "openai"
+
+    def __init__(self, *, model: str) -> None:
+        self.model = model
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        if request.schema != OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA:
+            raise AssertionError(f"unexpected schema: {request.schema.name}")
+        prompt = json.loads(request.input_text)
+        units = prompt["target_units"]
+        object_groups = [
+            [str(value) for value in unit.get("objects", [])][:3] for unit in units
+        ]
+        replacement_sentences = []
+        mapping = []
+        for index, unit in enumerate(units):
+            objects = object_groups[index]
+            first = objects[0]
+            second = objects[1] if len(objects) > 1 else objects[0]
+            third = objects[2] if len(objects) > 2 else objects[-1]
+            action = (
+                f"{first} slides against {second} and pulls {third} into the record"
+            )
+            consequence = (
+                f"{second} leaves a visible mark and {third} changes the next object"
+            )
+            sentence = (
+                f"The {first} slides against the {second} and pulls the {third} "
+                "into a narrow track that leaves a visible mark before the "
+                "passage explains it."
+            )
+            replacement_sentences.append(sentence)
+            mapping.append(
+                {
+                    "unit_id": str(unit["unit_id"]),
+                    "before_text_excerpt": str(unit.get("before_text", ""))[:220],
+                    "replacement_text_excerpt": sentence,
+                    "object_motion_or_action": action,
+                    "visible_consequence": consequence,
+                    "how_reader_infers_pressure_before_explanation": (
+                        "the object movement leaves a mark before explanation"
+                    ),
+                    "forbidden_change_avoided": (
+                        "no new object list, rival mimicry, full rewrite, or finality claim"
+                    ),
+                }
+            )
+        replacement = (
+            " ".join(replacement_sentences)
+            + " The room remains bounded to the selected middle, but the local "
+            "motions now carry the pressure through marks and altered surfaces "
+            "before any rule is named. These consequences keep the passage "
+            "ordinary while making each object change the condition of the next."
+        )
+        return dump_json(
+            {
+                "replacement_region_text": replacement,
+                "object_motion_generation_plan": [
+                    "replace only the selected region",
+                    "derive object terms from the provided target units",
+                    "make each object movement leave visible consequence",
+                ],
+                "target_unit_mapping": mapping,
+                "protected_effects_preservation_notes": [
+                    "opening field remains untouched",
+                    "proof/no-answer and final return are untouched",
+                ],
+                "uncertainty": "stub output for dynamic object-term validation",
+                "predicted_reader_effect": (
+                    "reader sees target-unit object motion causing visible consequence"
+                ),
+                "forbidden_change_self_check": [
+                    "no finality claim",
+                    "no phase-shift claim",
+                    "no nonselected region edits",
+                    "no rival mimicry",
+                ],
+            }
+        )
+
+
+def dynamic_object_motion_stub_factory(clients):
+    def _factory(model: str) -> DynamicObjectMotionCausalityClient:
+        client = DynamicObjectMotionCausalityClient(model=model)
         clients.append(client)
         return client
 
@@ -8182,6 +8277,20 @@ def test_residual_candidate_generation_stubbed_openai_success(
     assert result.payload["accepted"] is True
     assert len(clients) == 1
     assert len(clients[0].requests) == 1
+    prompt = json.loads(clients[0].requests[0].input_text)
+    materiality = prompt["materiality_requirement"]
+    assert materiality["selected_region_materiality_required"] is True
+    assert materiality["replacement_must_be_genuinely_reauthored"] is True
+    assert materiality["preserve_protected_effects_not_sentence_architecture"] is True
+    assert materiality["lexical_substitutions_are_insufficient"] is True
+    assert materiality["target_unit_mappings_are_necessary_but_insufficient"] is True
+    assert materiality["required_changed_unique_word_count"] == (
+        REQUIRED_CHANGED_UNIQUE_WORD_COUNT
+    )
+    assert materiality["required_changed_ratio"] == REQUIRED_CHANGED_RATIO
+    assert prompt["target_unit_overlap_feedback"][
+        "overlapping_units_must_be_reconciled"
+    ] is True
     assert result.payload["counts"]["model_calls"] == 1
     assert result.payload["authorization_consumed"] is True
     assert result.payload["candidate_generated"] is True
@@ -8224,6 +8333,203 @@ def test_residual_candidate_generation_stubbed_openai_success(
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
     assert final_report.refused is True
+
+
+def test_residual_candidate_generation_near_copy_records_materiality_feedback(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory(clients, mode="near_copy"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_artifact_id"] is None
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "selected region materiality failed" in result.payload["message"]
+    materiality = result.payload["materiality_report"]
+    assert materiality["before_word_count"] > 0
+    assert materiality["replacement_word_count"] > 0
+    assert materiality["changed_unique_word_count"] < REQUIRED_CHANGED_UNIQUE_WORD_COUNT
+    assert materiality["changed_unique_word_ratio"] < REQUIRED_CHANGED_RATIO
+    assert materiality["required_changed_unique_word_count"] == (
+        REQUIRED_CHANGED_UNIQUE_WORD_COUNT
+    )
+    assert materiality["required_changed_ratio"] == REQUIRED_CHANGED_RATIO
+    assert materiality["exact_copy"] is False
+    assert materiality["near_copy_or_under_materiality"] is True
+    assert materiality["failed_materiality_reason"]
+    assert materiality["target_unit_ids"] == result.payload["target_unit_ids"]
+    assert result.payload["changed_unique_word_ratio"] == materiality[
+        "changed_unique_word_ratio"
+    ]
+    assert "changed_unique_word_ratio" in result.payload["model_calls"][0][
+        "error_message"
+    ]
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    for artifact_name in (
+        "macro_recomposition_subject_manifest",
+        "macro_recomposition_work_order",
+        "protected_effects_and_forbidden_changes",
+    ):
+        payload = read_payload(packet_dir / f"{artifact_name}.json")
+        assert payload["authorization_consumed"] is False
+        assert payload["planned_authorization_consumption_on_success"] is True
+        if "candidate_generated" in payload:
+            assert payload["candidate_generated"] is False
+            assert payload["candidate_generation_intended"] is True
+
+
+def test_residual_candidate_generation_failed_attempt_does_not_block_retry(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    failed = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory([], mode="near_copy"),
+    )
+    assert failed.exit_code == 1
+    assert failed.payload["candidate_generated"] is False
+
+    retry = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory([]),
+    )
+
+    assert retry.exit_code == 0
+    assert retry.payload["accepted"] is True
+    assert retry.payload["candidate_generated"] is True
+
+
+def test_residual_candidate_generation_derives_object_terms_from_work_order(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    work_order_packet = Path(str(chain["residual_work_order"]["packet_dir"]))
+
+    def _replace_objects(payload):
+        replacements = [
+            (
+                ["lamp", "cord", "shade"],
+                "lamp slides and cord pulls shade",
+                "shade leaves a visible mark",
+                "reader sees lamp and cord pressure alter the shade before explanation",
+            ),
+            (
+                ["ink", "finger", "draft"],
+                "ink drifts when finger crosses draft",
+                "draft leaves a visible mark",
+                "reader sees ink and finger pressure alter the draft before explanation",
+            ),
+            (
+                ["hinge", "notebook", "thread"],
+                "hinge turns and notebook pulls thread",
+                "thread leaves a visible mark",
+                "reader sees hinge and notebook pressure alter the thread before explanation",
+            ),
+        ]
+        for unit, replacement in zip(payload["target_units"], replacements, strict=True):
+            objects, action, consequence, target_effect = replacement
+            unit["objects"] = objects
+            unit["current_motion_action_state"] = action
+            unit["current_consequence"] = consequence
+            unit["target_effect"] = target_effect
+
+    rewrite_payload(work_order_packet / "object_motion_target_unit_map.json", _replace_objects)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=dynamic_object_motion_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    report = diff["materiality_report"]
+    assert report["object_terms_source"] == "target_units_from_work_order"
+    for term in ("lamp", "cord", "shade", "ink", "finger", "draft", "hinge"):
+        assert term in report["object_terms_present"]
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert "lamp" in candidate["text"]
+    assert "hinge" in candidate["text"]
+
+
+def test_residual_candidate_generation_missing_object_labels_fail_closed(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    work_order_packet = Path(str(chain["residual_work_order"]["packet_dir"]))
+
+    def _remove_objects(payload):
+        payload["target_units"][0]["objects"] = []
+
+    rewrite_payload(work_order_packet / "object_motion_target_unit_map.json", _remove_objects)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "object labels are missing" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert clients == []
 
 
 @pytest.mark.parametrize(

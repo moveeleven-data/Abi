@@ -47,6 +47,8 @@ RESIDUAL_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT = 1
 RESIDUAL_CANDIDATE_GENERATION_PROMPT_CONTRACT_ID = (
     "autonomous.object_motion_causality_generation.v1"
 )
+REQUIRED_CHANGED_UNIQUE_WORD_COUNT = 10
+REQUIRED_CHANGED_RATIO = 0.12
 
 OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
 SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
@@ -86,7 +88,7 @@ REQUIRED_WORK_ORDER_ARTIFACTS = (
     "residual_work_order_gate_report",
 )
 
-OBJECT_TERMS = (
+FIXTURE_BACKUP_OBJECT_TERMS = (
     "cup",
     "ring",
     "crumb",
@@ -105,7 +107,7 @@ OBJECT_TERMS = (
     "crack",
 )
 
-MOTION_TERMS = (
+FIXTURE_BACKUP_MOTION_TERMS = (
     "placed",
     "lifted",
     "nudged",
@@ -130,7 +132,7 @@ MOTION_TERMS = (
     "crosses",
 )
 
-CONSEQUENCE_TERMS = (
+FIXTURE_BACKUP_CONSEQUENCE_TERMS = (
     "so",
     "because",
     "therefore",
@@ -151,6 +153,40 @@ CONSEQUENCE_TERMS = (
     "makes",
 )
 
+TERM_STOPWORDS = {
+    "and",
+    "the",
+    "that",
+    "this",
+    "with",
+    "where",
+    "when",
+    "into",
+    "from",
+    "because",
+    "before",
+    "after",
+    "again",
+    "same",
+    "each",
+    "only",
+    "must",
+    "should",
+    "would",
+    "could",
+    "have",
+    "has",
+    "had",
+    "been",
+    "being",
+    "will",
+    "shall",
+    "not",
+    "one",
+    "two",
+    "all",
+}
+
 
 @dataclass(frozen=True)
 class ResidualCandidateGenerationResult:
@@ -168,6 +204,52 @@ class TargetUnit:
     before_text_sha256: str
     objects: tuple[str, ...]
     target_effect: str
+    current_motion_action_state: str
+    current_consequence: str
+
+
+@dataclass(frozen=True)
+class MaterialityReport:
+    before_word_count: int
+    replacement_word_count: int
+    before_unique_word_count: int
+    replacement_unique_word_count: int
+    changed_unique_word_count: int
+    changed_unique_word_ratio: float
+    required_changed_unique_word_count: int
+    required_changed_ratio: float
+    exact_copy: bool
+    selected_region_copied_inside_replacement: bool
+    under_materiality: bool
+    failed_materiality_reason: str | None
+    target_unit_ids: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "before_word_count": self.before_word_count,
+            "replacement_word_count": self.replacement_word_count,
+            "before_unique_word_count": self.before_unique_word_count,
+            "replacement_unique_word_count": self.replacement_unique_word_count,
+            "changed_unique_word_count": self.changed_unique_word_count,
+            "changed_unique_word_ratio": round(self.changed_unique_word_ratio, 6),
+            "required_changed_unique_word_count": (
+                self.required_changed_unique_word_count
+            ),
+            "required_changed_ratio": self.required_changed_ratio,
+            "exact_copy": self.exact_copy,
+            "selected_region_copied_inside_replacement": (
+                self.selected_region_copied_inside_replacement
+            ),
+            "near_copy_or_under_materiality": self.under_materiality,
+            "failed_materiality_reason": self.failed_materiality_reason,
+            "target_unit_ids": list(self.target_unit_ids),
+        }
+
+
+class MaterialityValidationError(ModelValidationError):
+    def __init__(self, report: MaterialityReport) -> None:
+        super().__init__(_materiality_failure_message(report))
+        self.report = report
 
 
 @dataclass(frozen=True)
@@ -250,6 +332,8 @@ class FakeObjectMotionCausalityModelClient:
                 "ring changes, so validation is complete."
             )
             return _canonical_json(payload)
+        if self.mode == "near_copy":
+            return _canonical_json(_near_copy_payload(units, selected_region))
         return _canonical_json(_valid_fake_payload(units))
 
 
@@ -420,6 +504,10 @@ def run_residual_candidate_generation(
                 artifacts=artifacts,
                 model_results=model_results,
                 message=_model_failure_message(result),
+                materiality_report=_materiality_report_from_model_results(
+                    subject,
+                    model_results,
+                ),
             )
         model_payload = result.parsed_payload
         model_call_id = result.model_call.id
@@ -427,6 +515,9 @@ def run_residual_candidate_generation(
     try:
         recomposed = _build_recomposed_candidate(subject, model_payload)
     except ModelValidationError as error:
+        materiality_report = (
+            error.report if isinstance(error, MaterialityValidationError) else None
+        )
         return _failure_result(
             subject=subject,
             packet_dir=packet_dir,
@@ -435,6 +526,7 @@ def run_residual_candidate_generation(
             artifacts=artifacts,
             model_results=model_results,
             message=f"Residual candidate generation refused; {error}",
+            materiality_report=materiality_report,
         )
 
     with connect(config.db_path) as connection:
@@ -773,6 +865,17 @@ def _validate_subject_before_model_call(
         raise ValueError("selected region hash is missing")
     if len(subject.target_units) < 1:
         raise ValueError("target unit count must be at least 1")
+    for unit in subject.target_units:
+        if not unit.before_text.strip():
+            raise ValueError(f"target unit {unit.unit_id} before_text is missing")
+        if not unit.objects:
+            raise ValueError(f"target unit {unit.unit_id} object labels are missing")
+        if not unit.current_motion_action_state.strip():
+            raise ValueError(
+                f"target unit {unit.unit_id} current_motion_action_state is missing"
+            )
+        if not unit.current_consequence.strip():
+            raise ValueError(f"target unit {unit.unit_id} current_consequence is missing")
     if not subject.base_candidate_packet_id or not subject.base_candidate_packet_dir.exists():
         raise ValueError("base candidate packet cannot be resolved")
     if sha256_text(subject.selected_region_before_text) != subject.selected_region_sha256:
@@ -871,14 +974,48 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
             "protected_effects_and_forbidden_changes": subject.authorization_payloads[
                 "protected_effects_and_forbidden_changes"
             ],
+            "materiality_requirement": _materiality_requirement_payload(subject),
+            "target_unit_overlap_feedback": {
+                "overlapping_units_must_be_reconciled": True,
+                "instructions": [
+                    "produce one integrated selected-region replacement",
+                    "reconcile overlapping target units in one coherent passage",
+                    "do not write separate duplicated unit rewrites",
+                    "do not make the passage busier to satisfy unit coverage",
+                    "each target_unit_mapping item must identify how the integrated replacement addresses that unit",
+                ],
+            },
             "output_rule": (
                 "Return one replacement_region_text for the selected region. Do not "
                 "return the full artifact. Include exactly one target_unit_mapping "
                 "entry for each provided unit_id. Make object motion or state change "
-                "produce visible consequence before explanation."
+                "produce visible consequence before explanation. The replacement "
+                "must be materially re-authored, not a local tightening pass."
             ),
         }
     )
+
+
+def _materiality_requirement_payload(
+    subject: ResidualCandidateSubject,
+) -> dict[str, object]:
+    return {
+        "selected_region_materiality_required": True,
+        "replacement_must_be_genuinely_reauthored": True,
+        "preserve_protected_effects_not_sentence_architecture": True,
+        "lexical_substitutions_are_insufficient": True,
+        "target_unit_mappings_are_necessary_but_insufficient": True,
+        "must_clear_controller_materiality_check": True,
+        "required_changed_unique_word_count": REQUIRED_CHANGED_UNIQUE_WORD_COUNT,
+        "required_changed_ratio": REQUIRED_CHANGED_RATIO,
+        "before_word_count": _word_count(subject.selected_region_before_text),
+        "before_unique_word_count": len(_word_set(subject.selected_region_before_text)),
+        "do_not_merely_tighten_local_phrases": True,
+        "stage_object_motion_causing_visible_consequence_before_explanation": True,
+        "remain_bounded_to_selected_region": True,
+        "do_not_rewrite_whole_artifact": True,
+        "do_not_add_decorative_vividness_or_new_object_lists": True,
+    }
 
 
 def _validate_model_payload(
@@ -889,8 +1026,8 @@ def _validate_model_payload(
     mapping = payload.get("target_unit_mapping")
     if not isinstance(mapping, list):
         raise ModelValidationError("target_unit_mapping must be a list")
-    _validate_target_unit_mapping(subject, mapping)
-    _validate_replacement_text(subject, replacement)
+    validated_mapping = _validate_target_unit_mapping(subject, mapping)
+    _validate_replacement_text(subject, replacement, validated_mapping)
 
 
 def _validate_target_unit_mapping(
@@ -926,9 +1063,55 @@ def _validate_target_unit_mapping(
     return validated
 
 
+def _materiality_report(
+    subject: ResidualCandidateSubject,
+    replacement: str,
+) -> MaterialityReport:
+    before = subject.selected_region_before_text
+    before_words = _words(before)
+    replacement_words = _words(replacement)
+    before_word_set = set(before_words)
+    replacement_word_set = set(replacement_words)
+    changed = replacement_word_set - before_word_set
+    changed_ratio = len(changed) / max(1, len(replacement_word_set))
+    exact_copy = _canonical_space(replacement) == _canonical_space(before)
+    copied_inside = _canonical_space(before) in _canonical_space(replacement)
+    failed_reason = None
+    if exact_copy:
+        failed_reason = "replacement is an exact normalized copy"
+    elif copied_inside:
+        failed_reason = "replacement contains the selected region unchanged"
+    elif len(changed) < REQUIRED_CHANGED_UNIQUE_WORD_COUNT:
+        failed_reason = (
+            "changed unique word count below required threshold: "
+            f"{len(changed)} < {REQUIRED_CHANGED_UNIQUE_WORD_COUNT}"
+        )
+    elif changed_ratio < REQUIRED_CHANGED_RATIO:
+        failed_reason = (
+            "changed unique word ratio below required threshold: "
+            f"{changed_ratio:.6f} < {REQUIRED_CHANGED_RATIO}"
+        )
+    return MaterialityReport(
+        before_word_count=len(before_words),
+        replacement_word_count=len(replacement_words),
+        before_unique_word_count=len(before_word_set),
+        replacement_unique_word_count=len(replacement_word_set),
+        changed_unique_word_count=len(changed),
+        changed_unique_word_ratio=changed_ratio,
+        required_changed_unique_word_count=REQUIRED_CHANGED_UNIQUE_WORD_COUNT,
+        required_changed_ratio=REQUIRED_CHANGED_RATIO,
+        exact_copy=exact_copy,
+        selected_region_copied_inside_replacement=copied_inside,
+        under_materiality=failed_reason is not None,
+        failed_materiality_reason=failed_reason,
+        target_unit_ids=tuple(unit.unit_id for unit in subject.target_units),
+    )
+
+
 def _validate_replacement_text(
     subject: ResidualCandidateSubject,
     replacement_region_text: str,
+    target_unit_mapping: list[dict[str, object]],
 ) -> dict[str, object]:
     replacement = replacement_region_text.strip()
     if not replacement:
@@ -976,30 +1159,53 @@ def _validate_replacement_text(
         raise ModelValidationError("replacement_region_text risks rival mimicry")
     if "object list" in lower or "catalog" in lower or "catalogue" in lower:
         raise ModelValidationError("replacement_region_text adds an object list")
-    if _decorative_list_risk(replacement):
+    term_contract = _artifact_driven_term_contract(subject, target_unit_mapping)
+    if _decorative_list_risk(
+        replacement,
+        motion_terms=term_contract["motion_terms"],
+    ):
         raise ModelValidationError("replacement_region_text is decorative object listing")
-    object_terms_present = _terms_present(lower, OBJECT_TERMS)
-    motion_terms_present = _terms_present(lower, MOTION_TERMS)
-    consequence_terms_present = _terms_present(lower, CONSEQUENCE_TERMS)
-    relation_count = _object_motion_relation_count(replacement)
+    materiality_report = _materiality_report(subject, replacement)
+    if materiality_report.under_materiality:
+        raise MaterialityValidationError(materiality_report)
+    object_terms_present = _terms_present(lower, term_contract["object_terms"])
+    motion_terms_present = _terms_present(lower, term_contract["motion_terms"])
+    consequence_terms_present = _terms_present(lower, term_contract["consequence_terms"])
+    missing_unit_object_terms = _missing_unit_object_terms(subject, lower)
+    if missing_unit_object_terms:
+        raise ModelValidationError(
+            "replacement_region_text missing artifact-derived object terms for "
+            f"target units: {', '.join(missing_unit_object_terms)}"
+        )
+    relation_count = _object_motion_relation_count(
+        replacement,
+        object_terms=term_contract["object_terms"],
+        motion_terms=term_contract["motion_terms"],
+        consequence_terms=term_contract["consequence_terms"],
+    )
     if relation_count < 2:
         raise ModelValidationError("object motion causal relation missing")
-    if len(object_terms_present) < 6 or len(motion_terms_present) < 3:
+    if len(object_terms_present) < term_contract["required_object_term_count"] or len(
+        motion_terms_present
+    ) < term_contract["required_motion_term_count"]:
         raise ModelValidationError("decorative-only replacement lacks object motion")
-    if len(consequence_terms_present) < 3:
+    if len(consequence_terms_present) < term_contract["required_consequence_term_count"]:
         raise ModelValidationError("visible consequence before explanation is missing")
-    changed = _word_set(replacement) - _word_set(before)
-    changed_ratio = len(changed) / max(1, len(_word_set(replacement)))
-    if len(changed) < 10 or changed_ratio < 0.12:
-        raise ModelValidationError("selected region materiality failed")
     return {
         "selected_region_materiality_passed": True,
-        "changed_word_count": len(changed),
-        "changed_word_ratio": round(changed_ratio, 3),
+        "changed_word_count": materiality_report.changed_unique_word_count,
+        "changed_word_ratio": round(materiality_report.changed_unique_word_ratio, 3),
+        "materiality_report": materiality_report.to_dict(),
         "object_motion_relation_count": relation_count,
         "object_terms_present": object_terms_present,
         "motion_terms_present": motion_terms_present,
         "consequence_terms_present": consequence_terms_present,
+        "object_terms_source": "target_units_from_work_order",
+        "required_object_term_count": term_contract["required_object_term_count"],
+        "required_motion_term_count": term_contract["required_motion_term_count"],
+        "required_consequence_term_count": term_contract[
+            "required_consequence_term_count"
+        ],
         "no_nonselected_region_edits": True,
         "no_final_claim": True,
         "no_phase_shift_claim": True,
@@ -1009,12 +1215,109 @@ def _validate_replacement_text(
     }
 
 
+def _artifact_driven_term_contract(
+    subject: ResidualCandidateSubject,
+    target_unit_mapping: list[dict[str, object]],
+) -> dict[str, Any]:
+    object_terms = _artifact_object_terms(subject)
+    motion_terms = _artifact_motion_terms(subject, target_unit_mapping)
+    consequence_terms = _artifact_consequence_terms(subject, target_unit_mapping)
+    if not object_terms:
+        raise ModelValidationError("target units do not provide object terms")
+    if not motion_terms:
+        raise ModelValidationError("target units do not provide action terms")
+    if not consequence_terms:
+        raise ModelValidationError("target units do not provide consequence terms")
+    return {
+        "object_terms": object_terms,
+        "motion_terms": motion_terms,
+        "consequence_terms": consequence_terms,
+        "required_object_term_count": min(
+            len(object_terms),
+            max(2, len(subject.target_units) * 2),
+        ),
+        "required_motion_term_count": min(3, len(motion_terms)),
+        "required_consequence_term_count": min(3, len(consequence_terms)),
+    }
+
+
+def _artifact_object_terms(subject: ResidualCandidateSubject) -> tuple[str, ...]:
+    terms: set[str] = set()
+    for unit in subject.target_units:
+        for label in unit.objects:
+            terms.update(_significant_terms(label))
+    return tuple(sorted(terms))
+
+
+def _artifact_motion_terms(
+    subject: ResidualCandidateSubject,
+    target_unit_mapping: list[dict[str, object]],
+) -> tuple[str, ...]:
+    mapping_by_unit = {
+        str(item.get("unit_id") or ""): item for item in target_unit_mapping
+    }
+    terms: set[str] = set()
+    for unit in subject.target_units:
+        terms.update(_significant_terms(unit.current_motion_action_state))
+        mapping = mapping_by_unit.get(unit.unit_id, {})
+        terms.update(_significant_terms(str(mapping.get("object_motion_or_action") or "")))
+    terms -= set(_artifact_object_terms(subject))
+    if not terms:
+        terms.update(FIXTURE_BACKUP_MOTION_TERMS)
+    return tuple(sorted(terms))
+
+
+def _artifact_consequence_terms(
+    subject: ResidualCandidateSubject,
+    target_unit_mapping: list[dict[str, object]],
+) -> tuple[str, ...]:
+    mapping_by_unit = {
+        str(item.get("unit_id") or ""): item for item in target_unit_mapping
+    }
+    terms: set[str] = set()
+    for unit in subject.target_units:
+        terms.update(_significant_terms(unit.current_consequence))
+        terms.update(_significant_terms(unit.target_effect))
+        mapping = mapping_by_unit.get(unit.unit_id, {})
+        terms.update(_significant_terms(str(mapping.get("visible_consequence") or "")))
+        terms.update(
+            _significant_terms(
+                str(mapping.get("how_reader_infers_pressure_before_explanation") or "")
+            )
+        )
+    terms -= set(_artifact_object_terms(subject))
+    if not terms:
+        terms.update(FIXTURE_BACKUP_CONSEQUENCE_TERMS)
+    return tuple(sorted(terms))
+
+
+def _missing_unit_object_terms(
+    subject: ResidualCandidateSubject,
+    replacement_lower: str,
+) -> list[str]:
+    missing = []
+    for unit in subject.target_units:
+        object_terms = set()
+        for label in unit.objects:
+            object_terms.update(_significant_terms(label))
+        if not object_terms:
+            missing.append(unit.unit_id)
+            continue
+        if not _terms_present(replacement_lower, tuple(sorted(object_terms))):
+            missing.append(unit.unit_id)
+    return missing
+
+
 def _build_recomposed_candidate(
     subject: ResidualCandidateSubject,
     model_payload: dict[str, object],
 ) -> RecomposedCandidate:
     replacement = str(model_payload["replacement_region_text"]).strip()
-    validation_report = _validate_replacement_text(subject, replacement)
+    validation_report = _validate_replacement_text(
+        subject,
+        replacement,
+        list(model_payload["target_unit_mapping"]),
+    )
     text = subject.base_text.replace(subject.selected_region_before_text, replacement, 1)
     if text == subject.base_text:
         raise ModelValidationError("candidate must materially differ from base candidate")
@@ -1059,11 +1362,13 @@ def _build_subject_manifest(
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": [unit.unit_id for unit in subject.target_units],
         "target_unit_count": len(subject.target_units),
-        "authorization_consumed": True,
+        "authorization_consumed": False,
+        "planned_authorization_consumption_on_success": True,
         "generation_attempt_index": 1,
         "one_shot_generation": True,
         "bounded_macro_recomposition": True,
-        "candidate_generated": True,
+        "candidate_generated": False,
+        "candidate_generation_intended": True,
         "finalization_eligible": False,
         "not_finalization_eligible": True,
         "not_human_validated": True,
@@ -1086,7 +1391,8 @@ def _build_work_order(subject: ResidualCandidateSubject) -> dict[str, object]:
         "before_section_text": subject.selected_region_before_text,
         "target_units": [unit_payload(unit) for unit in subject.target_units],
         "target_unit_ids": [unit.unit_id for unit in subject.target_units],
-        "authorization_consumed": True,
+        "authorization_consumed": False,
+        "planned_authorization_consumption_on_success": True,
         "generation_attempt_index": 1,
         "one_shot_generation": True,
         "bounded_macro_recomposition": True,
@@ -1116,6 +1422,13 @@ def _build_work_order(subject: ResidualCandidateSubject) -> dict[str, object]:
             "finalization",
             "phase-shift claim",
         ],
+        "materiality_requirement": _materiality_requirement_payload(subject),
+        "target_unit_overlap_feedback": {
+            "overlapping_units_must_be_reconciled": True,
+            "produce_one_integrated_replacement": True,
+            "do_not_duplicate_unit_rewrites": True,
+            "do_not_make_passage_busier_to_satisfy_unit_coverage": True,
+        },
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
         "worker": "residual_candidate_generation_work_order_v1_controller",
@@ -1147,8 +1460,10 @@ def _build_protected_effects(subject: ResidualCandidateSubject) -> dict[str, obj
             "finality claim",
             "phase-shift claim",
         ],
-        "authorization_consumed": True,
-        "candidate_generated": True,
+        "authorization_consumed": False,
+        "planned_authorization_consumption_on_success": True,
+        "candidate_generated": False,
+        "candidate_generation_intended": True,
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
         "worker": "residual_candidate_generation_protected_effects_v1_controller",
@@ -1617,7 +1932,11 @@ def _failure_result(
     artifacts: dict[str, ArtifactRecord],
     model_results: list[ModelDriverResult],
     message: str,
+    materiality_report: MaterialityReport | None = None,
 ) -> ResidualCandidateGenerationResult:
+    materiality_payload = (
+        materiality_report.to_dict() if materiality_report is not None else None
+    )
     return ResidualCandidateGenerationResult(
         exit_code=1,
         payload={
@@ -1651,6 +1970,38 @@ def _failure_result(
             "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
             "model_call_ids": [result.model_call.id for result in model_results],
             "model_calls": [result.model_call_to_dict() for result in model_results],
+            "materiality_report": materiality_payload,
+            "failed_materiality_reason": (
+                materiality_payload["failed_materiality_reason"]
+                if materiality_payload
+                else None
+            ),
+            "before_word_count": (
+                materiality_payload["before_word_count"] if materiality_payload else None
+            ),
+            "replacement_word_count": (
+                materiality_payload["replacement_word_count"]
+                if materiality_payload
+                else None
+            ),
+            "changed_unique_word_count": (
+                materiality_payload["changed_unique_word_count"]
+                if materiality_payload
+                else None
+            ),
+            "changed_unique_word_ratio": (
+                materiality_payload["changed_unique_word_ratio"]
+                if materiality_payload
+                else None
+            ),
+            "required_changed_unique_word_count": REQUIRED_CHANGED_UNIQUE_WORD_COUNT,
+            "required_changed_ratio": REQUIRED_CHANGED_RATIO,
+            "exact_copy": materiality_payload["exact_copy"] if materiality_payload else None,
+            "near_copy_or_under_materiality": (
+                materiality_payload["near_copy_or_under_materiality"]
+                if materiality_payload
+                else None
+            ),
             "finalization_eligible": False,
             "no_phase_shift_claim": True,
             "next_recommended_action": "review_failed_object_motion_generation",
@@ -1706,6 +2057,10 @@ def _target_units_from_map(unit_map: dict[str, Any]) -> list[TargetUnit]:
                 before_text_sha256=str(item.get("before_text_sha256") or ""),
                 objects=tuple(str(value) for value in item.get("objects", [])),
                 target_effect=str(item.get("target_effect") or ""),
+                current_motion_action_state=str(
+                    item.get("current_motion_action_state") or ""
+                ),
+                current_consequence=str(item.get("current_consequence") or ""),
             )
         )
     return [unit for unit in units if unit.unit_id]
@@ -1725,7 +2080,18 @@ def _linked_candidate_for_authorization(
         payload = envelope.get("payload") if isinstance(envelope, dict) else None
         if not isinstance(payload, dict):
             continue
-        if payload.get("source_authorization_packet_id") == subject.authorization_packet_id:
+        if payload.get("source_authorization_packet_id") != subject.authorization_packet_id:
+            continue
+        if artifact.type == "macro_recomposed_candidate_text" and (
+            payload.get("candidate_generated") is True
+            and payload.get("authorization_consumed") is True
+        ):
+            return artifact
+        if artifact.type == "macro_recomposition_packet" and (
+            payload.get("candidate_generated") is True
+            and payload.get("authorization_consumed") is True
+            and payload.get("candidate_artifact_id")
+        ):
             return artifact
     return None
 
@@ -1795,22 +2161,32 @@ def _prefix_suffix(subject: ResidualCandidateSubject) -> tuple[str, str]:
     return before, after
 
 
-def _object_motion_relation_count(text: str) -> int:
+def _object_motion_relation_count(
+    text: str,
+    *,
+    object_terms: tuple[str, ...],
+    motion_terms: tuple[str, ...],
+    consequence_terms: tuple[str, ...],
+) -> int:
     count = 0
     for sentence in re.split(r"(?<=[.!?])\s+", text):
         lower = sentence.lower()
         if (
-            len(_terms_present(lower, OBJECT_TERMS)) >= 2
-            and _terms_present(lower, MOTION_TERMS)
-            and _terms_present(lower, CONSEQUENCE_TERMS)
+            len(_terms_present(lower, object_terms)) >= 2
+            and _terms_present(lower, motion_terms)
+            and _terms_present(lower, consequence_terms)
         ):
             count += 1
     return count
 
 
-def _decorative_list_risk(text: str) -> bool:
+def _decorative_list_risk(
+    text: str,
+    *,
+    motion_terms: tuple[str, ...] = FIXTURE_BACKUP_MOTION_TERMS,
+) -> bool:
     for sentence in re.split(r"(?<=[.!?])\s+", text):
-        if sentence.count(",") >= 4 and not _terms_present(sentence.lower(), MOTION_TERMS):
+        if sentence.count(",") >= 4 and not _terms_present(sentence.lower(), motion_terms):
             return True
     return False
 
@@ -1819,12 +2195,24 @@ def _terms_present(text: str, terms: tuple[str, ...]) -> list[str]:
     return sorted({term for term in terms if term in text})
 
 
+def _significant_terms(text: str) -> set[str]:
+    return {
+        word
+        for word in _words(text)
+        if len(word) >= 3 and word not in TERM_STOPWORDS
+    }
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9']+", text.lower())
+
+
 def _word_set(text: str) -> set[str]:
-    return set(re.findall(r"[A-Za-z0-9']+", text.lower()))
+    return set(_words(text))
 
 
 def _word_count(text: str) -> int:
-    return len(re.findall(r"[A-Za-z0-9']+", text))
+    return len(_words(text))
 
 
 def _canonical_space(text: str) -> str:
@@ -1846,6 +2234,47 @@ def _model_failure_message(result: ModelDriverResult) -> str:
             f"{result.model_call.error_message}"
         )
     return "Residual candidate generation stopped by model-call failure."
+
+
+def _materiality_failure_message(report: MaterialityReport) -> str:
+    payload = report.to_dict()
+    return (
+        "selected region materiality failed: "
+        f"before_word_count={payload['before_word_count']}; "
+        f"replacement_word_count={payload['replacement_word_count']}; "
+        f"changed_unique_word_count={payload['changed_unique_word_count']}; "
+        f"changed_unique_word_ratio={payload['changed_unique_word_ratio']}; "
+        f"required_changed_unique_word_count={payload['required_changed_unique_word_count']}; "
+        f"required_changed_ratio={payload['required_changed_ratio']}; "
+        f"exact_copy={payload['exact_copy']}; "
+        f"near_copy_or_under_materiality={payload['near_copy_or_under_materiality']}; "
+        f"failed_materiality_reason={payload['failed_materiality_reason']}; "
+        f"target_unit_ids={','.join(str(value) for value in payload['target_unit_ids'])}"
+    )
+
+
+def _materiality_report_from_model_results(
+    subject: ResidualCandidateSubject,
+    model_results: list[ModelDriverResult],
+) -> MaterialityReport | None:
+    for result in reversed(model_results):
+        error_message = result.model_call.error_message or ""
+        if "materiality" not in error_message:
+            continue
+        raw_output_path = result.model_call.raw_output_path
+        if not raw_output_path:
+            continue
+        try:
+            raw_output = Path(raw_output_path).read_text(encoding="utf-8")
+            payload = json.loads(raw_output)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        replacement = payload.get("replacement_region_text")
+        if isinstance(replacement, str) and replacement.strip():
+            return _materiality_report(subject, replacement)
+    return None
 
 
 def _default_openai_client_factory(model: str) -> ModelClient:
@@ -1926,6 +2355,28 @@ def _valid_fake_payload(units: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def _near_copy_payload(
+    units: list[dict[str, object]],
+    selected_region: str,
+) -> dict[str, object]:
+    payload = _valid_fake_payload(units)
+    replacement = selected_region
+    replacements = (
+        ("ordinary", "common"),
+        ("seems", "appears"),
+        ("small", "minor"),
+        ("changed", "altered"),
+        ("answer", "reply"),
+        ("object", "thing"),
+    )
+    for before, after in replacements:
+        replacement = re.sub(rf"\b{re.escape(before)}\b", after, replacement, count=1)
+    payload["replacement_region_text"] = replacement
+    for mapping in payload["target_unit_mapping"]:
+        mapping["replacement_text_excerpt"] = payload["replacement_region_text"][:260]
+    return payload
+
+
 def unit_payload(unit: TargetUnit | dict[str, object]) -> dict[str, object]:
     if isinstance(unit, dict):
         return dict(unit)
@@ -1935,6 +2386,8 @@ def unit_payload(unit: TargetUnit | dict[str, object]) -> dict[str, object]:
         "before_text_sha256": unit.before_text_sha256,
         "objects": list(unit.objects),
         "target_effect": unit.target_effect,
+        "current_motion_action_state": unit.current_motion_action_state,
+        "current_consequence": unit.current_consequence,
     }
 
 
