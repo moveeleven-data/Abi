@@ -92,6 +92,10 @@ from abi.modules.evidence_loop_review import (
     EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES,
     run_evidence_loop_review,
 )
+from abi.modules.loop_integrity_cleanup import (
+    LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES,
+    run_loop_integrity_cleanup,
+)
 from abi.modules.internal_reader_lab import FakeInternalReaderLabModelClient, run_internal_reader_lab
 from abi.modules.internal_reader_state_evaluation import run_internal_reader_state_evaluation
 from abi.modules.next_target_strategy import (
@@ -721,6 +725,82 @@ def build_residual_candidate_authorization_chain(
     if fixture_only:
         mark_packet_fixture_only(packet_dir)
     chain["residual_generation_authorization"] = authorization.payload
+    return chain
+
+
+def build_completed_residual_loop_review_chain(tmp_path: Path):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    config = chain["config"]
+    run_id = chain["run_id"]
+
+    residual = run_residual_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory([]),
+    )
+    assert residual.exit_code == 0
+    assert residual.payload["accepted"] is True
+
+    proof = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation-model",
+        client_factory=executed_ablation_stub_factory([]),
+    )
+    assert proof.exit_code == 0
+    assert proof.payload["accepted"] is True
+    _rewrite_macro2_proof(proof.payload, useful=True)
+
+    pre_reader_synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert pre_reader_synthesis.exit_code == 0
+    assert pre_reader_synthesis.payload["accepted"] is True
+
+    def _reader_state_client_factory(model: str) -> FakeInternalReaderLabModelClient:
+        return FakeInternalReaderLabModelClient(provider="openai", model=model)
+
+    reader_state = run_internal_reader_state_evaluation(
+        config,
+        client_name="openai",
+        synthesis_packet=Path(str(pre_reader_synthesis.payload["packet_dir"])),
+        target_candidate_packet=Path(str(residual.payload["packet_dir"])),
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=5,
+        model="stub-reader-state-model",
+        client_factory=_reader_state_client_factory,
+    )
+    assert reader_state.exit_code == 0
+    assert reader_state.payload["accepted"] is True
+
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["accepted"] is True
+    assert synthesis.payload["best_current_candidate"]["packet_id"] == residual.payload[
+        "packet_id"
+    ]
+
+    loop_review = run_evidence_loop_review(
+        config,
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+    assert loop_review.exit_code == 0
+    assert loop_review.payload["accepted"] is True
+
+    chain["residual_candidate"] = residual.payload
+    chain["residual_proof"] = proof.payload
+    chain["residual_reader_state"] = reader_state.payload
+    chain["residual_synthesis"] = synthesis.payload
+    chain["residual_loop_review"] = loop_review.payload
     return chain
 
 
@@ -10392,6 +10472,275 @@ def test_evidence_loop_review_accepts_completed_object_event_loop(tmp_path):
     assert packet["loop_controller_ready"] is False
     assert packet["finalization_eligible"] is False
     assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_loop_integrity_cleanup_refuses_without_operator_review(tmp_path):
+    chain = build_completed_residual_loop_review_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_loop_integrity_cleanup(
+        config,
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["artifact_ids"] == {}
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["finalization_eligible"] is False
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+    assert len(after_calls) == len(before_calls)
+
+
+def test_loop_integrity_cleanup_accepts_completed_residual_cycle(tmp_path):
+    chain = build_completed_residual_loop_review_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_loop_integrity_cleanup(
+        config,
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["refused"] is False
+    assert set(result.payload["artifact_ids"]) == set(
+        LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["counts"]["produced_artifacts"] == len(
+        LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES
+    )
+    assert result.payload["source_loop_review_packet_id"] == chain[
+        "residual_loop_review"
+    ]["packet_id"]
+    assert result.payload["source_synthesis_packet_id"] == chain["residual_synthesis"][
+        "packet_id"
+    ]
+    assert result.payload["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert result.payload["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["loop_integrity_cleanup_completed"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["ready_for_supervised_strategy_authorization"] is True
+    assert result.payload["ready_for_supervised_candidate_generation"] is False
+    assert result.payload["ready_for_full_autonomous_loop_controller"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        "authorize_next_strategy_only_from_loop_cleanup"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    manifest = read_payload(packet_dir / "loop_integrity_cleanup_subject_manifest.json")
+    assert manifest["loop_review_packet_id"] == chain["residual_loop_review"]["packet_id"]
+    assert manifest["source_synthesis_packet_id"] == chain["residual_synthesis"][
+        "packet_id"
+    ]
+    assert manifest["current_best_candidate_packet_id"] == chain["residual_candidate"][
+        "packet_id"
+    ]
+    assert manifest["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert manifest["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert manifest["candidate_generated"] is False
+    assert manifest["model_calls"] == 0
+    assert manifest["next_generation_authorized"] is False
+    assert manifest["finalization_eligible"] is False
+    assert manifest["no_phase_shift_claim"] is True
+
+    checkpoint = read_payload(packet_dir / "active_evidence_state_checkpoint.json")
+    assert checkpoint["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert checkpoint["current_best_candidate_kind"] == "bounded_macro_recomposition"
+    assert checkpoint["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert checkpoint["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert checkpoint["synthesis_packet_id"] == chain["residual_synthesis"]["packet_id"]
+    assert checkpoint["loop_review_packet_id"] == chain["residual_loop_review"][
+        "packet_id"
+    ]
+    assert checkpoint["current_best_candidate_finalization_eligible"] is False
+    assert checkpoint["reader_state_transformation_strength"] == "partial"
+    assert checkpoint["strongest_rival_still_blocks"] is True
+    assert checkpoint[
+        "preferred_source_for_future_supervised_strategy_authorization"
+    ] is True
+    assert checkpoint["finalization_eligible"] is False
+    assert checkpoint["no_phase_shift_claim"] is True
+
+    stale = read_payload(packet_dir / "stale_recommendation_registry.json")
+    entries = stale["stale_recommendations"]
+    assert stale["active_current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert stale["older_packet_0059_object_event_path_superseded"] is True
+    assert stale["consumed_generation_authorization_not_reusable"] is True
+    assert stale["residual_work_order_not_reusable"] is True
+    assert any(
+        entry["reference_type"] == "prior_best_candidate"
+        and entry["reference_packet_id"] == chain["object_event"]["packet_id"]
+        and entry["status"] == "superseded"
+        for entry in entries
+    )
+    assert any(
+        entry["reference_type"] == "residual_generation_authorization"
+        and entry["reference_packet_id"]
+        == chain["residual_generation_authorization"]["packet_id"]
+        and entry["reuse_allowed_for_new_generation"] is False
+        for entry in entries
+    )
+    assert any(
+        entry["reference_type"] == "residual_work_order"
+        and entry["reference_packet_id"] == chain["residual_work_order"]["packet_id"]
+        and entry["reuse_allowed_for_new_generation"] is False
+        for entry in entries
+    )
+
+    supersession = read_payload(packet_dir / "prior_cycle_supersession_map.json")
+    assert supersession["macro_2_cycle_led_to_packet_id"] == chain["macro2"]["packet_id"]
+    assert supersession["object_event_cycle_led_to_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert supersession["residual_object_motion_cycle_led_to_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert supersession["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert supersession["superseded_prior_best_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert supersession["current_best_supersedes_prior_best"] is True
+    assert supersession["strongest_rival_defeated"] is False
+    assert supersession["strongest_rival_still_blocks"] is True
+    assert supersession["current_best_is_final"] is False
+
+    policy = read_payload(packet_dir / "next_command_safety_policy.json")
+    assert policy["allowed_next_command_category"] == (
+        "supervised_strategy_authorization_after_cleanup"
+    )
+    assert "generate candidate" in policy["disallowed_next_commands"]
+    assert "ablate" in policy["disallowed_next_commands"]
+    assert "reader-state-eval" in policy["disallowed_next_commands"]
+    assert "synthesize" in policy["disallowed_next_commands"]
+    assert "finalize" in policy["disallowed_next_commands"]
+    assert "authorize generation" in policy["disallowed_next_commands"]
+    assert "separate generation authorization" in policy["required_before_generation"]
+    assert policy["loop_cleanup_packet_input_for_authorization_not_yet_wired"] is True
+    assert policy["next_generation_authorized"] is False
+
+    lock = read_payload(packet_dir / "generation_lock_report.json")
+    assert lock["next_generation_authorized"] is False
+    assert lock["previous_generation_authorization_consumed"] is True
+    assert lock["consumed_generation_authorization_packet_id"] == chain[
+        "residual_generation_authorization"
+    ]["packet_id"]
+    assert lock["current_best_candidate_has_complete_current_cycle_evidence"] is True
+    assert lock["generation_locked_until_supervised_strategy"] is True
+    assert lock["no_model_calls"] is True
+
+    readiness = read_payload(packet_dir / "supervised_strategy_readiness_report.json")
+    assert readiness["ready_for_supervised_strategy_authorization"] is True
+    assert readiness["ready_for_supervised_candidate_generation"] is False
+    assert readiness["ready_for_full_autonomous_loop_controller"] is False
+    assert readiness["next_allowed_operator_decision"] == "authorize_next_strategy_only"
+    assert "--loop-cleanup-packet" in readiness["recommended_next_command_after_cleanup"]
+    assert readiness["candidate_generation_requires_later_authorization"] is True
+
+    gate = read_payload(packet_dir / "loop_integrity_cleanup_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    for gate_name in (
+        "loop_review_packet_consumed",
+        "source_synthesis_resolved",
+        "current_best_candidate_resolved",
+        "proof_packet_linked",
+        "reader_state_packet_linked",
+        "active_evidence_state_checkpoint_created",
+        "stale_recommendation_registry_created",
+        "prior_cycle_supersession_map_created",
+        "next_command_safety_policy_created",
+        "generation_lock_recorded",
+        "no_candidate_generated",
+        "no_openai_calls",
+        "no_final_claim",
+        "no_phase_shift_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    for gate_name in (
+        "next_generation_authorized",
+        "ready_for_full_autonomous_loop_controller",
+        "finalization_eligible",
+        "strongest_rival_defeated",
+        "human_validation_present",
+    ):
+        assert gate_results[gate_name]["passed"] is False
+    assert gate["passed"] is False
+    assert gate["eligible"] is False
+    assert gate["loop_integrity_cleanup_completed"] is True
+    assert gate["ready_for_supervised_strategy_authorization"] is True
+    assert gate["ready_for_supervised_candidate_generation"] is False
+    assert gate["ready_for_full_autonomous_loop_controller"] is False
+    assert gate["next_generation_authorized"] is False
+    assert gate["candidate_generated"] is False
+    assert gate["model_calls"] == 0
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+    assert gate["strongest_rival_still_blocks"] is True
+    assert gate["human_validation_present"] is False
+
+    packet = read_payload(packet_dir / "loop_integrity_cleanup_packet.json")
+    assert packet["current_best_candidate_packet_id"] == chain["residual_candidate"][
+        "packet_id"
+    ]
+    assert packet["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert packet["reader_state_packet_id"] == chain["residual_reader_state"]["packet_id"]
+    assert packet["source_synthesis_packet_id"] == chain["residual_synthesis"]["packet_id"]
+    assert packet["source_loop_review_packet_id"] == chain["residual_loop_review"][
+        "packet_id"
+    ]
+    assert packet["loop_integrity_cleanup_completed"] is True
+    assert packet["next_generation_authorized"] is False
+    assert packet["ready_for_supervised_strategy_authorization"] is True
+    assert packet["ready_for_supervised_candidate_generation"] is False
+    assert packet["ready_for_full_autonomous_loop_controller"] is False
+    assert packet["candidate_generated"] is False
+    assert packet["model_calls"] == 0
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+    assert packet["next_recommended_action"] == (
+        "authorize_next_strategy_only_from_loop_cleanup"
+    )
 
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)

@@ -45,6 +45,7 @@ from abi.modules.bounded_macro_recomposition import (
     run_bounded_macro_recomposition,
 )
 from abi.modules.evidence_loop_review import run_evidence_loop_review
+from abi.modules.loop_integrity_cleanup import run_loop_integrity_cleanup
 from abi.modules.internal_reader_lab import (
     INTERNAL_READER_LAB_CLIENTS,
     INTERNAL_READER_LAB_MAX_MODEL_CALLS_DEFAULT,
@@ -501,6 +502,21 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Autonomous evidence synthesis packet directory to consume.",
     )
+    autonomous_cleanup_loop_integrity_parser = autonomous_subparsers.add_parser(
+        "cleanup-loop-integrity",
+        help="Create a loop-integrity cleanup checkpoint without generation",
+    )
+    autonomous_cleanup_loop_integrity_parser.add_argument(
+        "--loop-review-packet",
+        type=Path,
+        required=True,
+        help="Evidence loop-review packet directory to checkpoint.",
+    )
+    autonomous_cleanup_loop_integrity_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the loop-review packet.",
+    )
     autonomous_authorize_next_cycle_parser = autonomous_subparsers.add_parser(
         "authorize-next-cycle",
         help="Record supervised operator review of a loop-review packet",
@@ -811,6 +827,15 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_loop_review(
             config,
             synthesis_packet=args.synthesis_packet,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "cleanup-loop-integrity"
+    ):
+        return _cmd_autonomous_cleanup_loop_integrity(
+            config,
+            loop_review_packet=args.loop_review_packet,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "authorize-next-cycle":
         return _cmd_autonomous_authorize_next_cycle(
@@ -1227,6 +1252,21 @@ def _cmd_autonomous_loop_review(
     synthesis_packet: Path,
 ) -> int:
     result = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_cleanup_loop_integrity(
+    config: AbiConfig,
+    *,
+    loop_review_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_loop_integrity_cleanup(
+        config,
+        loop_review_packet=loop_review_packet,
+        operator_reviewed=operator_reviewed,
+    )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
 
