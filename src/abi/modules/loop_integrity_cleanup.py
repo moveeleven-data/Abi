@@ -887,7 +887,7 @@ def _build_gate_report(
     failed = [
         str(gate["gate_name"])
         for gate in gates
-        if bool(gate["recorded_for_finalization"]) and not bool(gate["passed"])
+        if not bool(gate["passed"])
     ]
     blockers = [
         "next generation remains unauthorized",

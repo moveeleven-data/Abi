@@ -16,6 +16,7 @@ from abi.controller.state import (
     set_active_phase,
 )
 from abi.db import connect, initialize_database
+from abi.modules.loop_integrity_cleanup import LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES
 from abi.packets import (
     PacketWriter,
     create_packet_dir,
@@ -82,7 +83,14 @@ REQUIRED_AUTHORIZATION_FILES = (
     "supervised_cycle_authorization_packet",
 )
 
+REQUIRED_LOOP_CLEANUP_FILES = LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES
+
 REPEATED_BROAD_TARGET_ID = "first_read_object_event_pressure_gap"
+ATTEMPTED_BROAD_TARGET_IDS = (
+    "reader_state_informed_macro_2",
+    REPEATED_BROAD_TARGET_ID,
+    "object_motion_causality_specificity",
+)
 SAFE_RESIDUAL_CHOICE_TARGET_ID = "next_residual_target_requires_operator_choice"
 SAFE_RESIDUAL_CHOICE_ACTION = "review_narrow_residual_target_options_before_generation"
 
@@ -139,6 +147,11 @@ class StrategySubject:
     authorization_packet_artifact_id: str | None
     authorization_artifact_ids: dict[str, str]
     authorization_payloads: dict[str, dict[str, Any]]
+    loop_cleanup_packet_dir: Path | None
+    loop_cleanup_packet_id: str | None
+    loop_cleanup_packet_artifact_id: str | None
+    loop_cleanup_artifact_ids: dict[str, str]
+    loop_cleanup_payloads: dict[str, dict[str, Any]]
     loop_review_packet_dir: Path | None
     loop_review_packet_id: str | None
     loop_review_packet_artifact_id: str | None
@@ -148,6 +161,7 @@ class StrategySubject:
     next_strategy_authorized: bool
     next_generation_authorized: bool
     repeated_target_report: dict[str, Any]
+    exhausted_or_attempted_target_ids: tuple[str, ...]
     payloads: dict[str, dict[str, Any]]
     selected_candidate: dict[str, Any]
     reader_state: dict[str, Any]
@@ -428,7 +442,11 @@ def run_next_target_strategy(
         "reader_state_packet_id": subject.reader_state.get("packet_id"),
         "source_synthesis_packet_id": subject.synthesis_packet_id,
         "authorization_packet_id": subject.authorization_packet_id,
+        "source_authorization_packet_id": subject.authorization_packet_id,
+        "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
+        "cleanup_checkpoint_consumed": subject.loop_cleanup_packet_id is not None,
         "loop_review_packet_id": subject.loop_review_packet_id,
+        "source_loop_review_packet_id": subject.loop_review_packet_id,
         "completed_cycles": subject.completed_cycles,
         "next_strategy_authorized": subject.next_strategy_authorized,
         "next_generation_authorized": subject.next_generation_authorized,
@@ -446,6 +464,10 @@ def run_next_target_strategy(
             "repeated_target_detected"
         ],
         "repeated_target_id": subject.repeated_target_report["repeated_target_id"],
+        "exhausted_or_attempted_target_ids": list(
+            subject.exhausted_or_attempted_target_ids
+        ),
+        "residual_target_option_map": payloads["residual_target_option_map"],
         "same_broad_target_allowed": subject.repeated_target_report[
             "same_broad_target_allowed"
         ],
@@ -515,6 +537,11 @@ def _load_synthesis_subject(config: AbiConfig, synthesis_packet_dir: Path) -> St
         authorization_packet_artifact_id=None,
         authorization_artifact_ids={},
         authorization_payloads={},
+        loop_cleanup_packet_dir=None,
+        loop_cleanup_packet_id=None,
+        loop_cleanup_packet_artifact_id=None,
+        loop_cleanup_artifact_ids={},
+        loop_cleanup_payloads={},
         loop_review_packet_dir=None,
         loop_review_packet_id=None,
         loop_review_packet_artifact_id=None,
@@ -527,6 +554,18 @@ def _load_synthesis_subject(config: AbiConfig, synthesis_packet_dir: Path) -> St
             selected_candidate=selected,
             loop_review_payloads={},
             authorization_packet_id=None,
+            exhausted_or_attempted_target_ids=_attempted_target_ids(
+                selected_candidate=selected,
+                cleanup_payloads={},
+                loop_review_payloads={},
+            ),
+        ),
+        exhausted_or_attempted_target_ids=tuple(
+            _attempted_target_ids(
+                selected_candidate=selected,
+                cleanup_payloads={},
+                loop_review_payloads={},
+            )
         ),
         payloads=payloads,
         selected_candidate=selected,
@@ -568,12 +607,61 @@ def _load_authorized_subject(
             "which is out of scope for next-target planning."
         )
 
-    loop_review_dir = _payload_dir(
-        config,
-        authorization_packet_payload,
-        authorization_manifest,
-        "loop_review_packet_dir",
+    loop_cleanup_dir: Path | None = None
+    loop_cleanup_payloads: dict[str, dict[str, Any]] = {}
+    loop_cleanup_artifact: ArtifactRecord | None = None
+    loop_cleanup_artifact_ids: dict[str, str] = {}
+    source_loop_cleanup_packet_id = _first_string(
+        authorization_packet_payload.get("source_loop_cleanup_packet_id"),
+        authorization_manifest.get("source_loop_cleanup_packet_id"),
     )
+    if source_loop_cleanup_packet_id:
+        loop_cleanup_dir = _payload_dir(
+            config,
+            authorization_packet_payload,
+            authorization_manifest,
+            "source_loop_cleanup_packet_dir",
+        )
+        if not loop_cleanup_dir.exists() or not loop_cleanup_dir.is_dir():
+            raise ValueError(
+                "Next-target strategy refused; linked loop-cleanup packet "
+                f"directory not found: {loop_cleanup_dir}"
+            )
+        loop_cleanup_payloads = _load_packet_payloads(
+            loop_cleanup_dir,
+            REQUIRED_LOOP_CLEANUP_FILES,
+            "loop-cleanup",
+        )
+        cleanup_packet = loop_cleanup_payloads["loop_integrity_cleanup_packet"]
+        if (
+            str(cleanup_packet.get("packet_id") or loop_cleanup_dir.name)
+            != source_loop_cleanup_packet_id
+        ):
+            raise ValueError(
+                "Next-target strategy refused; authorization cleanup packet ID "
+                "does not match linked cleanup packet."
+            )
+        if cleanup_packet.get("loop_integrity_cleanup_completed") is not True:
+            raise ValueError(
+                "Next-target strategy refused; linked cleanup checkpoint is not completed."
+            )
+        if cleanup_packet.get("next_generation_authorized") is True:
+            raise ValueError(
+                "Next-target strategy refused; linked cleanup checkpoint authorizes generation."
+            )
+        loop_review_dir = _payload_dir(
+            config,
+            cleanup_packet,
+            loop_cleanup_payloads["active_evidence_state_checkpoint"],
+            "source_loop_review_packet_dir",
+        )
+    else:
+        loop_review_dir = _payload_dir(
+            config,
+            authorization_packet_payload,
+            authorization_manifest,
+            "loop_review_packet_dir",
+        )
     if not loop_review_dir.exists() or not loop_review_dir.is_dir():
         raise ValueError(
             "Next-target strategy refused; linked loop-review packet directory "
@@ -589,38 +677,68 @@ def _load_authorized_subject(
     if loop_packet.get("accepted") is False:
         raise ValueError("Next-target strategy refused; linked loop-review refused.")
 
-    synthesis_dir = _payload_dir(
-        config,
-        authorization_packet_payload,
-        loop_manifest,
-        "source_synthesis_packet_dir",
-    )
+    if loop_cleanup_payloads:
+        synthesis_dir = _payload_dir(
+            config,
+            loop_cleanup_payloads["loop_integrity_cleanup_packet"],
+            loop_cleanup_payloads["active_evidence_state_checkpoint"],
+            "source_synthesis_packet_dir",
+        )
+    else:
+        synthesis_dir = _payload_dir(
+            config,
+            authorization_packet_payload,
+            loop_manifest,
+            "source_synthesis_packet_dir",
+        )
     subject = _load_synthesis_subject(config, synthesis_dir)
 
     _validate_authorized_chain(
         subject=subject,
         authorization_packet=authorization_packet_payload,
         authorization_manifest=authorization_manifest,
+        cleanup_payloads=loop_cleanup_payloads,
         loop_packet=loop_packet,
         loop_manifest=loop_manifest,
     )
 
     authorization_path = authorization_packet_dir / "supervised_cycle_authorization_packet.json"
     loop_path = loop_review_dir / "evidence_loop_review_packet.json"
+    cleanup_path = (
+        loop_cleanup_dir / "loop_integrity_cleanup_packet.json"
+        if loop_cleanup_dir is not None
+        else None
+    )
     with connect(config.db_path) as connection:
         authorization_artifact = _artifact_for_path(connection, authorization_path)
         loop_artifact = _artifact_for_path(connection, loop_path)
+        loop_cleanup_artifact = (
+            _artifact_for_path(connection, cleanup_path)
+            if cleanup_path is not None
+            else None
+        )
 
     authorization_artifact_ids = _artifact_ids_from_packet(authorization_packet_payload)
     loop_artifact_ids = _artifact_ids_from_packet(loop_packet)
+    if loop_cleanup_payloads:
+        loop_cleanup_artifact_ids = _artifact_ids_from_packet(
+            loop_cleanup_payloads["loop_integrity_cleanup_packet"]
+        )
     parent_ids = _unique(
         [
             authorization_artifact.id if authorization_artifact else None,
+            loop_cleanup_artifact.id if loop_cleanup_artifact else None,
             loop_artifact.id if loop_artifact else None,
             *authorization_artifact_ids.values(),
+            *loop_cleanup_artifact_ids.values(),
             *loop_artifact_ids.values(),
             *subject.source_parent_ids,
         ]
+    )
+    attempted_target_ids = _attempted_target_ids(
+        selected_candidate=subject.selected_candidate,
+        cleanup_payloads=loop_cleanup_payloads,
+        loop_review_payloads=loop_review_payloads,
     )
     repeated_target_report = _build_repeated_target_report(
         selected_candidate=subject.selected_candidate,
@@ -628,6 +746,7 @@ def _load_authorized_subject(
         authorization_packet_id=str(
             authorization_packet_payload.get("packet_id") or authorization_packet_dir.name
         ),
+        exhausted_or_attempted_target_ids=attempted_target_ids,
     )
     return StrategySubject(
         run_id=subject.run_id,
@@ -645,6 +764,13 @@ def _load_authorized_subject(
         else None,
         authorization_artifact_ids=authorization_artifact_ids,
         authorization_payloads=authorization_payloads,
+        loop_cleanup_packet_dir=loop_cleanup_dir,
+        loop_cleanup_packet_id=source_loop_cleanup_packet_id or None,
+        loop_cleanup_packet_artifact_id=loop_cleanup_artifact.id
+        if loop_cleanup_artifact
+        else None,
+        loop_cleanup_artifact_ids=loop_cleanup_artifact_ids,
+        loop_cleanup_payloads=loop_cleanup_payloads,
         loop_review_packet_dir=loop_review_dir,
         loop_review_packet_id=str(loop_packet.get("packet_id") or loop_review_dir.name),
         loop_review_packet_artifact_id=loop_artifact.id if loop_artifact else None,
@@ -659,6 +785,7 @@ def _load_authorized_subject(
         next_strategy_authorized=True,
         next_generation_authorized=False,
         repeated_target_report=repeated_target_report,
+        exhausted_or_attempted_target_ids=tuple(attempted_target_ids),
         payloads=subject.payloads,
         selected_candidate=subject.selected_candidate,
         reader_state=subject.reader_state,
@@ -744,12 +871,17 @@ def _validate_authorized_chain(
     subject: StrategySubject,
     authorization_packet: dict[str, Any],
     authorization_manifest: dict[str, Any],
+    cleanup_payloads: dict[str, dict[str, Any]],
     loop_packet: dict[str, Any],
     loop_manifest: dict[str, Any],
 ) -> None:
+    cleanup_packet = cleanup_payloads.get("loop_integrity_cleanup_packet", {})
+    cleanup_checkpoint = cleanup_payloads.get("active_evidence_state_checkpoint", {})
     expected_synthesis_id = _first_string(
         authorization_packet.get("source_synthesis_packet_id"),
         authorization_manifest.get("source_synthesis_packet_id"),
+        cleanup_packet.get("source_synthesis_packet_id"),
+        cleanup_checkpoint.get("synthesis_packet_id"),
         loop_packet.get("source_synthesis_packet_id"),
         loop_manifest.get("source_synthesis_packet_id"),
     )
@@ -762,6 +894,8 @@ def _validate_authorized_chain(
     expected_best = _first_string(
         authorization_packet.get("current_best_candidate_packet_id"),
         authorization_manifest.get("current_best_candidate_packet_id"),
+        cleanup_packet.get("current_best_candidate_packet_id"),
+        cleanup_checkpoint.get("current_best_candidate_packet_id"),
         loop_packet.get("current_best_candidate_packet_id"),
         loop_manifest.get("current_best_candidate_packet_id"),
     )
@@ -776,6 +910,8 @@ def _validate_authorized_chain(
     expected_proof = _first_string(
         authorization_packet.get("proof_packet_id"),
         authorization_manifest.get("proof_packet_id"),
+        cleanup_packet.get("proof_packet_id"),
+        cleanup_checkpoint.get("proof_packet_id"),
         loop_packet.get("proof_packet_id"),
         loop_manifest.get("proof_packet_id"),
     )
@@ -790,6 +926,8 @@ def _validate_authorized_chain(
     expected_reader = _first_string(
         authorization_packet.get("reader_state_packet_id"),
         authorization_manifest.get("reader_state_packet_id"),
+        cleanup_packet.get("reader_state_packet_id"),
+        cleanup_checkpoint.get("reader_state_packet_id"),
         loop_packet.get("reader_state_packet_id"),
         loop_manifest.get("reader_state_packet_id"),
     )
@@ -873,6 +1011,7 @@ def _build_repeated_target_report(
     selected_candidate: dict[str, Any],
     loop_review_payloads: dict[str, dict[str, Any]],
     authorization_packet_id: str | None,
+    exhausted_or_attempted_target_ids: list[str],
 ) -> dict[str, Any]:
     current_target = str(
         selected_candidate.get("target_scope")
@@ -883,12 +1022,15 @@ def _build_repeated_target_report(
     drift_guard = _as_dict(loop_packet.get("repeated_target_drift_guard"))
     detected = (
         current_target == REPEATED_BROAD_TARGET_ID
+        or current_target in exhausted_or_attempted_target_ids
         or drift_guard.get("repeated_target_drift_detected") is True
     )
     return {
         "repeated_target_detected": detected,
-        "repeated_target_id": REPEATED_BROAD_TARGET_ID if detected else None,
+        "repeated_target_id": current_target if detected and current_target else None,
+        "repeated_broad_target_id": REPEATED_BROAD_TARGET_ID if detected else None,
         "current_target_id": current_target or None,
+        "exhausted_or_attempted_target_ids": list(exhausted_or_attempted_target_ids),
         "prior_target_strategy_packet_id": _prior_strategy_packet_id(selected_candidate),
         "prior_candidate_packet_id": selected_candidate.get("packet_id"),
         "prior_ablation_packet_id": selected_candidate.get("proof_packet_id"),
@@ -901,6 +1043,44 @@ def _build_repeated_target_report(
         "repeated_broad_target_authorized": False,
         "guard_checked": bool(loop_review_payloads) or detected,
     }
+
+
+def _attempted_target_ids(
+    *,
+    selected_candidate: dict[str, Any],
+    cleanup_payloads: dict[str, dict[str, Any]],
+    loop_review_payloads: dict[str, dict[str, Any]],
+) -> list[str]:
+    attempted: list[str] = [*ATTEMPTED_BROAD_TARGET_IDS] if cleanup_payloads else []
+    current_target = _first_string(
+        selected_candidate.get("target_scope"),
+        selected_candidate.get("target_movement"),
+        selected_candidate.get("selected_residual_target_id"),
+    )
+    if cleanup_payloads and current_target:
+        attempted.append(current_target)
+    prior_cycle = cleanup_payloads.get("prior_cycle_supersession_map", {})
+    cycles = prior_cycle.get("cycles")
+    if isinstance(cycles, list):
+        for cycle in cycles:
+            if not isinstance(cycle, dict):
+                continue
+            cycle_id = str(cycle.get("cycle_id") or "")
+            if "macro" in cycle_id:
+                attempted.append("reader_state_informed_macro_2")
+            if "object_event" in cycle_id:
+                attempted.append(REPEATED_BROAD_TARGET_ID)
+            if "residual_object_motion" in cycle_id:
+                attempted.append("object_motion_causality_specificity")
+    loop_packet = loop_review_payloads.get("evidence_loop_review_packet", {})
+    drift_guard = _as_dict(loop_packet.get("repeated_target_drift_guard"))
+    repeated_target = _first_string(
+        drift_guard.get("current_target_id"),
+        drift_guard.get("repeated_target_id"),
+    )
+    if repeated_target:
+        attempted.append(repeated_target)
+    return _unique(attempted)
 
 
 def _prior_strategy_packet_id(selected_candidate: dict[str, Any]) -> str | None:
@@ -940,6 +1120,13 @@ def _build_subject_manifest(subject: StrategySubject, packet_dir: Path) -> dict[
         if subject.authorization_packet_dir
         else None,
         "authorization_packet_artifact_id": subject.authorization_packet_artifact_id,
+        "source_authorization_packet_id": subject.authorization_packet_id,
+        "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
+        "source_loop_cleanup_packet_dir": str(subject.loop_cleanup_packet_dir)
+        if subject.loop_cleanup_packet_dir
+        else None,
+        "loop_cleanup_packet_artifact_id": subject.loop_cleanup_packet_artifact_id,
+        "cleanup_checkpoint_consumed": subject.loop_cleanup_packet_id is not None,
         "loop_review_packet_id": subject.loop_review_packet_id,
         "loop_review_packet_dir": str(subject.loop_review_packet_dir)
         if subject.loop_review_packet_dir
@@ -958,6 +1145,9 @@ def _build_subject_manifest(subject: StrategySubject, packet_dir: Path) -> dict[
         "reader_state_eval_packet_dir": subject.reader_state.get("packet_dir"),
         "prior_best_packet_id": selected.get("base_candidate_packet_id"),
         "repeated_target_report": subject.repeated_target_report,
+        "exhausted_or_attempted_target_ids": list(
+            subject.exhausted_or_attempted_target_ids
+        ),
         "strongest_rival_still_blocks": True,
         "candidate_generated": False,
         "finalization_eligible": False,
@@ -975,9 +1165,16 @@ def _build_source_evidence_summary(subject: StrategySubject) -> dict[str, object
     reader = subject.reader_state
     candidate_id = str(selected.get("packet_id") or "selected candidate")
     return {
+        "source_authorization_packet_id": subject.authorization_packet_id,
+        "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
+        "source_loop_review_packet_id": subject.loop_review_packet_id,
+        "source_synthesis_packet_id": subject.synthesis_packet_id,
         "current_best_candidate_packet_id": selected.get("packet_id"),
         "proof_packet_id": selected.get("proof_packet_id"),
         "reader_state_packet_id": reader.get("packet_id"),
+        "exhausted_or_attempted_target_ids": list(
+            subject.exhausted_or_attempted_target_ids
+        ),
         "evidence_findings": [
             f"{candidate_id} has executed-ablation support",
             f"{candidate_id} has reader-state support",
@@ -1230,6 +1427,7 @@ def _build_object_event_pressure_target_map(subject: StrategySubject) -> dict[st
 
 def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, object]:
     repeated = subject.repeated_target_report["repeated_target_detected"] is True
+    attempted = set(subject.exhausted_or_attempted_target_ids)
     if repeated:
         primary_next_target = SAFE_RESIDUAL_CHOICE_TARGET_ID
         primary_next_subtarget = "operator_choice_required"
@@ -1244,12 +1442,21 @@ def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, obj
         "primary_next_target": primary_next_target,
         "primary_next_subtarget": primary_next_subtarget,
         "broad_blocker_class": REPEATED_BROAD_TARGET_ID,
+        "exhausted_or_attempted_target_ids": list(
+            subject.exhausted_or_attempted_target_ids
+        ),
         "specific_residual_options": [
             {
                 "option_id": option_id,
                 "description": description,
-                "status": "available_for_operator_selection",
+                "status": (
+                    "attempted_handle_requires_narrower_subtarget"
+                    if option_id in attempted
+                    else "available_for_operator_selection"
+                ),
                 "source_evidence_basis": _residual_option_basis(option_id, subject),
+                "broad_reuse_authorized": False if option_id in attempted else None,
+                "operator_may_select_narrower_subtarget": option_id in attempted,
                 "candidate_generation_authorized": False,
             }
             for option_id, description in RESIDUAL_TARGET_OPTIONS
@@ -1449,6 +1656,12 @@ def _build_gate_report(
             "loop_review_packet_consumed",
             subject.input_mode == "authorization" and bool(subject.loop_review_packet_id),
         ),
+        _gate_result(
+            "loop_cleanup_packet_consumed",
+            subject.loop_cleanup_packet_id is not None,
+            ["cleanup-aware authorization was not the source"],
+            record=False,
+        ),
         _gate_result("source_synthesis_consumed", True),
         _gate_result("current_best_candidate_identified", bool(selected.get("packet_id"))),
         _gate_result("proof_packet_linked", bool(selected.get("proof_packet_id"))),
@@ -1599,7 +1812,11 @@ def _build_packet_summary(
         },
         "source_synthesis_packet_id": subject.synthesis_packet_id,
         "authorization_packet_id": subject.authorization_packet_id,
+        "source_authorization_packet_id": subject.authorization_packet_id,
+        "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
+        "cleanup_checkpoint_consumed": subject.loop_cleanup_packet_id is not None,
         "loop_review_packet_id": subject.loop_review_packet_id,
+        "source_loop_review_packet_id": subject.loop_review_packet_id,
         "completed_cycles": subject.completed_cycles,
         "next_strategy_authorized": subject.next_strategy_authorized,
         "next_generation_authorized": subject.next_generation_authorized,
@@ -1625,6 +1842,10 @@ def _build_packet_summary(
             "repeated_target_detected"
         ],
         "repeated_target_id": subject.repeated_target_report["repeated_target_id"],
+        "exhausted_or_attempted_target_ids": list(
+            subject.exhausted_or_attempted_target_ids
+        ),
+        "residual_target_option_map": payloads["residual_target_option_map"],
         "same_broad_target_allowed": subject.repeated_target_report[
             "same_broad_target_allowed"
         ],

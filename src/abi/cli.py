@@ -524,8 +524,14 @@ def build_parser() -> argparse.ArgumentParser:
     autonomous_authorize_next_cycle_parser.add_argument(
         "--loop-review-packet",
         type=Path,
-        required=True,
+        required=False,
         help="Evidence loop-review packet directory to inspect.",
+    )
+    autonomous_authorize_next_cycle_parser.add_argument(
+        "--loop-cleanup-packet",
+        type=Path,
+        required=False,
+        help="Loop-integrity cleanup packet directory to inspect.",
     )
     autonomous_authorize_next_cycle_parser.add_argument(
         "--operator-reviewed",
@@ -841,6 +847,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_authorize_next_cycle(
             config,
             loop_review_packet=args.loop_review_packet,
+            loop_cleanup_packet=args.loop_cleanup_packet,
             operator_reviewed=args.operator_reviewed,
             decision=args.decision,
         )
@@ -1274,13 +1281,15 @@ def _cmd_autonomous_cleanup_loop_integrity(
 def _cmd_autonomous_authorize_next_cycle(
     config: AbiConfig,
     *,
-    loop_review_packet: Path,
+    loop_review_packet: Path | None,
+    loop_cleanup_packet: Path | None,
     operator_reviewed: bool,
     decision: str | None,
 ) -> int:
     result = run_supervised_cycle_authorization(
         config,
         loop_review_packet=loop_review_packet,
+        loop_cleanup_packet=loop_cleanup_packet,
         operator_reviewed=operator_reviewed,
         decision=decision,
     )

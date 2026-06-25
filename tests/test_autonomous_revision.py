@@ -10754,6 +10754,318 @@ def test_loop_integrity_cleanup_accepts_completed_residual_cycle(tmp_path):
     assert final_report.refused is True
 
 
+def test_cleanup_aware_authorization_refuses_invalid_source_flags(tmp_path):
+    config = config_for(tmp_path)
+
+    neither = run_supervised_cycle_authorization(
+        config,
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert neither.exit_code == 1
+    assert neither.payload["accepted"] is False
+    assert "exactly one" in neither.payload["message"]
+    assert neither.payload["next_generation_authorized"] is False
+
+    chain = build_completed_residual_loop_review_chain(tmp_path / "both")
+    cleanup = run_loop_integrity_cleanup(
+        chain["config"],
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert cleanup.exit_code == 0
+
+    both = run_supervised_cycle_authorization(
+        chain["config"],
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        loop_cleanup_packet=Path(str(cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert both.exit_code == 1
+    assert both.payload["accepted"] is False
+    assert "exactly one" in both.payload["message"]
+    assert both.payload["candidate_generated"] is False
+    assert both.payload["counts"]["model_calls"] == 0
+
+
+def test_cleanup_aware_authorization_refuses_without_operator_review(tmp_path):
+    chain = build_completed_residual_loop_review_chain(tmp_path)
+    cleanup = run_loop_integrity_cleanup(
+        chain["config"],
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert cleanup.exit_code == 0
+
+    result = run_supervised_cycle_authorization(
+        chain["config"],
+        loop_cleanup_packet=Path(str(cleanup.payload["packet_dir"])),
+        operator_reviewed=False,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["loop_cleanup_packet"] == str(Path(cleanup.payload["packet_dir"]))
+    assert result.payload["next_strategy_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_cleanup_aware_authorization_accepts_latest_cleanup_and_blocks_reuse(tmp_path):
+    chain = build_completed_residual_loop_review_chain(tmp_path)
+    config = chain["config"]
+    first_cleanup = run_loop_integrity_cleanup(
+        config,
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert first_cleanup.exit_code == 0
+    second_cleanup = run_loop_integrity_cleanup(
+        config,
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert second_cleanup.exit_code == 0
+
+    stale = run_supervised_cycle_authorization(
+        config,
+        loop_cleanup_packet=Path(str(first_cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert stale.exit_code == 1
+    assert stale.payload["accepted"] is False
+    assert "stale" in stale.payload["message"]
+    assert str(second_cleanup.payload["packet_dir"]) in stale.payload["message"]
+
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_supervised_cycle_authorization(
+        config,
+        loop_cleanup_packet=Path(str(second_cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_kind"] == "loop_cleanup"
+    assert result.payload["source_loop_cleanup_packet_id"] == second_cleanup.payload[
+        "packet_id"
+    ]
+    assert result.payload["cleanup_checkpoint_consumed"] is True
+    assert result.payload["source_loop_review_packet_id"] == chain[
+        "residual_loop_review"
+    ]["packet_id"]
+    assert result.payload["source_synthesis_packet_id"] == chain["residual_synthesis"][
+        "packet_id"
+    ]
+    assert result.payload["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert result.payload["current_best_candidate_packet_id"] != chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["next_strategy_authorized"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["ready_for_supervised_next_strategy"] is True
+    assert result.payload["ready_for_supervised_candidate_generation"] is False
+    assert result.payload["ready_for_full_autonomous_loop_controller"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        "plan_next_target_from_cleanup_authorization"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    manifest = read_payload(
+        packet_dir / "supervised_cycle_authorization_subject_manifest.json"
+    )
+    assert manifest["source_loop_cleanup_packet_id"] == second_cleanup.payload["packet_id"]
+    assert manifest["source_loop_review_packet_id"] == chain["residual_loop_review"][
+        "packet_id"
+    ]
+    assert manifest["current_best_candidate_packet_id"] == chain["residual_candidate"][
+        "packet_id"
+    ]
+
+    packet = read_payload(packet_dir / "supervised_cycle_authorization_packet.json")
+    assert packet["source_loop_cleanup_packet_id"] == second_cleanup.payload["packet_id"]
+    assert packet["cleanup_checkpoint_consumed"] is True
+    assert packet["source_loop_review_packet_id"] == chain["residual_loop_review"][
+        "packet_id"
+    ]
+    assert packet["source_synthesis_packet_id"] == chain["residual_synthesis"]["packet_id"]
+    assert packet["current_best_candidate_packet_id"] == chain["residual_candidate"][
+        "packet_id"
+    ]
+    assert packet["next_strategy_authorized"] is True
+    assert packet["next_generation_authorized"] is False
+    assert packet["next_recommended_action"] == "plan_next_target_from_cleanup_authorization"
+    cleanup_consumed_gate = next(
+        gate
+        for gate in packet["gate_report"]["gate_results"]
+        if gate["gate_name"] == "loop_cleanup_packet_consumed"
+    )
+    assert cleanup_consumed_gate["passed"] is True
+    assert cleanup_consumed_gate["blocking_defects"] == []
+
+    duplicate = run_supervised_cycle_authorization(
+        config,
+        loop_cleanup_packet=Path(str(second_cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "already has an accepted strategy authorization" in duplicate.payload["message"]
+
+    cleanup_gate = read_payload(
+        Path(str(second_cleanup.payload["packet_dir"]))
+        / "loop_integrity_cleanup_gate_report.json"
+    )
+    false_gate_names = [
+        gate["gate_name"]
+        for gate in cleanup_gate["gate_results"]
+        if gate["passed"] is False
+    ]
+    assert cleanup_gate["failed_gates"] == false_gate_names
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+    assert len(after_calls) == len(before_calls)
+
+
+def test_plan_next_target_consumes_cleanup_aware_authorization(tmp_path):
+    chain = build_completed_residual_loop_review_chain(tmp_path)
+    config = chain["config"]
+    cleanup = run_loop_integrity_cleanup(
+        config,
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert cleanup.exit_code == 0
+    authorization = run_supervised_cycle_authorization(
+        config,
+        loop_cleanup_packet=Path(str(cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+    assert authorization.exit_code == 0
+
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_next_target_strategy(
+        config,
+        authorization_packet=Path(str(authorization.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_loop_cleanup_packet_id"] == cleanup.payload["packet_id"]
+    assert result.payload["source_authorization_packet_id"] == authorization.payload[
+        "packet_id"
+    ]
+    assert result.payload["source_loop_review_packet_id"] == chain[
+        "residual_loop_review"
+    ]["packet_id"]
+    assert result.payload["source_synthesis_packet_id"] == chain["residual_synthesis"][
+        "packet_id"
+    ]
+    assert result.payload["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert result.payload["current_best_candidate_packet_id"] != chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["next_strategy_authorized"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["primary_next_target"] == (
+        "next_residual_target_requires_operator_choice"
+    )
+    assert result.payload["next_recommended_action"] == (
+        "review_narrow_residual_target_options_before_generation"
+    )
+    attempted = set(result.payload["exhausted_or_attempted_target_ids"])
+    assert {
+        "reader_state_informed_macro_2",
+        "first_read_object_event_pressure_gap",
+        "object_motion_causality_specificity",
+    }.issubset(attempted)
+    option_map = result.payload["residual_target_option_map"]
+    assert option_map["primary_next_target"] == (
+        "next_residual_target_requires_operator_choice"
+    )
+    object_motion_option = [
+        option
+        for option in option_map["specific_residual_options"]
+        if option["option_id"] == "object_motion_causality_specificity"
+    ][0]
+    assert object_motion_option["status"] == (
+        "attempted_handle_requires_narrower_subtarget"
+    )
+    assert object_motion_option["candidate_generation_authorized"] is False
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    packet = read_payload(packet_dir / "next_target_strategy_packet.json")
+    assert packet["source_loop_cleanup_packet_id"] == cleanup.payload["packet_id"]
+    assert packet["current_best_candidate_packet_id"] == chain["residual_candidate"][
+        "packet_id"
+    ]
+    assert packet["current_best_candidate_packet_id"] != chain["object_event"]["packet_id"]
+    assert "object_motion_causality_specificity" in packet[
+        "exhausted_or_attempted_target_ids"
+    ]
+    assert packet["candidate_generated"] is False
+    assert packet["next_generation_authorized"] is False
+
+    stale_selection = run_residual_target_selection(
+        config,
+        strategy_packet=Path(str(chain["next_target_strategy"]["packet_dir"])),
+        target=OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert stale_selection.exit_code == 1
+    assert stale_selection.payload["accepted"] is False
+    assert "marked stale" in stale_selection.payload["message"]
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
 def test_evidence_loop_review_refuses_missing_best_current_candidate(tmp_path):
     chain = build_object_event_candidate_with_reader_state(tmp_path)
     synthesis = run_autonomous_evidence_synthesis(chain["config"], run_id=chain["run_id"])

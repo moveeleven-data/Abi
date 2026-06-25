@@ -284,6 +284,12 @@ def _load_subject(
     run_id = packet.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("Residual target selection refused; strategy packet missing run_id.")
+    strategy_packet_id = str(packet.get("packet_id") or strategy_packet_dir.name)
+    if _strategy_marked_stale_by_latest_cleanup(config, run_id, strategy_packet_id):
+        raise ValueError(
+            "Residual target selection refused; strategy packet is marked stale "
+            "by the latest loop-integrity cleanup checkpoint."
+        )
     residual_map = payloads["residual_target_option_map"]
     options = residual_map.get("specific_residual_options")
     if not isinstance(options, list):
@@ -315,7 +321,7 @@ def _load_subject(
     return ResidualTargetSelectionSubject(
         run_id=run_id,
         strategy_packet_dir=strategy_packet_dir,
-        strategy_packet_id=str(packet.get("packet_id") or strategy_packet_dir.name),
+        strategy_packet_id=strategy_packet_id,
         strategy_packet_artifact_id=packet_artifact.id if packet_artifact else None,
         strategy_artifact_ids=strategy_artifact_ids,
         payloads=payloads,
@@ -342,6 +348,42 @@ def _load_required_payloads(packet_dir: Path) -> dict[str, dict[str, Any]]:
             )
         payloads[artifact_type] = envelope["payload"]
     return payloads
+
+
+def _strategy_marked_stale_by_latest_cleanup(
+    config: AbiConfig,
+    run_id: str,
+    strategy_packet_id: str,
+) -> bool:
+    base_dir = config.run_dir(run_id) / "loop_integrity_cleanup"
+    if not base_dir.exists():
+        return False
+    cleanup_dirs = sorted(
+        [child for child in base_dir.glob("packet_*") if child.is_dir()],
+        key=lambda path: path.name,
+    )
+    for cleanup_dir in reversed(cleanup_dirs):
+        registry_path = cleanup_dir / "stale_recommendation_registry.json"
+        if not registry_path.exists():
+            continue
+        envelope = read_json_file(registry_path)
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        stale_entries = payload.get("stale_recommendations")
+        if not isinstance(stale_entries, list):
+            continue
+        for entry in stale_entries:
+            if not isinstance(entry, dict):
+                continue
+            if (
+                entry.get("reference_type") == "older_next_target_strategy"
+                and entry.get("reference_packet_id") == strategy_packet_id
+                and entry.get("reuse_allowed_for_new_generation") is False
+            ):
+                return True
+        return False
+    return False
 
 
 def _build_subject_manifest(
