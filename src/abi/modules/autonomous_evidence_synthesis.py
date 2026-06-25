@@ -32,11 +32,13 @@ AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES = (
     "repair_history_table",
     "causal_status_summary",
     "best_current_candidate_selection",
+    "candidate_evidence_graph",
     "provisional_candidate_queue",
     "failed_or_rejected_repairs",
     "exhausted_handle_report",
     "rival_pressure_summary",
     "reader_state_evidence_adjudication",
+    "residual_candidate_reader_state_adjudication",
     "reader_state_tension_report",
     "residual_blocker_map",
     "local_law_case_notes",
@@ -79,6 +81,9 @@ KNOWN_PACKET_CHAIN = (
     ("internal_reader_state_evaluation", "packet_0009"),
     ("bounded_macro_recomposition", "packet_0061"),
     ("executed_ablation", "packet_0023"),
+    ("autonomous_evidence_synthesis", "packet_0022"),
+    ("internal_reader_state_evaluation", "packet_0011"),
+    ("autonomous_evidence_synthesis", "packet_0023"),
 )
 
 SOURCE_PACKET_FILES = {
@@ -242,9 +247,24 @@ def run_autonomous_evidence_synthesis(
             ],
         )
 
+        payloads["candidate_evidence_graph"] = _build_candidate_evidence_graph(
+            history,
+            payloads["best_current_candidate_selection"],
+        )
+        artifacts["candidate_evidence_graph"] = writer.write_artifact(
+            "candidate_evidence_graph",
+            payloads["candidate_evidence_graph"],
+            parent_ids=[
+                artifacts["repair_history_table"].id,
+                artifacts["causal_status_summary"].id,
+                artifacts["best_current_candidate_selection"].id,
+            ],
+        )
+
         payloads["provisional_candidate_queue"] = _build_provisional_candidate_queue(
             history,
             payloads["best_current_candidate_selection"],
+            payloads["candidate_evidence_graph"],
         )
         artifacts["provisional_candidate_queue"] = writer.write_artifact(
             "provisional_candidate_queue",
@@ -253,6 +273,7 @@ def run_autonomous_evidence_synthesis(
                 artifacts["repair_history_table"].id,
                 artifacts["causal_status_summary"].id,
                 artifacts["best_current_candidate_selection"].id,
+                artifacts["candidate_evidence_graph"].id,
             ],
         )
 
@@ -304,6 +325,21 @@ def run_autonomous_evidence_synthesis(
             ],
         )
 
+        payloads["residual_candidate_reader_state_adjudication"] = (
+            _build_residual_candidate_reader_state_adjudication(
+                payloads["candidate_evidence_graph"],
+                payloads["best_current_candidate_selection"],
+            )
+        )
+        artifacts["residual_candidate_reader_state_adjudication"] = writer.write_artifact(
+            "residual_candidate_reader_state_adjudication",
+            payloads["residual_candidate_reader_state_adjudication"],
+            parent_ids=[
+                artifacts["candidate_evidence_graph"].id,
+                artifacts["reader_state_evidence_adjudication"].id,
+            ],
+        )
+
         payloads["reader_state_tension_report"] = _build_reader_state_tension_report(
             payloads["reader_state_evidence_adjudication"],
         )
@@ -321,6 +357,7 @@ def run_autonomous_evidence_synthesis(
             payloads["exhausted_handle_report"],
             payloads["rival_pressure_summary"],
             payloads["reader_state_evidence_adjudication"],
+            payloads["residual_candidate_reader_state_adjudication"],
             payloads["reader_state_tension_report"],
             payloads["provisional_candidate_queue"],
         )
@@ -331,6 +368,7 @@ def run_autonomous_evidence_synthesis(
                 artifacts["exhausted_handle_report"].id,
                 artifacts["rival_pressure_summary"].id,
                 artifacts["reader_state_evidence_adjudication"].id,
+                artifacts["residual_candidate_reader_state_adjudication"].id,
                 artifacts["reader_state_tension_report"].id,
                 artifacts["provisional_candidate_queue"].id,
             ],
@@ -356,6 +394,7 @@ def run_autonomous_evidence_synthesis(
             payloads["exhausted_handle_report"],
             payloads["rival_pressure_summary"],
             payloads["reader_state_evidence_adjudication"],
+            payloads["residual_candidate_reader_state_adjudication"],
             payloads["reader_state_tension_report"],
             payloads["provisional_candidate_queue"],
         )
@@ -368,6 +407,7 @@ def run_autonomous_evidence_synthesis(
                 artifacts["exhausted_handle_report"].id,
                 artifacts["rival_pressure_summary"].id,
                 artifacts["reader_state_evidence_adjudication"].id,
+                artifacts["residual_candidate_reader_state_adjudication"].id,
                 artifacts["reader_state_tension_report"].id,
                 artifacts["provisional_candidate_queue"].id,
             ],
@@ -380,6 +420,7 @@ def run_autonomous_evidence_synthesis(
             payloads["rival_pressure_summary"],
             payloads["local_law_case_notes"],
             payloads["reader_state_evidence_adjudication"],
+            payloads["residual_candidate_reader_state_adjudication"],
             payloads["reader_state_tension_report"],
             payloads["provisional_candidate_queue"],
         )
@@ -393,6 +434,7 @@ def run_autonomous_evidence_synthesis(
                 artifacts["rival_pressure_summary"].id,
                 artifacts["local_law_case_notes"].id,
                 artifacts["reader_state_evidence_adjudication"].id,
+                artifacts["residual_candidate_reader_state_adjudication"].id,
                 artifacts["reader_state_tension_report"].id,
                 artifacts["provisional_candidate_queue"].id,
             ],
@@ -405,9 +447,13 @@ def run_autonomous_evidence_synthesis(
             exhausted_handles=payloads["exhausted_handle_report"],
             rival_pressure=payloads["rival_pressure_summary"],
             reader_state_adjudication=payloads["reader_state_evidence_adjudication"],
+            residual_reader_state_adjudication=payloads[
+                "residual_candidate_reader_state_adjudication"
+            ],
             reader_state_tensions=payloads["reader_state_tension_report"],
             macro_brief=payloads["macro_recomposition_brief"],
             provisional_candidate_queue=payloads["provisional_candidate_queue"],
+            candidate_evidence_graph=payloads["candidate_evidence_graph"],
         )
         artifacts["synthesis_gate_report"] = writer.write_artifact(
             "synthesis_gate_report",
@@ -419,8 +465,10 @@ def run_autonomous_evidence_synthesis(
                 artifacts["exhausted_handle_report"].id,
                 artifacts["rival_pressure_summary"].id,
                 artifacts["reader_state_evidence_adjudication"].id,
+                artifacts["residual_candidate_reader_state_adjudication"].id,
                 artifacts["reader_state_tension_report"].id,
                 artifacts["provisional_candidate_queue"].id,
+                artifacts["candidate_evidence_graph"].id,
                 artifacts["macro_recomposition_brief"].id,
             ],
         )
@@ -496,6 +544,15 @@ def run_autonomous_evidence_synthesis(
         ],
         "proof_backed_pending_candidate_count": payloads["provisional_candidate_queue"][
             "proof_backed_pending_count"
+        ],
+        "evaluated_residual_candidate_packet_ids": payloads["provisional_candidate_queue"][
+            "evaluated_contender_packet_ids"
+        ],
+        "residual_candidate_reader_state_consumed": payloads["synthesis_gate_report"][
+            "residual_candidate_reader_state_consumed"
+        ],
+        "residual_candidate_reader_state_linked": payloads["synthesis_gate_report"][
+            "residual_candidate_reader_state_linked"
         ],
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
@@ -750,6 +807,16 @@ def _build_subject_manifest(
                 if _is_object_event_source_packet(candidate)
             )
         ],
+        "residual_candidate_reader_state_evaluation_packets_consumed": [
+            source.packet_id
+            for source in sources
+            if source.packet_kind == "internal_reader_state_evaluation"
+            and any(
+                _reader_state_source_matches_candidate_source(source, candidate)
+                for candidate in sources
+                if _is_residual_candidate_source_packet(candidate)
+            )
+        ],
         "missing_source_packets": missing_expected,
         "missing_critical_source_kinds": critical_missing,
         "source_chain_complete": not critical_missing,
@@ -789,6 +856,7 @@ def _build_repair_history(sources: list[SourcePacket]) -> dict[str, object]:
         elif source.packet_kind == "internal_reader_state_evaluation":
             rows.append(_internal_reader_state_history_row(source))
     rows.sort(key=lambda row: (str(row["created_at"]), str(row["packet_kind"]), str(row["packet_id"])))
+    _annotate_candidate_evidence_links(rows)
     for index, row in enumerate(rows, start=1):
         row["event_index"] = index
     return {
@@ -1190,6 +1258,12 @@ def _internal_reader_state_history_row(source: SourcePacket) -> dict[str, object
         or subject.get("selected_candidate_packet_id")
         or ""
     )
+    evaluated_candidate_packet_id = str(
+        source.payload.get("evaluated_candidate_packet_id")
+        or subject.get("evaluated_candidate_packet_id")
+        or selected_candidate_packet_id
+        or ""
+    )
     selected_candidate_packet_dir = (
         source.payload.get("selected_candidate_packet_dir")
         or subject.get("selected_candidate_packet_dir")
@@ -1203,8 +1277,22 @@ def _internal_reader_state_history_row(source: SourcePacket) -> dict[str, object
     return _base_history_row(source) | {
         "source_packet": source.payload.get("source_synthesis_packet_id"),
         "source_synthesis_packet_id": source.payload.get("source_synthesis_packet_id"),
+        "current_best_candidate_packet_id": source.payload.get(
+            "current_best_candidate_packet_id"
+        )
+        or subject.get("current_best_candidate_packet_id"),
         "prior_best_packet_id": source.payload.get("prior_best_packet_id"),
         "macro_ablation_packet_id": source.payload.get("macro_ablation_packet_id"),
+        "proof_packet_id": source.payload.get("proof_packet_id")
+        or subject.get("proof_packet_id")
+        or source.payload.get("macro_ablation_packet_id"),
+        "reader_state_eval_reason": source.payload.get("reader_state_eval_reason")
+        or subject.get("reader_state_eval_reason"),
+        "evaluated_candidate_packet_id": evaluated_candidate_packet_id,
+        "evaluated_candidate_is_provisional": bool(
+            source.payload.get("evaluated_candidate_is_provisional")
+            or subject.get("evaluated_candidate_is_provisional")
+        ),
         "selected_candidate_packet_id": selected_candidate_packet_id,
         "selected_candidate_kind": source.payload.get("selected_candidate_packet_kind")
         or subject.get("selected_candidate_packet_kind"),
@@ -1212,6 +1300,16 @@ def _internal_reader_state_history_row(source: SourcePacket) -> dict[str, object
         "selected_candidate_text_sha256": selected_candidate_text_sha256,
         "selected_candidate_artifact_id": source.payload.get("selected_candidate_artifact_id")
         or subject.get("selected_candidate_artifact_id"),
+        "target_scope": source.payload.get("target_scope") or subject.get("target_scope"),
+        "target_movement": source.payload.get("target_movement")
+        or subject.get("target_movement"),
+        "selected_region_id": source.payload.get("selected_region_id")
+        or subject.get("selected_region_id"),
+        "selected_residual_target_id": source.payload.get("selected_residual_target_id")
+        or subject.get("selected_residual_target_id"),
+        "target_unit_ids": _string_list(
+            source.payload.get("target_unit_ids") or subject.get("target_unit_ids")
+        ),
         "model_calls": model_calls,
         "first_pass_trace_exists": bool(first),
         "reread_trace_exists": bool(reread),
@@ -1481,6 +1579,24 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
         for row in reader_state_rows
         if row.get("reread_transformation_strength") == "partial"
     ]
+    residual_reader_state_rows = [
+        row
+        for row in reader_state_rows
+        if any(
+            _reader_state_matches_candidate(row, candidate)
+            for candidate in residual_candidate_rows
+        )
+    ]
+    residual_proof_backed_evaluated_rows = [
+        row
+        for row in residual_proof_backed_rows
+        if any(_reader_state_matches_candidate(reader, row) for reader in residual_reader_state_rows)
+    ]
+    residual_proof_backed_pending_rows = [
+        row
+        for row in residual_proof_backed_rows
+        if not any(_reader_state_matches_candidate(reader, row) for reader in residual_reader_state_rows)
+    ]
     failed_rows = [
         row
         for row in rows
@@ -1601,17 +1717,24 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
         },
         {
             "finding_id": "residual_object_motion_candidate_proof_pending_reader_state",
-            "status": "proof_backed_pending_reader_state"
-            if residual_proof_backed_rows
+            "status": "proof_backed_reader_state_evaluated"
+            if residual_proof_backed_evaluated_rows
+            else "proof_backed_pending_reader_state"
+            if residual_proof_backed_pending_rows
             else "not_observed",
             "evidence_packet_ids": [
                 str(row["packet_id"])
-                for row in [*residual_candidate_rows, *residual_proof_rows]
+                for row in [
+                    *residual_candidate_rows,
+                    *residual_proof_rows,
+                    *residual_reader_state_rows,
+                ]
             ],
             "summary": (
                 "Object-motion residual candidates with linked useful executed-ablation "
-                "proof are pending contenders, but cannot supersede the current best "
-                "until internal reader-state evaluation is consumed."
+                "proof remain non-final contenders; once targeted reader-state "
+                "evaluation is consumed they require synthesis adjudication rather "
+                "than another reader-state run."
             ),
         },
         {
@@ -1679,7 +1802,13 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
             str(row["packet_id"]) for row in residual_proof_rows
         ],
         "residual_candidate_proof_backed_pending_packet_ids": [
-            str(row["packet_id"]) for row in residual_proof_backed_rows
+            str(row["packet_id"]) for row in residual_proof_backed_pending_rows
+        ],
+        "residual_candidate_reader_state_evaluated_packet_ids": [
+            str(row["packet_id"]) for row in residual_proof_backed_evaluated_rows
+        ],
+        "residual_candidate_reader_state_packet_ids": [
+            str(row["packet_id"]) for row in residual_reader_state_rows
         ],
         "object_event_causal_summary": {
             "prior_macro2_candidate_packet_ids": [
@@ -1713,7 +1842,10 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
         ),
         "object_event_useful_but_insufficient_detected": bool(object_event_useful_rows),
         "residual_candidate_proof_backed_pending_detected": bool(
-            residual_proof_backed_rows
+            residual_proof_backed_pending_rows
+        ),
+        "residual_candidate_reader_state_evaluated_detected": bool(
+            residual_proof_backed_evaluated_rows
         ),
         "reader_state_evidence_detected": bool(reader_state_rows),
         "reader_state_partial_transformation_detected": bool(reader_state_partial_rows),
@@ -1806,6 +1938,78 @@ def _build_candidate_proof_pairs(rows: list[dict[str, object]]) -> list[dict[str
             }
         )
     return pairs
+
+
+def _annotate_candidate_evidence_links(rows: list[dict[str, object]]) -> None:
+    proof_pairs = _build_candidate_proof_pairs(rows)
+    proof_pair_by_candidate = {
+        (str(pair["candidate_packet_id"]), str(pair["candidate_packet_kind"])): pair
+        for pair in proof_pairs
+    }
+    reader_state_rows = [
+        row for row in rows if row["packet_kind"] == "internal_reader_state_evaluation"
+    ]
+    for row in rows:
+        if row["packet_kind"] not in CANDIDATE_PACKET_KINDS:
+            continue
+        proof_pair = proof_pair_by_candidate.get(
+            (str(row["packet_id"]), str(row["packet_kind"])),
+            {},
+        )
+        reader_state_row = _latest_reader_state_for_candidate(reader_state_rows, row)
+        row.update(
+            {
+                "proof_packet_id": proof_pair.get("proof_packet_id"),
+                "proof_packet_dir": proof_pair.get("proof_packet_dir"),
+                "proof_backed": bool(proof_pair.get("proof_supports_candidate")),
+                "proof_causal_status": proof_pair.get("proof_causal_status"),
+                "proof_fixture_only": proof_pair.get("proof_fixture_only"),
+                "proof_model_backed": proof_pair.get("proof_model_backed"),
+                "reader_state_evaluated": reader_state_row is not None,
+                "reader_state_packet_id": reader_state_row.get("packet_id")
+                if reader_state_row
+                else None,
+                "reader_state_packet_dir": reader_state_row.get("packet_dir")
+                if reader_state_row
+                else None,
+                "reader_state_fixture_only": reader_state_row.get("fixture_only")
+                if reader_state_row
+                else None,
+                "reader_state_model_calls": reader_state_row.get("model_calls")
+                if reader_state_row
+                else None,
+                "reader_state_reread_transformation_strength": reader_state_row.get(
+                    "reread_transformation_strength"
+                )
+                if reader_state_row
+                else None,
+                "reader_state_post_reread_state": reader_state_row.get(
+                    "post_reread_reader_state"
+                )
+                if reader_state_row
+                else None,
+                "reader_state_strongest_rival_still_blocks": reader_state_row.get(
+                    "strongest_rival_still_blocks"
+                )
+                if reader_state_row
+                else None,
+                "strongest_rival_still_blocks": bool(
+                    (reader_state_row or {}).get("strongest_rival_still_blocks")
+                    or row.get("strongest_rival_pressure_remains_blocking")
+                    or row.get("strongest_rival_still_beats_candidate")
+                ),
+            }
+        )
+        if _is_residual_candidate(row) and row.get("proof_backed"):
+            row["supersession_decision"] = (
+                "ready_for_synthesis_adjudication"
+                if row["reader_state_evaluated"]
+                else "pending_reader_state_evaluation"
+            )
+        elif row.get("proof_backed"):
+            row["supersession_decision"] = "proof_backed_candidate"
+        else:
+            row["supersession_decision"] = "not_supersession_ready"
 
 
 def _proof_matches_candidate(
@@ -2032,8 +2236,12 @@ def _reader_state_matches_candidate(
 ) -> bool:
     selected_kind = str(reader_state_row.get("selected_candidate_kind") or "")
     candidate_kind = str(candidate.get("packet_kind") or "")
-    selected_packet_id = str(reader_state_row.get("selected_candidate_packet_id") or "")
+    evaluated_packet_id = str(reader_state_row.get("evaluated_candidate_packet_id") or "")
     candidate_packet_id = str(candidate.get("packet_id") or "")
+    if evaluated_packet_id and evaluated_packet_id == candidate_packet_id:
+        return not selected_kind or selected_kind == candidate_kind
+
+    selected_packet_id = str(reader_state_row.get("selected_candidate_packet_id") or "")
     if selected_packet_id and selected_packet_id == candidate_packet_id:
         return not selected_kind or selected_kind == candidate_kind
 
@@ -2051,6 +2259,12 @@ def _reader_state_source_matches_candidate_source(
     reader_state_source: SourcePacket,
     candidate_source: SourcePacket,
 ) -> bool:
+    evaluated_packet_id = str(
+        reader_state_source.payload.get("evaluated_candidate_packet_id") or ""
+    )
+    if evaluated_packet_id and evaluated_packet_id == candidate_source.packet_id:
+        return True
+
     selected_packet_id = str(
         reader_state_source.payload.get("selected_candidate_packet_id") or ""
     )
@@ -2294,6 +2508,10 @@ def _build_best_candidate_selection(
             or bool(selected_payload.get("object_event_pressure_recomposition"))
         )
     )
+    selected_is_residual = (
+        isinstance(selected_payload, dict)
+        and _is_residual_candidate(selected_payload)
+    )
     if selected_payload is not None:
         selected_payload.update(
             {
@@ -2314,6 +2532,7 @@ def _build_best_candidate_selection(
                 "superseded_candidate_packet_id": superseded_candidate_packet_id,
                 "selected_macro2_candidate": selected_is_macro2,
                 "selected_object_event_candidate": selected_is_object_event,
+                "selected_residual_candidate": selected_is_residual,
             }
         )
     object_event_pairs = [
@@ -2386,6 +2605,12 @@ def _build_best_candidate_selection(
         "best_current_candidate_updated_from_object_event_proof": bool(
             object_event_supersession_applied
         ),
+        "best_current_candidate_updated_from_residual_reader_state": bool(
+            selected_is_residual
+            and selected_payload is not None
+            and selected_payload.get("candidate_proof_linked")
+            and selected_payload.get("reader_state_evaluated")
+        ),
         "macro2_candidate_proof_linked": any(
             pair.get("proof_linked")
             for pair in candidate_proof_pairs
@@ -2408,9 +2633,118 @@ def _build_best_candidate_selection(
     }
 
 
+def _build_candidate_evidence_graph(
+    history: dict[str, object],
+    best_candidate: dict[str, object],
+) -> dict[str, object]:
+    rows = _rows(history)
+    selected = best_candidate.get("selected_best_candidate")
+    selected_packet_id = (
+        str(selected.get("packet_id"))
+        if isinstance(selected, dict) and selected.get("packet_id")
+        else None
+    )
+    nodes: list[dict[str, object]] = []
+    for row in rows:
+        if row["packet_kind"] not in CANDIDATE_PACKET_KINDS:
+            continue
+        reader_state_evaluated = bool(row.get("reader_state_evaluated"))
+        proof_backed = bool(row.get("proof_backed"))
+        is_residual = _is_residual_candidate(row)
+        if str(row["packet_id"]) == selected_packet_id:
+            supersession_status = "selected_best_candidate"
+        elif is_residual and proof_backed and reader_state_evaluated:
+            supersession_status = "reader_state_evaluated_contender"
+        elif is_residual and proof_backed:
+            supersession_status = "pending_reader_state_evaluation"
+        elif proof_backed:
+            supersession_status = "proof_backed_candidate"
+        else:
+            supersession_status = "not_supersession_ready"
+        nodes.append(
+            {
+                "candidate_packet_id": row["packet_id"],
+                "candidate_packet_kind": row["packet_kind"],
+                "candidate_packet_dir": row["packet_dir"],
+                "candidate_text_sha256": row.get("candidate_text_sha256"),
+                "base_candidate_packet_id": row.get("base_candidate_packet_id"),
+                "target_scope": row.get("target_scope"),
+                "target_movement": row.get("target_movement"),
+                "selected_residual_target_id": row.get("selected_residual_target_id"),
+                "selected_region_id": row.get("selected_region_id"),
+                "target_unit_ids": list(
+                    row.get("target_unit_ids", [])
+                    if isinstance(row.get("target_unit_ids"), list)
+                    else []
+                ),
+                "candidate_generated": bool(row.get("candidate_generated")),
+                "finalization_eligible": False,
+                "proof_packet_id": row.get("proof_packet_id"),
+                "proof_packet_dir": row.get("proof_packet_dir"),
+                "proof_backed": proof_backed,
+                "proof_fixture_only": row.get("proof_fixture_only"),
+                "proof_model_backed": row.get("proof_model_backed"),
+                "proof_causal_status": row.get("proof_causal_status"),
+                "reader_state_packet_id": row.get("reader_state_packet_id"),
+                "reader_state_packet_dir": row.get("reader_state_packet_dir"),
+                "reader_state_evaluated": reader_state_evaluated,
+                "reader_state_fixture_only": row.get("reader_state_fixture_only"),
+                "reader_state_model_calls": row.get("reader_state_model_calls"),
+                "reader_state_reread_transformation_strength": row.get(
+                    "reader_state_reread_transformation_strength"
+                ),
+                "reader_state_post_reread_state": row.get("reader_state_post_reread_state"),
+                "strongest_rival_still_blocks": bool(
+                    row.get("strongest_rival_still_blocks")
+                    or row.get("reader_state_strongest_rival_still_blocks")
+                    or row.get("strongest_rival_pressure_remains_blocking")
+                    or row.get("strongest_rival_still_beats_candidate")
+                ),
+                "supersession_status": supersession_status,
+                "supersession_decision": row.get("supersession_decision")
+                or supersession_status,
+                "selected_best_candidate": str(row["packet_id"]) == selected_packet_id,
+                "not_finalization_eligible": True,
+                "no_phase_shift_claim": True,
+            }
+        )
+    residual_nodes = [
+        node
+        for node in nodes
+        if node.get("selected_residual_target_id") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+        or node.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+        or node.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+    ]
+    return {
+        "nodes": nodes,
+        "node_count": len(nodes),
+        "candidate_packet_ids": [str(node["candidate_packet_id"]) for node in nodes],
+        "selected_best_candidate_packet_id": selected_packet_id,
+        "residual_candidate_packet_ids": [
+            str(node["candidate_packet_id"]) for node in residual_nodes
+        ],
+        "residual_reader_state_evaluated_packet_ids": [
+            str(node["candidate_packet_id"])
+            for node in residual_nodes
+            if node.get("reader_state_evaluated")
+        ],
+        "residual_reader_state_pending_packet_ids": [
+            str(node["candidate_packet_id"])
+            for node in residual_nodes
+            if node.get("proof_backed") and not node.get("reader_state_evaluated")
+        ],
+        "candidate_evidence_graph_created": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "worker": "candidate_evidence_graph_v1_controller",
+    }
+
+
 def _build_provisional_candidate_queue(
     history: dict[str, object],
     best_candidate: dict[str, object],
+    candidate_evidence_graph: dict[str, object],
 ) -> dict[str, object]:
     selected = best_candidate.get("selected_best_candidate")
     selected_packet_id = (
@@ -2427,6 +2761,22 @@ def _build_provisional_candidate_queue(
         candidate
         for candidate in best_candidate.get("candidate_options", [])
         if isinstance(candidate, dict)
+    ]
+    graph_nodes = [
+        node
+        for node in candidate_evidence_graph.get("nodes", [])
+        if isinstance(node, dict)
+    ]
+    evaluated_contenders = [
+        node
+        for node in graph_nodes
+        if (
+            node.get("selected_residual_target_id") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+            or node.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+            or node.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+        )
+        and node.get("proof_backed")
+        and node.get("reader_state_evaluated")
     ]
     pending_candidates: list[dict[str, object]] = []
     for candidate in candidates:
@@ -2493,11 +2843,74 @@ def _build_provisional_candidate_queue(
     next_action = (
         proof_backed_pending[-1]["recommended_next_action"]
         if proof_backed_pending
+        else "review_residual_candidate_synthesis_before_loop_review"
+        if evaluated_contenders
         else "no_proof_backed_provisional_candidate_ready_for_reader_state_evaluation"
+    )
+    supersession_policy = (
+        "proof-backed residual candidates remain pending until their own "
+        "internal reader-state evaluation is consumed by a later synthesis"
+        if proof_backed_pending
+        else (
+            "proof-backed residual candidates with linked reader-state evidence "
+            "are ready for synthesis adjudication, not another reader-state run"
+        )
+        if evaluated_contenders
+        else "no proof-backed residual candidate is pending reader-state evidence"
     )
     return {
         "pending_candidates": pending_candidates,
+        "evaluated_contenders": [
+            {
+                "packet_kind": node.get("candidate_packet_kind"),
+                "packet_id": node.get("candidate_packet_id"),
+                "packet_dir": node.get("candidate_packet_dir"),
+                "base_candidate_packet_id": node.get("base_candidate_packet_id"),
+                "selected_residual_target_id": node.get("selected_residual_target_id"),
+                "selected_region_id": node.get("selected_region_id"),
+                "target_scope": node.get("target_scope"),
+                "target_movement": node.get("target_movement"),
+                "target_unit_ids": list(
+                    node.get("target_unit_ids", [])
+                    if isinstance(node.get("target_unit_ids"), list)
+                    else []
+                ),
+                "candidate_generated": bool(node.get("candidate_generated")),
+                "proof_backed": bool(node.get("proof_backed")),
+                "proof_packet_id": node.get("proof_packet_id"),
+                "proof_packet_dir": node.get("proof_packet_dir"),
+                "proof_causal_status": node.get("proof_causal_status"),
+                "proof_model_backed": bool(node.get("proof_model_backed")),
+                "proof_fixture_only": bool(node.get("proof_fixture_only")),
+                "reader_state_evaluated": True,
+                "reader_state_packet_id": node.get("reader_state_packet_id"),
+                "reader_state_packet_dir": node.get("reader_state_packet_dir"),
+                "reader_state_fixture_only": bool(node.get("reader_state_fixture_only")),
+                "reader_state_model_calls": node.get("reader_state_model_calls"),
+                "reader_state_reread_transformation_strength": node.get(
+                    "reader_state_reread_transformation_strength"
+                ),
+                "reader_state_post_reread_state": node.get(
+                    "reader_state_post_reread_state"
+                ),
+                "supersession_pending_reader_state": False,
+                "ready_for_synthesis_adjudication": True,
+                "current_best_candidate_remains": selected_packet_id,
+                "finalization_eligible": False,
+                "not_finalization_eligible": True,
+                "strongest_rival_still_blocks": bool(
+                    node.get("strongest_rival_still_blocks")
+                ),
+                "no_final_claim": True,
+                "no_phase_shift_claim": True,
+            }
+            for node in evaluated_contenders
+        ],
         "pending_candidate_count": len(pending_candidates),
+        "evaluated_contender_count": len(evaluated_contenders),
+        "evaluated_contender_packet_ids": [
+            str(node.get("candidate_packet_id")) for node in evaluated_contenders
+        ],
         "proof_backed_pending_count": len(proof_backed_pending),
         "proof_backed_pending_candidate_packet_ids": [
             str(candidate["packet_id"]) for candidate in proof_backed_pending
@@ -2509,10 +2922,7 @@ def _build_provisional_candidate_queue(
         if proof_backed_pending
         else None,
         "next_recommended_action": next_action,
-        "supersession_policy": (
-            "proof-backed residual candidates remain pending until their own "
-            "internal reader-state evaluation is consumed by a later synthesis"
-        ),
+        "supersession_policy": supersession_policy,
         "repair_history_event_count": len(_rows(history)),
         "finalization_eligible": False,
         "not_finalization_eligible": True,
@@ -3083,6 +3493,149 @@ def _build_reader_state_evidence_adjudication(
     }
 
 
+def _build_residual_candidate_reader_state_adjudication(
+    candidate_evidence_graph: dict[str, object],
+    best_candidate: dict[str, object],
+) -> dict[str, object]:
+    selected = best_candidate.get("selected_best_candidate")
+    selected_packet_id = (
+        str(selected.get("packet_id"))
+        if isinstance(selected, dict) and selected.get("packet_id")
+        else None
+    )
+    residual_nodes = [
+        node
+        for node in candidate_evidence_graph.get("nodes", [])
+        if isinstance(node, dict)
+        and (
+            node.get("selected_residual_target_id") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+            or node.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+            or node.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+        )
+    ]
+    evaluated = [
+        node
+        for node in residual_nodes
+        if node.get("proof_backed") and node.get("reader_state_evaluated")
+    ]
+    if not evaluated:
+        pending = [node for node in residual_nodes if node.get("proof_backed")]
+        return {
+            "residual_candidate_reader_state_evidence_present": False,
+            "evaluated_residual_candidate_packet_ids": [],
+            "pending_residual_candidate_packet_ids": [
+                str(node.get("candidate_packet_id")) for node in pending
+            ],
+            "residual_candidate_reader_state_consumed": False,
+            "residual_candidate_reader_state_linked": False,
+            "residual_candidate_supersession_adjudicated": bool(residual_nodes),
+            "next_recommended_action": _reader_state_action_for_packet(
+                pending[-1].get("candidate_packet_id")
+                if pending
+                else "provisional_residual_candidate"
+            )
+            if pending
+            else "no_residual_candidate_reader_state_evidence_to_adjudicate",
+            "finalization_eligible": False,
+            "not_finalization_eligible": True,
+            "no_phase_shift_claim": True,
+            "worker": "residual_candidate_reader_state_adjudication_v1_controller",
+        }
+    selected_node = sorted(
+        evaluated,
+        key=lambda node: str(node.get("candidate_packet_id") or ""),
+    )[-1]
+    packet_dir = Path(str(selected_node["reader_state_packet_dir"]))
+    delta = _optional_payload(packet_dir, "reader_delta_report.json")
+    rival = _optional_payload(packet_dir, "rival_reader_state_comparison.json")
+    hostile = _optional_payload(packet_dir, "hostile_reader_state_report.json")
+    proof = _optional_payload(packet_dir, "proof_constraint_carry_report.json")
+    motifs = list(
+        delta.get("motifs_that_became_causal_after_reread", [])
+        if isinstance(delta.get("motifs_that_became_causal_after_reread"), list)
+        else []
+    )
+    rival_blocks = bool(
+        selected_node.get("strongest_rival_still_blocks")
+        or rival.get("strongest_rival_still_blocks")
+    )
+    rival_wins_first_read = bool(rival.get("rival_still_wins_on_first_read_vividness"))
+    rival_wins_local_force = bool(
+        rival.get("rival_still_wins_on_lived_object_event_pressure")
+    )
+    candidate_selected = str(selected_node.get("candidate_packet_id")) == selected_packet_id
+    return {
+        "residual_candidate_reader_state_evidence_present": True,
+        "candidate_packet_id": selected_node.get("candidate_packet_id"),
+        "candidate_packet_kind": selected_node.get("candidate_packet_kind"),
+        "candidate_packet_dir": selected_node.get("candidate_packet_dir"),
+        "proof_packet_id": selected_node.get("proof_packet_id"),
+        "proof_backed": bool(selected_node.get("proof_backed")),
+        "reader_state_packet_id": selected_node.get("reader_state_packet_id"),
+        "reader_state_packet_dir": selected_node.get("reader_state_packet_dir"),
+        "reader_state_evaluated": True,
+        "reader_state_fixture_only": bool(selected_node.get("reader_state_fixture_only")),
+        "reader_state_model_calls": selected_node.get("reader_state_model_calls"),
+        "target_scope": selected_node.get("target_scope"),
+        "target_movement": selected_node.get("target_movement"),
+        "selected_residual_target_id": selected_node.get("selected_residual_target_id"),
+        "selected_region_id": selected_node.get("selected_region_id"),
+        "target_unit_ids": selected_node.get("target_unit_ids", []),
+        "reread_gain_estimate": delta.get("reread_gain_estimate")
+        or selected_node.get("reader_state_reread_transformation_strength"),
+        "post_reread_reader_state": delta.get("post_reread_reader_state")
+        or selected_node.get("reader_state_post_reread_state"),
+        "motifs_that_became_causal_after_reread": motifs,
+        "first_read_local_embodiment_vs_rival": (
+            "weaker_than_strongest_rival"
+            if rival_wins_first_read or rival_wins_local_force
+            else "not_shown_weaker_than_rival"
+        ),
+        "rival_still_wins_first_read_vividness": rival_wins_first_read,
+        "rival_still_wins_local_embodied_force": rival_wins_local_force,
+        "strongest_rival_still_blocks": rival_blocks,
+        "packet_improves_or_preserves_prior_best_dimensions": [
+            "object-motion target has linked executed-ablation proof",
+            "reader-state evidence reports partial reread transformation",
+            "table/dust/spoon/saucer/ring motifs become causal after reread"
+            if {"table", "dust", "spoon", "saucer", "ring"}.issubset(
+                {str(motif) for motif in motifs}
+            )
+            else "reader-state motif gain remains partial",
+            "proof/no-outside-answer carry remains monitored as partial",
+        ],
+        "reader_state_blockers": list(
+            hostile.get("blocking_or_active_risks", [])
+            if isinstance(hostile.get("blocking_or_active_risks"), list)
+            else []
+        )
+        + (
+            ["proof_no_outside_answer_carry_still_partial"]
+            if proof.get("proof_logic_felt_as_structure") == "partial"
+            else []
+        ),
+        "supersession_decision": (
+            "selected_as_best_current_candidate"
+            if candidate_selected
+            else "useful_but_insufficient_contender_not_selected"
+        ),
+        "candidate_selected_as_best_current": candidate_selected,
+        "residual_candidate_reader_state_consumed": True,
+        "residual_candidate_reader_state_linked": True,
+        "residual_candidate_supersession_adjudicated": True,
+        "next_recommended_action": (
+            "review_residual_candidate_synthesis_before_loop_review"
+            if candidate_selected
+            else "review_residual_candidate_adjudication_before_next_strategy"
+        ),
+        "finalization_eligible": False,
+        "not_finalization_eligible": True,
+        "not_human_validated": True,
+        "no_phase_shift_claim": True,
+        "worker": "residual_candidate_reader_state_adjudication_v1_controller",
+    }
+
+
 def _build_reader_state_tension_report(
     adjudication: dict[str, object],
 ) -> dict[str, object]:
@@ -3259,6 +3812,7 @@ def _build_residual_blocker_map(
     exhausted_handle_report: dict[str, object],
     rival_pressure_summary: dict[str, object],
     reader_state_adjudication: dict[str, object],
+    residual_reader_state_adjudication: dict[str, object],
     reader_state_tension_report: dict[str, object],
     provisional_candidate_queue: dict[str, object],
 ) -> dict[str, object]:
@@ -3292,9 +3846,17 @@ def _build_residual_blocker_map(
             or selected.get("object_event_pressure_recomposition")
         )
     )
+    selected_is_residual = bool(
+        isinstance(selected, dict) and _is_residual_candidate(selected)
+    )
     macro2_reader_state_present = selected_is_macro2 and reader_state_present
     object_event_reader_state_present = selected_is_object_event and reader_state_present
     object_event_reader_state_needed = selected_is_object_event and not reader_state_present
+    residual_reader_state_present = bool(
+        residual_reader_state_adjudication.get(
+            "residual_candidate_reader_state_evidence_present"
+        )
+    )
     reader_state_tensions_present = int(reader_state_tension_report.get("tension_count", 0)) > 0
     blockers = [
         _blocker(
@@ -3587,6 +4149,47 @@ def _build_residual_blocker_map(
                     ),
                 ]
             )
+    evaluated_contenders = [
+        candidate
+        for candidate in provisional_candidate_queue.get("evaluated_contenders", [])
+        if isinstance(candidate, dict)
+    ]
+    if evaluated_contenders:
+        for candidate in evaluated_contenders:
+            packet_id = str(candidate.get("packet_id"))
+            target_id = str(
+                candidate.get("selected_residual_target_id")
+                or candidate.get("target_scope")
+                or RESIDUAL_OBJECT_MOTION_TARGET_ID
+            )
+            blockers.extend(
+                [
+                    _blocker(
+                        f"{target_id}_reader_state_evidence_consumed_for_{packet_id}",
+                        "medium",
+                        (
+                            f"{packet_id} has linked proof and reader-state evidence; "
+                            "it now needs synthesis review rather than another reader-state run"
+                        ),
+                        False,
+                        status="ready_for_synthesis_adjudication",
+                    ),
+                    _blocker(
+                        "strongest_rival_still_blocks_residual_candidate",
+                        "high",
+                        "strongest rival pressure remains blocking for the residual candidate",
+                        False,
+                        status="rival_still_blocks",
+                    ),
+                    _blocker(
+                        "first_read_vividness_or_local_embodiment_still_blocking",
+                        "high",
+                        "reader-state adjudication says first-read/local embodied force remains weaker than the strongest rival",
+                        False,
+                        status="active_after_reader_state",
+                    ),
+                ]
+            )
     return {
         "residual_blockers": blockers,
         "blocker_count": len(blockers),
@@ -3598,28 +4201,48 @@ def _build_residual_blocker_map(
         "reader_state_evidence_consumed": reader_state_present,
         "macro2_reader_state_evidence_consumed": macro2_reader_state_present,
         "provisional_candidate_queue": provisional_candidate_queue,
-        "proof_backed_residual_candidate_exists": bool(pending_candidates),
+        "proof_backed_residual_candidate_exists": bool(
+            pending_candidates or evaluated_contenders
+        ),
         "proof_backed_residual_candidate_packet_ids": [
             str(candidate.get("packet_id")) for candidate in pending_candidates
+        ]
+        + [
+            str(candidate.get("packet_id")) for candidate in evaluated_contenders
+        ],
+        "evaluated_residual_candidate_packet_ids": [
+            str(candidate.get("packet_id")) for candidate in evaluated_contenders
         ],
         "residual_candidate_reader_state_missing": bool(pending_candidates),
+        "residual_candidate_reader_state_evidence_consumed": residual_reader_state_present,
+        "residual_candidate_reader_state_linked": bool(
+            residual_reader_state_adjudication.get(
+                "residual_candidate_reader_state_linked"
+            )
+        ),
         "residual_candidate_next_required_evidence": (
             "internal_reader_state_evaluation" if pending_candidates else None
         ),
         "residual_candidate_may_supersede_current_best_after_reader_state": bool(
-            pending_candidates
+            pending_candidates or evaluated_contenders
         ),
         "next_target_strategy_recommended": macro2_reader_state_present,
         "first_read_object_event_pressure_strategy_recommended": macro2_reader_state_present,
-        "reader_state_informed_recomposition_recommended": reader_state_present
-        and reader_state_partial
-        and not macro2_reader_state_present
-        and not object_event_reader_state_present,
+        "reader_state_informed_recomposition_recommended": (
+            reader_state_present
+            and reader_state_partial
+            and not macro2_reader_state_present
+            and not object_event_reader_state_present
+            and not selected_is_residual
+        ),
         "object_event_review_before_new_candidate_recommended": object_event_reader_state_present,
-        "reader_state_informed_macro_2_recomposition_recommended": reader_state_present
-        and reader_state_partial
-        and not macro2_reader_state_present
-        and not object_event_reader_state_present,
+        "reader_state_informed_macro_2_recomposition_recommended": (
+            reader_state_present
+            and reader_state_partial
+            and not macro2_reader_state_present
+            and not object_event_reader_state_present
+            and not selected_is_residual
+        ),
         "generic_more_compression_recommended": False,
         "strongest_rival_still_blocks": rival_pressure_summary["strongest_rival_still_blocks"],
         "not_finalization_eligible": True,
@@ -3862,6 +4485,7 @@ def _build_strategic_decision_report(
     exhausted_handle_report: dict[str, object],
     rival_pressure_summary: dict[str, object],
     reader_state_adjudication: dict[str, object],
+    residual_reader_state_adjudication: dict[str, object],
     reader_state_tension_report: dict[str, object],
     provisional_candidate_queue: dict[str, object],
 ) -> dict[str, object]:
@@ -3887,9 +4511,17 @@ def _build_strategic_decision_report(
             or selected.get("object_event_pressure_recomposition")
         )
     )
+    selected_is_residual = bool(
+        isinstance(selected, dict) and _is_residual_candidate(selected)
+    )
     reader_state_present = bool(reader_state_adjudication.get("reader_state_evidence_present"))
     reader_state_partial = (
         reader_state_adjudication.get("reread_transformation_strength") == "partial"
+    )
+    residual_reader_state_present = bool(
+        residual_reader_state_adjudication.get(
+            "residual_candidate_reader_state_evidence_present"
+        )
     )
     pending_candidates = [
         candidate
@@ -3911,6 +4543,17 @@ def _build_strategic_decision_report(
             f"current best remains {provisional_candidate_queue.get('current_best_candidate_packet_id')}",
             "strongest-rival pressure remains blocking",
             "the next evidence need is internal reader-state evaluation, not another generation pass",
+        ]
+    elif selected_is_residual and residual_reader_state_present:
+        recommendation = "preserve_residual_candidate_and_pause_for_loop_review"
+        next_action = "review_residual_candidate_synthesis_before_loop_review"
+        do_not_patch = True
+        basis = [
+            "residual object-motion candidate has linked executed-ablation proof",
+            "targeted reader-state evaluation for the residual candidate has been consumed",
+            "candidate identity was linked by evaluated_candidate_packet_id, not current-best metadata",
+            "reader-state evidence is partial and strongest rival still blocks finality",
+            "operator review should adjudicate the evidence loop before further generation",
         ]
     elif selected_is_object_event and reader_state_present:
         recommendation = "preserve_object_event_candidate_and_pause_for_loop_level_review"
@@ -4022,26 +4665,39 @@ def _build_strategic_decision_report(
         "provisional_residual_candidate_packet_ids": [
             str(candidate.get("packet_id")) for candidate in pending_candidates
         ],
+        "residual_candidate_reader_state_evidence_consumed": residual_reader_state_present,
+        "residual_candidate_reader_state_packet_id": residual_reader_state_adjudication.get(
+            "reader_state_packet_id"
+        ),
+        "residual_candidate_supersession_adjudicated": bool(
+            residual_reader_state_adjudication.get(
+                "residual_candidate_supersession_adjudicated"
+            )
+        ),
         "provisional_candidate_queue_reference": provisional_candidate_queue,
         "reader_state_evidence_consumed": reader_state_present,
         "reader_state_informed_recomposition_recommended": reader_state_present
         and reader_state_partial
         and not selected_is_macro2
-        and not selected_is_object_event,
+        and not selected_is_object_event
+        and not selected_is_residual,
         "reader_state_informed_macro_2_recomposition_recommended": reader_state_present
         and reader_state_partial
         and not selected_is_macro2
-        and not selected_is_object_event,
+        and not selected_is_object_event
+        and not selected_is_residual,
         "next_reader_state_target_strategy_recommended": selected_is_macro2
         and reader_state_present,
         "first_read_object_event_pressure_strategy_recommended": selected_is_macro2
         and reader_state_present,
         "targeted_proof_no_outside_answer_recomposition_recommended": reader_state_present
         and not selected_is_macro2
-        and not selected_is_object_event,
+        and not selected_is_object_event
+        and not selected_is_residual,
         "final_return_reread_echo_recomposition_recommended": reader_state_present
         and not selected_is_macro2
-        and not selected_is_object_event,
+        and not selected_is_object_event
+        and not selected_is_residual,
         "do_not_build_loop_controller_yet": True,
         "do_not_add_taste_memory_yet": True,
         "decision_basis": basis,
@@ -4080,6 +4736,7 @@ def _build_macro_recomposition_brief(
     rival_pressure: dict[str, object],
     local_law_notes: dict[str, object],
     reader_state_adjudication: dict[str, object],
+    residual_reader_state_adjudication: dict[str, object],
     reader_state_tension_report: dict[str, object],
     provisional_candidate_queue: dict[str, object],
 ) -> dict[str, object]:
@@ -4103,6 +4760,9 @@ def _build_macro_recomposition_brief(
             or selected.get("selected_object_event_candidate")
             or selected.get("object_event_pressure_recomposition")
         )
+    )
+    selected_is_residual = bool(
+        isinstance(selected, dict) and _is_residual_candidate(selected)
     )
     pending_candidates = [
         candidate
@@ -4141,6 +4801,42 @@ def _build_macro_recomposition_brief(
             "not_human_validated": True,
             "no_phase_shift_claim": True,
             "worker": "provisional_residual_candidate_reader_state_brief_v1_controller",
+        }
+    if selected_is_residual and residual_reader_state_adjudication.get(
+        "residual_candidate_reader_state_evidence_present"
+    ):
+        return {
+            "brief_type": "residual_candidate_synthesis_review_brief_not_artifact",
+            "current_best_candidate": selected,
+            "current_best_candidate_packet_id": selected.get("packet_id"),
+            "proof_basis_packet_id": selected.get("proof_packet_id"),
+            "reader_state_packet_id": residual_reader_state_adjudication.get(
+                "reader_state_packet_id"
+            ),
+            "reread_gain_estimate": residual_reader_state_adjudication.get(
+                "reread_gain_estimate"
+            ),
+            "post_reread_reader_state": residual_reader_state_adjudication.get(
+                "post_reread_reader_state"
+            ),
+            "strongest_rival_still_blocks": residual_reader_state_adjudication.get(
+                "strongest_rival_still_blocks"
+            ),
+            "next_evidence_need": "operator_loop_review",
+            "review_focus": [
+                "adjudicate whether residual object-motion specificity should remain current best",
+                "check strongest-rival first-read and local embodiment pressure",
+                "preserve proof-backed object-motion gains without claiming finality",
+            ],
+            "run_internal_reader_state_evaluation_before_further_recomposition": False,
+            "run_another_macro_recomposition_now": False,
+            "run_another_local_patch_now": False,
+            "candidate_is_non_final": True,
+            "not_candidate_artifact": True,
+            "not_finalization_eligible": True,
+            "not_human_validated": True,
+            "no_phase_shift_claim": True,
+            "worker": "residual_candidate_synthesis_review_brief_v1_controller",
         }
     if selected_is_object_event:
         if reader_state_present:
@@ -4536,9 +5232,11 @@ def _build_gate_report(
     exhausted_handles: dict[str, object],
     rival_pressure: dict[str, object],
     reader_state_adjudication: dict[str, object],
+    residual_reader_state_adjudication: dict[str, object],
     reader_state_tensions: dict[str, object],
     macro_brief: dict[str, object],
     provisional_candidate_queue: dict[str, object],
+    candidate_evidence_graph: dict[str, object],
 ) -> dict[str, object]:
     source_packets = subject_manifest.get("source_packets", [])
     source_summaries = source_packets if isinstance(source_packets, list) else []
@@ -4620,6 +5318,9 @@ def _build_gate_report(
             or selected.get("object_event_pressure_recomposition")
         )
     )
+    selected_is_residual = bool(
+        isinstance(selected, dict) and _is_residual_candidate(selected)
+    )
     macro2_candidate_proof_linked = bool(best_candidate.get("macro2_candidate_proof_linked"))
     object_event_candidate_proof_linked = bool(
         best_candidate.get("object_event_candidate_proof_linked")
@@ -4634,8 +5335,24 @@ def _build_gate_report(
     )
     residual_candidate_proof_linked = bool(
         provisional_candidate_queue.get("proof_backed_pending_count")
+        or residual_reader_state_adjudication.get("proof_backed")
+    )
+    residual_candidate_reader_state_consumed = bool(
+        residual_reader_state_adjudication.get(
+            "residual_candidate_reader_state_consumed"
+        )
+    )
+    residual_candidate_reader_state_linked = bool(
+        residual_reader_state_adjudication.get(
+            "residual_candidate_reader_state_linked"
+        )
     )
     residual_candidate_reader_state_missing = bool(pending_candidates)
+    residual_candidate_supersession_adjudicated = bool(
+        residual_reader_state_adjudication.get(
+            "residual_candidate_supersession_adjudicated"
+        )
+    )
     candidate_supersession_evaluated = bool(
         best_candidate.get("candidate_supersession_evaluated")
     )
@@ -4770,17 +5487,53 @@ def _build_gate_report(
         ),
         _gate_result(
             "residual_candidate_evidence_consumed",
-            residual_candidate_evidence_consumed if pending_candidates else True,
+            residual_candidate_evidence_consumed
+            if pending_candidates or residual_candidate_reader_state_consumed
+            else True,
         ),
         _gate_result(
             "residual_candidate_proof_linked",
-            residual_candidate_proof_linked if pending_candidates else True,
+            residual_candidate_proof_linked
+            if pending_candidates or residual_candidate_reader_state_consumed
+            else True,
+        ),
+        _gate_result(
+            "residual_candidate_proof_consumed",
+            residual_candidate_proof_linked
+            if pending_candidates or residual_candidate_reader_state_consumed
+            else True,
+        ),
+        _gate_result(
+            "residual_candidate_reader_state_consumed",
+            residual_candidate_reader_state_consumed
+            if subject_manifest.get("residual_candidate_packets_consumed")
+            else True,
+        ),
+        _gate_result(
+            "residual_candidate_reader_state_linked",
+            residual_candidate_reader_state_linked
+            if residual_candidate_reader_state_consumed
+            else True,
+        ),
+        _gate_result(
+            "candidate_evidence_graph_created",
+            bool(candidate_evidence_graph.get("candidate_evidence_graph_created")),
+        ),
+        _gate_result(
+            "residual_candidate_supersession_adjudicated",
+            residual_candidate_supersession_adjudicated
+            if residual_candidate_reader_state_consumed
+            else True,
         ),
         _gate_result(
             "residual_candidate_reader_state_missing",
-            residual_candidate_reader_state_missing,
+            residual_candidate_reader_state_missing
+            or residual_candidate_reader_state_consumed
+            or not subject_manifest.get("residual_candidate_packets_consumed"),
             []
             if residual_candidate_reader_state_missing
+            or residual_candidate_reader_state_consumed
+            or not subject_manifest.get("residual_candidate_packets_consumed")
             else ["no proof-backed residual candidate is awaiting reader-state evidence"],
         ),
         _gate_result(
@@ -4817,7 +5570,7 @@ def _build_gate_report(
         _gate_result(
             "best_candidate_reader_state_status_current",
             best_candidate_reader_state_status_current
-            if selected_is_macro2 or selected_is_object_event
+            if selected_is_macro2 or selected_is_object_event or selected_is_residual
             else True,
         ),
         _gate_result("macro_recomposition_brief_exists", bool(macro_brief)),
@@ -4880,6 +5633,15 @@ def _build_gate_report(
         "object_event_reader_state_eval_linked": object_event_reader_state_eval_linked,
         "residual_candidate_evidence_consumed": residual_candidate_evidence_consumed,
         "residual_candidate_proof_linked": residual_candidate_proof_linked,
+        "residual_candidate_proof_consumed": residual_candidate_proof_linked,
+        "residual_candidate_reader_state_consumed": residual_candidate_reader_state_consumed,
+        "residual_candidate_reader_state_linked": residual_candidate_reader_state_linked,
+        "candidate_evidence_graph_created": bool(
+            candidate_evidence_graph.get("candidate_evidence_graph_created")
+        ),
+        "residual_candidate_supersession_adjudicated": (
+            residual_candidate_supersession_adjudicated
+        ),
         "residual_candidate_reader_state_missing": residual_candidate_reader_state_missing,
         "provisional_candidate_queue": provisional_candidate_queue,
         "strongest_rival_pressure_preserved": strongest_rival_pressure_preserved,
@@ -4969,6 +5731,9 @@ def _build_packet_summary(
         "residual_candidate_ablation_packets_consumed": payloads[
             "autonomous_evidence_synthesis_subject_manifest"
         ].get("residual_candidate_ablation_packets_consumed", []),
+        "residual_candidate_reader_state_evaluation_packets_consumed": payloads[
+            "autonomous_evidence_synthesis_subject_manifest"
+        ].get("residual_candidate_reader_state_evaluation_packets_consumed", []),
         "reader_state_evaluation_packets_consumed": [
             source.packet_id
             for source in sources
@@ -4983,15 +5748,22 @@ def _build_packet_summary(
         "candidate_proof_pairs": payloads["best_current_candidate_selection"][
             "candidate_proof_pairs"
         ],
+        "candidate_evidence_graph": payloads["candidate_evidence_graph"],
         "provisional_candidate_queue": payloads["provisional_candidate_queue"],
         "provisional_pending_candidate_count": payloads["provisional_candidate_queue"][
             "pending_candidate_count"
+        ],
+        "evaluated_residual_candidate_packet_ids": payloads["provisional_candidate_queue"][
+            "evaluated_contender_packet_ids"
         ],
         "proof_backed_pending_candidate_count": payloads["provisional_candidate_queue"][
             "proof_backed_pending_count"
         ],
         "reader_state_evidence_adjudication": payloads[
             "reader_state_evidence_adjudication"
+        ],
+        "residual_candidate_reader_state_adjudication": payloads[
+            "residual_candidate_reader_state_adjudication"
         ],
         "reader_state_tension_report": payloads["reader_state_tension_report"],
         "best_current_candidate": payloads["best_current_candidate_selection"][
@@ -5030,6 +5802,21 @@ def _build_packet_summary(
         "residual_candidate_proof_linked": payloads["synthesis_gate_report"][
             "residual_candidate_proof_linked"
         ],
+        "residual_candidate_proof_consumed": payloads["synthesis_gate_report"][
+            "residual_candidate_proof_consumed"
+        ],
+        "residual_candidate_reader_state_consumed": payloads["synthesis_gate_report"][
+            "residual_candidate_reader_state_consumed"
+        ],
+        "residual_candidate_reader_state_linked": payloads["synthesis_gate_report"][
+            "residual_candidate_reader_state_linked"
+        ],
+        "residual_candidate_supersession_adjudicated": payloads[
+            "synthesis_gate_report"
+        ]["residual_candidate_supersession_adjudicated"],
+        "candidate_evidence_graph_created": payloads["synthesis_gate_report"][
+            "candidate_evidence_graph_created"
+        ],
         "residual_candidate_reader_state_missing": payloads["synthesis_gate_report"][
             "residual_candidate_reader_state_missing"
         ],
@@ -5064,6 +5851,15 @@ def _source_packet_summary(source: SourcePacket) -> dict[str, object]:
         "source_revision_packet_kind": source.payload.get("source_revision_packet_kind"),
         "source_revision_packet_dir": source.payload.get("source_revision_packet_dir"),
         "source_synthesis_packet_id": source.payload.get("source_synthesis_packet_id"),
+        "evaluated_candidate_packet_id": source.payload.get("evaluated_candidate_packet_id"),
+        "evaluated_candidate_is_provisional": source.payload.get(
+            "evaluated_candidate_is_provisional"
+        ),
+        "current_best_candidate_packet_id": source.payload.get(
+            "current_best_candidate_packet_id"
+        ),
+        "proof_packet_id": source.payload.get("proof_packet_id"),
+        "reader_state_eval_reason": source.payload.get("reader_state_eval_reason"),
         "selected_candidate_packet_id": source.payload.get("selected_candidate_packet_id"),
         "selected_candidate_packet_kind": source.payload.get("selected_candidate_packet_kind"),
         "selected_candidate_packet_dir": source.payload.get("selected_candidate_packet_dir"),
