@@ -62,6 +62,10 @@ from abi.modules.object_event_recomposition import (
     run_object_event_recomposition,
 )
 from abi.modules.residual_target_selection import run_residual_target_selection
+from abi.modules.residual_generation_authorization import (
+    RESIDUAL_GENERATION_AUTHORIZATION_DECISIONS,
+    run_residual_generation_authorization,
+)
 from abi.modules.residual_work_order import run_residual_work_order_planning
 from abi.modules.supervised_cycle_authorization import (
     SUPERVISED_CYCLE_AUTHORIZATION_DECISIONS,
@@ -533,6 +537,26 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Residual target selection packet directory to consume.",
     )
+    autonomous_authorize_residual_generation_parser = autonomous_subparsers.add_parser(
+        "authorize-residual-generation",
+        help="Record supervised review and authorize one bounded residual generation",
+    )
+    autonomous_authorize_residual_generation_parser.add_argument(
+        "--work-order-packet",
+        type=Path,
+        required=True,
+        help="Residual work-order packet directory to consume.",
+    )
+    autonomous_authorize_residual_generation_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the residual work-order packet.",
+    )
+    autonomous_authorize_residual_generation_parser.add_argument(
+        "--decision",
+        choices=RESIDUAL_GENERATION_AUTHORIZATION_DECISIONS,
+        help="Supervised decision for residual generation.",
+    )
     autonomous_object_event_parser = autonomous_subparsers.add_parser(
         "object-event-recompose",
         help="Run one bounded object-event pressure recomposition from a strategy packet",
@@ -764,6 +788,16 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_plan_residual_work_order(
             config,
             selection_packet=args.selection_packet,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "authorize-residual-generation"
+    ):
+        return _cmd_autonomous_authorize_residual_generation(
+            config,
+            work_order_packet=args.work_order_packet,
+            operator_reviewed=args.operator_reviewed,
+            decision=args.decision,
         )
     if args.command == "autonomous" and args.autonomous_command == "object-event-recompose":
         return _cmd_autonomous_object_event_recompose(
@@ -1184,6 +1218,23 @@ def _cmd_autonomous_plan_residual_work_order(
     result = run_residual_work_order_planning(
         config,
         selection_packet=selection_packet,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_authorize_residual_generation(
+    config: AbiConfig,
+    *,
+    work_order_packet: Path,
+    operator_reviewed: bool,
+    decision: str | None,
+) -> int:
+    result = run_residual_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=operator_reviewed,
+        decision=decision,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code

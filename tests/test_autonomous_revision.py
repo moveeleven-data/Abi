@@ -108,6 +108,12 @@ from abi.modules.residual_target_selection import (
     RESIDUAL_TARGET_SELECTION_ARTIFACT_TYPES,
     run_residual_target_selection,
 )
+from abi.modules.residual_generation_authorization import (
+    AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    NEXT_RECOMMENDED_ACTION as RESIDUAL_GENERATION_AUTHORIZATION_NEXT_ACTION,
+    RESIDUAL_GENERATION_AUTHORIZATION_ARTIFACT_TYPES,
+    run_residual_generation_authorization,
+)
 from abi.modules.residual_work_order import (
     NEXT_RECOMMENDED_ACTION as RESIDUAL_WORK_ORDER_NEXT_RECOMMENDED_ACTION,
     RESIDUAL_WORK_ORDER_ARTIFACT_TYPES,
@@ -672,6 +678,20 @@ def build_residual_work_order_ready_chain(tmp_path: Path):
     assert selection.payload["next_strategy_or_work_order_authorized"] is True
     assert selection.payload["candidate_generation_authorized"] is False
     chain["residual_target_selection"] = selection.payload
+    return chain
+
+
+def build_residual_generation_authorization_ready_chain(tmp_path: Path):
+    chain = build_residual_work_order_ready_chain(tmp_path)
+    work_order = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(chain["residual_target_selection"]["packet_dir"])),
+    )
+    assert work_order.exit_code == 0
+    assert work_order.payload["accepted"] is True
+    assert work_order.payload["candidate_generation_authorized"] is False
+    assert work_order.payload["candidate_generated"] is False
+    chain["residual_work_order"] = work_order.payload
     return chain
 
 
@@ -7470,6 +7490,306 @@ def test_residual_work_order_accepts_object_motion_selection_and_stays_fail_clos
     assert packet["counts"]["candidate_artifacts_created"] == 0
     assert packet["counts"]["produced_artifacts"] == len(
         RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    )
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_residual_generation_authorization_refuses_without_operator_review(tmp_path):
+    chain = build_residual_generation_authorization_ready_chain(tmp_path)
+
+    result = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=False,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["generation_attempt_budget"] == 0
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+
+
+def test_residual_generation_authorization_refuses_missing_work_order_packet(tmp_path):
+    config = config_for(tmp_path)
+
+    result = run_residual_generation_authorization(
+        config,
+        work_order_packet=tmp_path / "missing_work_order_packet",
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "directory not found" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["generation_authorized"] is False
+
+
+def test_residual_generation_authorization_refuses_invalid_target(tmp_path):
+    chain = build_residual_generation_authorization_ready_chain(tmp_path)
+    invalid_packet = tmp_path / "invalid_residual_work_order_target"
+    shutil.copytree(Path(str(chain["residual_work_order"]["packet_dir"])), invalid_packet)
+
+    def _wrong_target(payload):
+        payload["selected_residual_target_id"] = "proof_no_answer_residue"
+
+    rewrite_payload(invalid_packet / "residual_work_order_packet.json", _wrong_target)
+
+    result = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=invalid_packet,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "selected residual target" in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+
+
+def test_residual_generation_authorization_refuses_missing_selected_region_hash(
+    tmp_path,
+):
+    chain = build_residual_generation_authorization_ready_chain(tmp_path)
+    invalid_packet = tmp_path / "invalid_residual_work_order_missing_region_hash"
+    shutil.copytree(Path(str(chain["residual_work_order"]["packet_dir"])), invalid_packet)
+
+    def _remove_region_hash(payload):
+        payload["selected_region_sha256"] = ""
+
+    rewrite_payload(
+        invalid_packet / "selected_intervention_region.json",
+        _remove_region_hash,
+    )
+
+    result = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=invalid_packet,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "selected region SHA is missing" in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+
+
+def test_residual_generation_authorization_refuses_missing_target_unit_map(
+    tmp_path,
+):
+    chain = build_residual_generation_authorization_ready_chain(tmp_path)
+    invalid_packet = tmp_path / "invalid_residual_work_order_missing_units"
+    shutil.copytree(Path(str(chain["residual_work_order"]["packet_dir"])), invalid_packet)
+
+    def _remove_target_units(payload):
+        payload["target_units"] = []
+        payload["target_unit_count"] = 0
+
+    rewrite_payload(
+        invalid_packet / "object_motion_target_unit_map.json",
+        _remove_target_units,
+    )
+
+    result = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=invalid_packet,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "target unit map is missing" in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+
+
+def test_residual_generation_authorization_accepts_one_bounded_attempt(
+    tmp_path,
+):
+    chain = build_residual_generation_authorization_ready_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_generation_authorization(
+        config,
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["selected_residual_target_id"] == (
+        OBJECT_MOTION_CAUSALITY_TARGET_ID
+    )
+    assert result.payload["selected_region_id"] == (
+        RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    )
+    assert result.payload["selected_region_sha256"]
+    assert result.payload["target_unit_count"] == 3
+    assert result.payload["generation_authorized"] is True
+    assert result.payload["generation_attempt_budget"] == 1
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["live_model_call_authorized_for_generation"] is True
+    assert result.payload["ablation_authorized"] is False
+    assert result.payload["reader_state_eval_authorized"] is False
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["model_calls"] == 0
+    assert result.payload["next_recommended_action"] == (
+        RESIDUAL_GENERATION_AUTHORIZATION_NEXT_ACTION
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "residual_generation_authorization"
+    assert {artifact.type for artifact in result.artifacts} == set(
+        RESIDUAL_GENERATION_AUTHORIZATION_ARTIFACT_TYPES
+    )
+    for artifact_type in RESIDUAL_GENERATION_AUTHORIZATION_ARTIFACT_TYPES:
+        envelope = json.loads(
+            (packet_dir / f"{artifact_type}.json").read_text(encoding="utf-8")
+        )
+        assert envelope["artifact_type"] == artifact_type
+        assert envelope["fixture_only"] is False
+        assert envelope["model_call_id"] is None
+
+    subject = read_payload(
+        packet_dir / "residual_generation_authorization_subject_manifest.json"
+    )
+    assert subject["source_work_order_packet_id"] == chain["residual_work_order"][
+        "packet_id"
+    ]
+    assert subject["selected_residual_target_id"] == OBJECT_MOTION_CAUSALITY_TARGET_ID
+    assert subject["selected_region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    assert subject["target_unit_count"] == 3
+    assert set(subject["target_unit_ids"]) == {
+        "unit_001_cup_ring_crumb",
+        "unit_002_dust_hand_foot_air",
+        "unit_003_spoon_saucer_fall",
+    }
+
+    review = read_payload(packet_dir / "operator_work_order_review_record.json")
+    assert review["operator_reviewed"] is True
+    assert review["decision"] == AUTHORIZATION_DECISION_AUTHORIZE_ONE
+    assert review["generation_authorized"] is True
+    assert review["generation_attempt_budget"] == 1
+
+    scope = read_payload(packet_dir / "generation_scope_authorization.json")
+    assert scope["generation_authorized"] is True
+    assert scope["authorization_consumed"] is False
+    assert scope["authorized_base_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert scope["authorized_selected_region_id"] == (
+        RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    )
+    assert "add decorative vividness" in scope["must_not"]
+    assert "claim phase shift" in scope["must_not"]
+
+    budget = read_payload(packet_dir / "generation_attempt_budget.json")
+    assert budget["generation_attempt_budget"] == 1
+    assert budget["remaining_generation_attempts"] == 1
+    assert budget["authorization_consumed"] is False
+    assert budget["max_model_calls_for_future_generation"] == 1
+    assert budget["open_ended_generation_authorized"] is False
+    assert budget["repeated_generation_authorized"] is False
+
+    policy = read_payload(packet_dir / "target_unit_integration_policy.json")
+    assert policy["future_generator_must_produce_one_bounded_replacement"] is True
+    assert policy["overlapping_units_must_be_reconciled"] is True
+    assert "unit_002_dust_hand_foot_air" in " ".join(policy["overlap_notes"])
+    assert "add a new object list" in policy["must_not"]
+    assert "alter nonselected regions" in policy["must_not"]
+
+    contract = read_payload(packet_dir / "future_generator_contract_ref.json")
+    assert contract["authorization_packet_id"] == result.payload["packet_id"]
+    assert contract["work_order_packet_id"] == chain["residual_work_order"][
+        "packet_id"
+    ]
+    assert contract["generation_attempt_budget"] == 1
+    assert contract["authorization_consumed"] is False
+    assert "executed ablation" in contract["required_after_generation"]
+    assert "reader-state evaluation" in contract["required_after_generation"]
+    assert "evidence synthesis" in contract["required_after_generation"]
+    assert "phase-shift claim" in contract["forbidden"]
+
+    gate = read_payload(packet_dir / "authorization_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    for gate_name in (
+        "work_order_packet_consumed",
+        "operator_review_recorded",
+        "work_order_validated",
+        "one_generation_attempt_authorized",
+        "base_candidate_identified",
+        "selected_region_identified",
+        "selected_region_hash_recorded",
+        "target_units_identified",
+        "target_unit_integration_policy_recorded",
+        "protected_effects_recorded",
+        "no_candidate_generated",
+        "no_openai_calls",
+        "no_final_claim",
+        "no_phase_shift_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    for gate_name in (
+        "candidate_generated",
+        "authorization_consumed",
+        "ablation_authorized",
+        "reader_state_eval_authorized",
+        "synthesis_authorized",
+        "finalization_eligible",
+        "strongest_rival_defeated",
+        "human_validation_present",
+    ):
+        assert gate_results[gate_name]["passed"] is False
+    assert gate["generation_authorized"] is True
+    assert gate["generation_attempt_budget"] == 1
+    assert gate["authorization_consumed"] is False
+    assert gate["candidate_generated"] is False
+    assert gate["model_calls"] == 0
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["strongest_rival_still_blocks"] is True
+
+    packet = read_payload(packet_dir / "residual_generation_authorization_packet.json")
+    assert packet["generation_authorized"] is True
+    assert packet["generation_attempt_budget"] == 1
+    assert packet["authorization_consumed"] is False
+    assert packet["candidate_generated"] is False
+    assert packet["counts"]["model_calls"] == 0
+    assert packet["counts"]["candidate_artifacts_created"] == 0
+    assert packet["counts"]["produced_artifacts"] == len(
+        RESIDUAL_GENERATION_AUTHORIZATION_ARTIFACT_TYPES
     )
     assert packet["finalization_eligible"] is False
     assert packet["no_phase_shift_claim"] is True
