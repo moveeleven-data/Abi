@@ -85,7 +85,6 @@ def test_internal_reader_state_eval_fake_creates_fail_closed_packet(tmp_path):
         INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES
     )
     assert result.payload["counts"]["model_calls"] == 0
-    assert result.payload["counts"]["recorded_gates"] == 12
     assert set(result.payload["artifact_ids"]) == set(INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES)
 
     packet_dir = Path(str(result.payload["packet_dir"]))
@@ -107,9 +106,17 @@ def test_internal_reader_state_eval_fake_creates_fail_closed_packet(tmp_path):
     assert rival["strongest_rival_comparison_passed"] is False
 
     gate = read_payload(packet_dir / "internal_reader_state_eval_gate_report.json")
+    recorded_gates = [item for item in gate["gate_results"] if item["record"]]
+    assert result.payload["counts"]["recorded_gates"] == len(recorded_gates)
     assert gate["passed"] is False
     assert gate["finalization_eligible"] is False
     assert gate["no_phase_shift_claim"] is True
+    gate_results = {item["gate_name"]: item for item in gate["gate_results"]}
+    assert gate_results["target_candidate_resolved"]["passed"] is True
+    assert gate_results["proof_packet_linked"]["passed"] is True
+    assert gate_results["strongest_rival_defeated"]["passed"] is False
+    assert gate_results["human_validation_present"]["passed"] is False
+    assert gate_results["finalization_eligible"]["passed"] is False
     assert "no_unresolved_internal_blockers" in gate["failed_gates"]
 
     packet = read_payload(packet_dir / "internal_reader_state_eval_packet.json")

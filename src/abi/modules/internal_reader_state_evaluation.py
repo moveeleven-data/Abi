@@ -88,12 +88,23 @@ class ReaderStateSubject:
     synthesis_packet_artifact_id: str | None
     synthesis_artifact_ids: dict[str, str]
     synthesis_payloads: dict[str, dict[str, Any]]
+    current_best_candidate: dict[str, Any]
+    current_best_candidate_packet_id: str | None
     selected_candidate: dict[str, Any]
     selected_candidate_packet_dir: Path
     selected_candidate_packet_payload: dict[str, Any]
     selected_candidate_artifact_id: str | None
     selected_candidate_text: str
     selected_candidate_text_sha256: str
+    evaluated_candidate_is_provisional: bool
+    reader_state_eval_reason: str
+    proof_packet_id: str | None
+    proof_packet_dir: Path | None
+    target_scope: str | None
+    target_movement: str | None
+    selected_region_id: str | None
+    selected_residual_target_id: str | None
+    target_unit_ids: tuple[str, ...]
     selected_base_packet_dir: Path | None
     selected_base_packet_id: str | None
     selected_base_text: str | None
@@ -117,6 +128,7 @@ def run_internal_reader_state_evaluation(
     *,
     client_name: str,
     synthesis_packet: Path | str,
+    target_candidate_packet: Path | str | None = None,
     allow_live_model: bool = False,
     max_model_calls: int = INTERNAL_READER_STATE_EVAL_MAX_MODEL_CALLS_DEFAULT,
     api_key: str | None = None,
@@ -186,7 +198,12 @@ def run_internal_reader_state_evaluation(
 
     try:
         with connect(config.db_path) as connection:
-            subject = _load_subject(connection, config, source_packet_dir)
+            subject = _load_subject(
+                connection,
+                config,
+                source_packet_dir,
+                target_candidate_packet=target_candidate_packet,
+            )
             if get_run(connection, subject.run_id) is None:
                 return _refusal(
                     client_name=client_name,
@@ -540,9 +557,23 @@ def _build_subject_manifest(
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
         "source_synthesis_packet_id": subject.synthesis_packet_id,
+        "synthesis_packet": str(subject.synthesis_packet_dir),
         "source_synthesis_packet_dir": str(subject.synthesis_packet_dir),
         "source_synthesis_packet_artifact_id": subject.synthesis_packet_artifact_id,
         "selected_candidate_packet_id": subject.selected_candidate["packet_id"],
+        "evaluated_candidate_packet_id": subject.selected_candidate["packet_id"],
+        "evaluated_candidate_is_provisional": subject.evaluated_candidate_is_provisional,
+        "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
+        "reader_state_eval_reason": subject.reader_state_eval_reason,
+        "proof_packet_id": subject.proof_packet_id,
+        "proof_packet_dir": str(subject.proof_packet_dir)
+        if subject.proof_packet_dir is not None
+        else None,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_unit_ids": list(subject.target_unit_ids),
         "selected_candidate_packet_kind": subject.selected_candidate["packet_kind"],
         "selected_candidate_packet_dir": str(subject.selected_candidate_packet_dir),
         "selected_candidate_artifact_id": subject.selected_candidate_artifact_id,
@@ -571,6 +602,7 @@ def _build_subject_manifest(
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "finalization_eligible": False,
+        "candidate_generated": False,
         "no_phase_shift_claim": True,
     }
 
@@ -582,9 +614,14 @@ def _build_selected_candidate_reader_subject(
 ) -> dict[str, Any]:
     return {
         "worker": "selected_candidate_reader_subject_v1_controller",
-        "evaluation_subject": "synthesis_selected_best_candidate",
+        "evaluation_subject": (
+            "targeted_provisional_residual_candidate"
+            if subject.evaluated_candidate_is_provisional
+            else "synthesis_selected_best_candidate"
+        ),
         "reader_comparison_subjects": [
             "selected_macro_candidate",
+            "current_best_candidate",
             "prior_best_candidate",
             "strongest_rival",
         ],
@@ -595,11 +632,24 @@ def _build_selected_candidate_reader_subject(
             "candidate_artifact_id": subject.selected_candidate_artifact_id,
             "text_sha256": subject.selected_candidate_text_sha256,
             "word_count": len(_words(subject.selected_candidate_text)),
-            "target_movement": subject.selected_candidate.get("target_movement"),
+            "evaluated_candidate_is_provisional": subject.evaluated_candidate_is_provisional,
+            "reader_state_eval_reason": subject.reader_state_eval_reason,
+            "proof_packet_id": subject.proof_packet_id,
+            "target_scope": subject.target_scope,
+            "target_movement": subject.target_movement,
+            "selected_region_id": subject.selected_region_id,
+            "selected_residual_target_id": subject.selected_residual_target_id,
+            "target_unit_ids": list(subject.target_unit_ids),
             "non_final": True,
             "not_human_validated": True,
             "not_finalization_eligible": True,
             "no_phase_shift_claim": True,
+        },
+        "current_best_candidate": {
+            "packet_id": subject.current_best_candidate_packet_id,
+            "packet_kind": subject.current_best_candidate.get("packet_kind"),
+            "packet_dir": subject.current_best_candidate.get("packet_dir"),
+            "preserved_pending_reader_state": subject.evaluated_candidate_is_provisional,
         },
         "prior_best_candidate": {
             "packet_id": subject.selected_base_packet_id,
@@ -621,6 +671,7 @@ def _build_selected_candidate_reader_subject(
         },
         "fixture_only": fixture_only,
         "not_human_data": True,
+        "candidate_generated": False,
         "no_phase_shift_claim": True,
     }
 
@@ -980,7 +1031,11 @@ def _build_residual_blocker_report(
         "over_compression_risk": "monitored",
         "local_embodiment_vs_compression_balance": "active",
         "opening_return_transformation_still_weak_or_unproven": True,
-        "recommended_next_action": "operator_review_reader_state_evaluation",
+        "recommended_next_action": (
+            "review_provisional_residual_reader_state_eval_before_synthesis"
+            if subject.evaluated_candidate_is_provisional
+            else "operator_review_reader_state_evaluation"
+        ),
         "does_not_revise": True,
         "does_not_run_ablation": True,
         "fixture_only": fixture_only,
@@ -1002,6 +1057,16 @@ def _build_gate_report(
     gate_results = [
         _gate_result("internal_reader_state_eval_packet_exists", True),
         _gate_result("synthesis_packet_consumed", True),
+        _gate_result("target_candidate_resolved", True),
+        _gate_result(
+            "provisional_candidate_targeted",
+            True,
+        ),
+        _gate_result(
+            "proof_packet_linked",
+            bool(subject.proof_packet_id),
+            ["proof packet is missing"] if not subject.proof_packet_id else [],
+        ),
         _gate_result("selected_candidate_evaluated", True),
         _gate_result("first_pass_trace_exists", True),
         _gate_result("reread_trace_exists", True),
@@ -1028,6 +1093,23 @@ def _build_gate_report(
                 else "operator review is still required",
             ],
         ),
+        _gate_result(
+            "strongest_rival_defeated",
+            False,
+            ["strongest-rival pressure remains blocking"],
+        ),
+        _gate_result(
+            "human_validation_present",
+            False,
+            ["no human validation is present"],
+        ),
+        _gate_result(
+            "finalization_eligible",
+            False,
+            ["reader-state evaluation is not finalization evidence"],
+        ),
+        _gate_result("no_final_claim", True),
+        _gate_result("no_phase_shift_claim", True),
         _gate_result(
             "internal_operator_approval",
             False,
@@ -1056,15 +1138,25 @@ def _build_gate_report(
         "final_gates_marked_passed": [],
         "strongest_rival_pressure_preserved": True,
         "strongest_rival_still_blocks": strongest_rival_still_blocks,
+        "target_candidate_resolved": True,
+        "provisional_candidate_targeted": subject.evaluated_candidate_is_provisional,
+        "proof_packet_linked": bool(subject.proof_packet_id),
+        "selected_candidate_evaluated": True,
         "requires_further_ablation_recomposition_or_operator_decision": True,
         "gate_results": gate_results,
         "failed_gates": failed,
         "missing_gates": missing,
         "unresolved_blockers": blocker_report["reader_state_blockers"],
         "summary_verdict": (
-            "Internal reader-state evaluation exists for the synthesis-selected "
-            "macro candidate, but blockers and missing operator approval keep "
+            "Internal reader-state evaluation exists for the targeted provisional "
+            "residual candidate, but blockers and missing operator approval keep "
             "finalization fail-closed."
+            if subject.evaluated_candidate_is_provisional
+            else (
+                "Internal reader-state evaluation exists for the synthesis-selected "
+                "macro candidate, but blockers and missing operator approval keep "
+                "finalization fail-closed."
+            )
         ),
         "fixture_only": fixture_only,
     }
@@ -1087,12 +1179,24 @@ def _build_packet_summary(
     )
     return {
         "worker": "internal_reader_state_eval_packet_v1_controller",
+        "accepted": True,
+        "refused": False,
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
         "source_synthesis_packet_id": subject.synthesis_packet_id,
+        "synthesis_packet": str(subject.synthesis_packet_dir),
         "source_synthesis_packet_dir": str(subject.synthesis_packet_dir),
         "selected_candidate_packet_id": subject.selected_candidate["packet_id"],
+        "evaluated_candidate_packet_id": subject.selected_candidate["packet_id"],
+        "evaluated_candidate_is_provisional": subject.evaluated_candidate_is_provisional,
+        "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
+        "reader_state_eval_reason": subject.reader_state_eval_reason,
+        "proof_packet_id": subject.proof_packet_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "target_unit_ids": list(subject.target_unit_ids),
         "selected_candidate_packet_kind": subject.selected_candidate["packet_kind"],
         "selected_candidate_packet_dir": str(subject.selected_candidate_packet_dir),
         "selected_candidate_artifact_id": subject.selected_candidate_artifact_id,
@@ -1125,9 +1229,15 @@ def _build_packet_summary(
         },
         "gate_report": gate,
         "finalization_eligible": False,
+        "candidate_generated": False,
         "not_finalization_eligible": True,
         "not_human_validated": True,
         "no_phase_shift_claim": True,
+        "next_recommended_action": (
+            "review_provisional_residual_reader_state_eval_before_synthesis"
+            if subject.evaluated_candidate_is_provisional
+            else "operator_review_reader_state_evaluation"
+        ),
         "fixture_only": fixture_only,
     }
 
@@ -1136,6 +1246,8 @@ def _load_subject(
     connection,
     config: AbiConfig,
     synthesis_packet_dir: Path,
+    *,
+    target_candidate_packet: Path | str | None = None,
 ) -> ReaderStateSubject:
     packet_envelope = read_json_file(
         synthesis_packet_dir / "autonomous_evidence_synthesis_packet.json"
@@ -1167,13 +1279,59 @@ def _load_subject(
             synthesis_payloads[artifact_type] = _payload(
                 read_json_file(synthesis_packet_dir / f"{artifact_type}.json")
             )
+    if "provisional_candidate_queue" in artifact_ids:
+        artifact = get_artifact(connection, artifact_ids["provisional_candidate_queue"])
+        if artifact is not None:
+            synthesis_payloads["provisional_candidate_queue"] = _artifact_payload(artifact)
+        else:
+            synthesis_payloads["provisional_candidate_queue"] = _payload(
+                read_json_file(synthesis_packet_dir / "provisional_candidate_queue.json")
+            )
+    else:
+        synthesis_payloads["provisional_candidate_queue"] = {}
 
     best = synthesis_payloads["best_current_candidate_selection"]
-    selected = best.get("selected_best_candidate")
-    if not isinstance(selected, dict):
+    current_best = best.get("selected_best_candidate")
+    if not isinstance(current_best, dict):
         raise ValueError("best_current_candidate_selection has no selected_best_candidate")
-    if selected.get("packet_kind") != "bounded_macro_recomposition":
+    if current_best.get("packet_kind") != "bounded_macro_recomposition":
         raise ValueError("selected best candidate is not a bounded_macro_recomposition packet")
+    provisional_queue = synthesis_payloads["provisional_candidate_queue"]
+    pending_candidates = [
+        candidate
+        for candidate in provisional_queue.get("pending_candidates", [])
+        if isinstance(candidate, dict)
+    ]
+    if target_candidate_packet is None and pending_candidates:
+        pending = pending_candidates[-1]
+        raise ValueError(
+            "synthesis recommends reader-state evaluation for provisional candidate "
+            f"{pending.get('packet_id')}; selected best candidate is "
+            f"{current_best.get('packet_id')}; use --target-candidate-packet to avoid "
+            "evaluating the wrong candidate"
+        )
+    evaluated_candidate_is_provisional = False
+    reader_state_eval_reason = "synthesis_selected_best_candidate"
+    proof_packet_id: str | None = None
+    proof_packet_dir: Path | None = None
+    if target_candidate_packet is not None:
+        target_dir = _resolve_packet_dir(config, target_candidate_packet)
+        pending = _pending_candidate_for_target(pending_candidates, target_dir)
+        if pending is None:
+            raise ValueError(
+                "target candidate packet is not present in synthesis provisional queue"
+            )
+        _validate_pending_candidate_target(pending)
+        selected = dict(pending)
+        selected["packet_kind"] = str(selected.get("packet_kind") or "")
+        selected["packet_id"] = str(selected.get("packet_id") or target_dir.name)
+        selected["packet_dir"] = str(target_dir)
+        evaluated_candidate_is_provisional = True
+        reader_state_eval_reason = "supersession_pending_reader_state"
+        proof_packet_id = str(pending.get("proof_packet_id") or "")
+        proof_packet_dir = _optional_path(config, pending.get("proof_packet_dir"))
+    else:
+        selected = dict(current_best)
     candidate_packet_dir = _resolve_path(config, str(selected["packet_dir"]))
     candidate_packet = _payload(
         read_json_file(candidate_packet_dir / "macro_recomposition_packet.json")
@@ -1182,10 +1340,32 @@ def _load_subject(
         read_json_file(candidate_packet_dir / "macro_recomposed_candidate_text.json")
     )
     candidate_text = str(candidate_text_payload["text"])
+    selected["candidate_artifact_id"] = str(
+        selected.get("candidate_artifact_id")
+        or candidate_packet.get("candidate_artifact_id")
+        or ""
+    )
+    selected["target_scope"] = selected.get("target_scope") or candidate_packet.get(
+        "target_scope"
+    )
+    selected["target_movement"] = selected.get("target_movement") or candidate_packet.get(
+        "target_movement"
+    )
+    selected["selected_region_id"] = selected.get(
+        "selected_region_id"
+    ) or candidate_packet.get("selected_region_id")
+    selected["selected_residual_target_id"] = selected.get(
+        "selected_residual_target_id"
+    ) or candidate_packet.get("selected_residual_target_id")
+    target_unit_ids = _string_list(
+        selected.get("target_unit_ids") or candidate_packet.get("target_unit_ids")
+    )
     selected_base_packet_dir = _optional_path(
         config,
         candidate_packet.get("base_candidate_packet_dir"),
     )
+    if selected_base_packet_dir is None and evaluated_candidate_is_provisional:
+        selected_base_packet_dir = _optional_path(config, current_best.get("packet_dir"))
     selected_base_text = _load_candidate_text_from_packet(selected_base_packet_dir)
     selected_base_sha = sha256_text(selected_base_text) if selected_base_text else None
     pilot_packet_dir = _pilot_packet_dir_for_rival(packet_payload)
@@ -1193,12 +1373,17 @@ def _load_subject(
         connection,
         pilot_packet_dir,
     )
-    macro_ablation_packet_dir = _source_packet_dir(
-        packet_payload,
-        "executed_ablation",
-        subject_kind="bounded_macro_recomposition",
-        source_revision_packet_id=str(selected["packet_id"]),
-    )
+    if proof_packet_dir is None:
+        macro_ablation_packet_dir = _source_packet_dir(
+            packet_payload,
+            "executed_ablation",
+            subject_kind="bounded_macro_recomposition",
+            source_revision_packet_id=str(selected["packet_id"]),
+        )
+    else:
+        macro_ablation_packet_dir = proof_packet_dir
+    if proof_packet_id is None and macro_ablation_packet_dir is not None:
+        proof_packet_id = macro_ablation_packet_dir.name
     macro_evidence = _load_macro_ablation_evidence(macro_ablation_packet_dir)
     packet_artifact = _artifact_by_path(
         connection,
@@ -1207,6 +1392,14 @@ def _load_subject(
     )
     if packet_artifact is not None:
         source_parent_ids.append(packet_artifact.id)
+    if macro_ablation_packet_dir is not None:
+        proof_artifact = _artifact_by_path(
+            connection,
+            run_id=run_id,
+            artifact_path=macro_ablation_packet_dir / "executed_ablation_packet.json",
+        )
+        if proof_artifact is not None:
+            source_parent_ids.append(proof_artifact.id)
     if selected.get("candidate_artifact_id"):
         source_parent_ids.append(str(selected["candidate_artifact_id"]))
     if strongest_rival_artifact_id:
@@ -1218,12 +1411,23 @@ def _load_subject(
         synthesis_packet_artifact_id=packet_artifact.id if packet_artifact else None,
         synthesis_artifact_ids=artifact_ids,
         synthesis_payloads=synthesis_payloads,
+        current_best_candidate=current_best,
+        current_best_candidate_packet_id=str(current_best.get("packet_id") or ""),
         selected_candidate=selected,
         selected_candidate_packet_dir=candidate_packet_dir,
         selected_candidate_packet_payload=candidate_packet,
         selected_candidate_artifact_id=str(selected.get("candidate_artifact_id") or ""),
         selected_candidate_text=candidate_text,
         selected_candidate_text_sha256=str(candidate_text_payload["text_sha256"]),
+        evaluated_candidate_is_provisional=evaluated_candidate_is_provisional,
+        reader_state_eval_reason=reader_state_eval_reason,
+        proof_packet_id=proof_packet_id or None,
+        proof_packet_dir=proof_packet_dir,
+        target_scope=str(selected.get("target_scope") or ""),
+        target_movement=str(selected.get("target_movement") or ""),
+        selected_region_id=str(selected.get("selected_region_id") or ""),
+        selected_residual_target_id=str(selected.get("selected_residual_target_id") or ""),
+        target_unit_ids=tuple(target_unit_ids),
         selected_base_packet_dir=selected_base_packet_dir,
         selected_base_packet_id=str(candidate_packet.get("base_candidate_packet_id") or ""),
         selected_base_text=selected_base_text,
@@ -1358,6 +1562,14 @@ def _model_prompt(
         "candidate": {
             "label": "Selected Macro Candidate",
             "text": subject.selected_candidate_text,
+            "packet_id": subject.selected_candidate["packet_id"],
+            "evaluated_candidate_is_provisional": subject.evaluated_candidate_is_provisional,
+            "reader_state_eval_reason": subject.reader_state_eval_reason,
+            "proof_packet_id": subject.proof_packet_id,
+            "target_scope": subject.target_scope,
+            "target_movement": subject.target_movement,
+            "selected_region_id": subject.selected_region_id,
+            "target_unit_ids": list(subject.target_unit_ids),
         },
         "reader_items": [
             {"label": "Selected Macro Candidate", "text": subject.selected_candidate_text},
@@ -1389,6 +1601,7 @@ def _model_prompt(
             "Prior Best": "prior_best_candidate",
             "Strongest Rival": "strongest_rival",
         },
+        "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "prior_outputs": model_payloads,
         "synthesis_decision": subject.synthesis_payloads["strategic_decision_report"],
         "macro_ablation_evidence": subject.macro_ablation_evidence,
@@ -1446,8 +1659,20 @@ def _live_failure_result(
             "packet_id": packet_dir.name,
             "packet_dir": str(packet_dir),
             "synthesis_packet_dir": str(subject.synthesis_packet_dir),
+            "synthesis_packet": str(subject.synthesis_packet_dir),
+            "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
+            "selected_candidate_packet_id": subject.selected_candidate["packet_id"],
+            "evaluated_candidate_packet_id": subject.selected_candidate["packet_id"],
+            "evaluated_candidate_is_provisional": subject.evaluated_candidate_is_provisional,
+            "proof_packet_id": subject.proof_packet_id,
+            "target_scope": subject.target_scope,
+            "target_movement": subject.target_movement,
+            "candidate_generated": False,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
             "artifact_ids": {},
             "artifact_paths": {},
+            "counts": {"model_calls": len(model_results)},
             "model_calls": [result.model_call_to_dict() for result in model_results],
             "model_call_ids": [result.model_call.id for result in model_results],
             "message": message,
@@ -1507,7 +1732,18 @@ def _summary_payload(
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
         "synthesis_packet_dir": str(subject.synthesis_packet_dir),
+        "synthesis_packet": str(subject.synthesis_packet_dir),
+        "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "selected_candidate_packet_id": subject.selected_candidate["packet_id"],
+        "evaluated_candidate_packet_id": subject.selected_candidate["packet_id"],
+        "evaluated_candidate_is_provisional": subject.evaluated_candidate_is_provisional,
+        "reader_state_eval_reason": subject.reader_state_eval_reason,
+        "proof_packet_id": subject.proof_packet_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_unit_ids": list(subject.target_unit_ids),
         "selected_candidate_packet_dir": str(subject.selected_candidate_packet_dir),
         "strongest_rival_present": subject.has_strongest_rival,
         "required_artifact_types": list(INTERNAL_READER_STATE_EVAL_ARTIFACT_TYPES),
@@ -1531,6 +1767,14 @@ def _summary_payload(
         "reader_delta_report": payloads.get("reader_delta_report"),
         "rival_reader_state_comparison": payloads.get("rival_reader_state_comparison"),
         "gate_report": payloads.get("internal_reader_state_eval_gate_report"),
+        "candidate_generated": False,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "next_recommended_action": (
+            "review_provisional_residual_reader_state_eval_before_synthesis"
+            if subject.evaluated_candidate_is_provisional
+            else "operator_review_reader_state_evaluation"
+        ),
         "message": message,
     }
 
@@ -1552,7 +1796,11 @@ def _refusal(
             "synthesis_packet": str(synthesis_packet),
             "artifact_ids": {},
             "artifact_paths": {},
+            "counts": {"model_calls": 0},
             "model_calls": [],
+            "candidate_generated": False,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
             "message": message,
         },
     )
@@ -1605,6 +1853,14 @@ def _string_dict(value: object) -> dict[str, str]:
     return {str(key): str(item) for key, item in dict(value).items()}
 
 
+def _string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if item not in (None, "")]
+    return [str(value)] if str(value) else []
+
+
 def _resolve_path(config: AbiConfig, path: Path | str) -> Path:
     resolved = Path(path)
     if not resolved.is_absolute():
@@ -1612,10 +1868,74 @@ def _resolve_path(config: AbiConfig, path: Path | str) -> Path:
     return resolved.resolve()
 
 
+def _resolve_packet_dir(config: AbiConfig, packet: Path | str) -> Path:
+    resolved = _resolve_path(config, packet)
+    return resolved.parent if resolved.is_file() else resolved
+
+
 def _optional_path(config: AbiConfig, value: object) -> Path | None:
     if not isinstance(value, str) or not value:
         return None
     return _resolve_path(config, value)
+
+
+def _pending_candidate_for_target(
+    pending_candidates: list[dict[str, Any]],
+    target_dir: Path,
+) -> dict[str, Any] | None:
+    normalized_target = target_dir.resolve()
+    for candidate in pending_candidates:
+        packet_id = str(candidate.get("packet_id") or "")
+        packet_dir = candidate.get("packet_dir")
+        if packet_id and packet_id == target_dir.name:
+            return candidate
+        if isinstance(packet_dir, str) and packet_dir:
+            if Path(packet_dir).resolve() == normalized_target:
+                return candidate
+    return None
+
+
+def _validate_pending_candidate_target(candidate: dict[str, Any]) -> None:
+    expected_target = "object_motion_causality_specificity"
+    checks = [
+        (
+            candidate.get("packet_kind") == "bounded_macro_recomposition",
+            "target candidate must be a bounded_macro_recomposition packet",
+        ),
+        (
+            candidate.get("proof_backed") is True,
+            "target candidate must be proof-backed",
+        ),
+        (
+            bool(candidate.get("proof_packet_id")),
+            "target candidate must link a proof packet",
+        ),
+        (
+            candidate.get("reader_state_evaluated") is False,
+            "target candidate has already been reader-state evaluated",
+        ),
+        (
+            candidate.get("next_required_evidence") == "internal_reader_state_evaluation",
+            "target candidate does not require internal_reader_state_evaluation",
+        ),
+        (
+            bool(candidate.get("current_best_candidate_remains")),
+            "target candidate must preserve the current best until follow-up synthesis",
+        ),
+        (
+            candidate.get("supersession_pending_reader_state") is True,
+            "target candidate is not pending reader-state supersession evidence",
+        ),
+        (
+            candidate.get("selected_residual_target_id") == expected_target
+            or candidate.get("target_scope") == expected_target
+            or candidate.get("target_movement") == expected_target,
+            "target candidate is not the object_motion_causality_specificity residual target",
+        ),
+    ]
+    for passed, message in checks:
+        if not passed:
+            raise ValueError(message)
 
 
 def _model_call_by_source(model_results: list[ModelDriverResult]) -> dict[str, str]:

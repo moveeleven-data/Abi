@@ -453,6 +453,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Autonomous evidence synthesis packet directory to consume.",
     )
     autonomous_reader_state_eval_parser.add_argument(
+        "--target-candidate-packet",
+        type=Path,
+        required=False,
+        help=(
+            "Optional provisional candidate packet directory to evaluate when "
+            "synthesis preserves a different current best."
+        ),
+    )
+    autonomous_reader_state_eval_parser.add_argument(
         "--allow-live-model",
         action="store_true",
         help="Explicitly allow guarded live-model paths.",
@@ -788,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
             config,
             client_name=args.client,
             synthesis_packet=args.synthesis_packet,
+            target_candidate_packet=args.target_candidate_packet,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
         )
@@ -1180,6 +1190,7 @@ def _cmd_autonomous_reader_state_eval(
     *,
     client_name: str,
     synthesis_packet: Path,
+    target_candidate_packet: Path | None,
     allow_live_model: bool,
     max_model_calls: int,
 ) -> int:
@@ -1187,6 +1198,7 @@ def _cmd_autonomous_reader_state_eval(
         config,
         client_name=client_name,
         synthesis_packet=synthesis_packet,
+        target_candidate_packet=target_candidate_packet,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
     )

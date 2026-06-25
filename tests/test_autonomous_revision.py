@@ -9275,6 +9275,434 @@ def test_autonomous_evidence_synthesis_consumes_object_event_reader_state(tmp_pa
     assert final_report.refused is True
 
 
+def test_autonomous_evidence_synthesis_surfaces_proof_backed_residual_candidate(
+    tmp_path,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    config = chain["config"]
+    run_id = chain["run_id"]
+    residual_clients = []
+    residual = run_residual_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory(residual_clients),
+    )
+    assert residual.exit_code == 0
+    assert residual.payload["accepted"] is True
+    assert residual.payload["base_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert residual.payload["selected_residual_target_id"] == (
+        OBJECT_MOTION_CAUSALITY_TARGET_ID
+    )
+    assert residual.payload["selected_region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    assert residual.payload["authorization_consumed"] is True
+    assert residual.payload["candidate_generated"] is True
+
+    proof_clients = []
+    proof = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation-model",
+        client_factory=executed_ablation_stub_factory(proof_clients),
+    )
+    assert proof.exit_code == 0
+    assert proof.payload["accepted"] is True
+    _rewrite_macro2_proof(proof.payload, useful=True)
+
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_autonomous_evidence_synthesis(config, run_id=run_id)
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    packet_dir = Path(str(result.payload["packet_dir"]))
+
+    manifest = read_payload(packet_dir / "autonomous_evidence_synthesis_subject_manifest.json")
+    assert residual.payload["packet_id"] in manifest["residual_candidate_packets_consumed"]
+    assert proof.payload["packet_id"] in manifest[
+        "residual_candidate_ablation_packets_consumed"
+    ]
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    residual_row = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "bounded_macro_recomposition"
+        and row["packet_id"] == residual.payload["packet_id"]
+    ][0]
+    assert residual_row["base_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert residual_row["selected_residual_target_id"] == OBJECT_MOTION_CAUSALITY_TARGET_ID
+    assert residual_row["selected_region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    assert residual_row["source_authorization_packet_id"] == chain[
+        "residual_generation_authorization"
+    ]["packet_id"]
+    assert residual_row["authorization_consumed"] is True
+    assert residual_row["candidate_generated"] is True
+    assert residual_row["target_unit_count"] == 3
+    assert residual_row["target_unit_ids"]
+    assert residual_row["protected_effects_recorded"] is True
+    assert residual_row["no_nonselected_region_edits"] is True
+    assert residual_row["reader_state_evaluated"] is False
+    assert residual_row["finalization_eligible"] is False
+    assert residual_row["no_phase_shift_claim"] is True
+
+    proof_row = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "executed_ablation"
+        and row["packet_id"] == proof.payload["packet_id"]
+    ][0]
+    assert proof_row["source_revision_packet_id"] == residual.payload["packet_id"]
+    assert proof_row["source_revision_packet_kind"] == "bounded_macro_recomposition"
+    assert proof_row["normalized_subject_kind"] == "bounded_macro_recomposition"
+    assert proof_row["causal_status"] == "useful_but_insufficient"
+    assert proof_row["repair_has_causal_support"] is True
+    assert proof_row["revert_performs_same_or_better"] is False
+    assert proof_row["reverting_patch_weakens_candidate"] is True
+    assert proof_row["countable_evidence_variant_count"] == 3
+    assert proof_row["comparison_internal_consistency"] is True
+    assert proof_row["model_backed"] is True
+    assert proof_row["fixture_only"] is False
+    assert proof_row["finalization_eligible"] is False
+
+    causal = read_payload(packet_dir / "causal_status_summary.json")
+    assert residual.payload["packet_id"] in causal["residual_candidate_packet_ids"]
+    assert proof.payload["packet_id"] in causal["residual_candidate_proof_packet_ids"]
+    assert residual.payload["packet_id"] in causal[
+        "residual_candidate_proof_backed_pending_packet_ids"
+    ]
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == chain["object_event"]["packet_id"]
+    assert selected["reader_state_evaluated"] is True
+    assert selected["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    residual_option = [
+        option
+        for option in best["candidate_options"]
+        if option["packet_id"] == residual.payload["packet_id"]
+    ][0]
+    assert residual_option["candidate_proof_linked"] is True
+    assert residual_option["proof_packet_id"] == proof.payload["packet_id"]
+    assert residual_option["proof_supports_candidate"] is True
+    assert residual_option["supersession_eligible"] is True
+    assert residual_option["supersession_pending_reader_state"] is True
+    assert residual_option["reader_state_evaluated"] is False
+    assert residual_option["selected_residual_target_id"] == OBJECT_MOTION_CAUSALITY_TARGET_ID
+    assert best["proof_backed_pending_candidate_count"] == 1
+    assert best["current_best_preserved_pending_reader_state"] is True
+
+    queue = read_payload(packet_dir / "provisional_candidate_queue.json")
+    pending = queue["pending_candidates"][0]
+    assert pending["packet_id"] == residual.payload["packet_id"]
+    assert pending["proof_backed"] is True
+    assert pending["proof_packet_id"] == proof.payload["packet_id"]
+    assert pending["reader_state_evaluated"] is False
+    assert pending["finalization_eligible"] is False
+    assert pending["supersession_pending_reader_state"] is True
+    assert pending["current_best_candidate_remains"] == chain["object_event"]["packet_id"]
+    assert pending["next_required_evidence"] == "internal_reader_state_evaluation"
+    assert pending["recommended_next_action"] == (
+        f"run_internal_reader_state_evaluation_on_{residual.payload['packet_id']}"
+    )
+    assert queue["proof_backed_pending_count"] == 1
+    assert queue["current_best_candidate_packet_id"] == chain["object_event"]["packet_id"]
+
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    blocker_ids = {blocker["blocker_id"] for blocker in blockers["residual_blockers"]}
+    assert (
+        f"{OBJECT_MOTION_CAUSALITY_TARGET_ID}_proof_backed_candidate_generated"
+        in blocker_ids
+    )
+    assert f"reader_state_evaluation_missing_for_{residual.payload['packet_id']}" in (
+        blocker_ids
+    )
+    assert "strongest_rival_still_blocks_residual_candidate" in blocker_ids
+    assert blockers["proof_backed_residual_candidate_exists"] is True
+    assert blockers["residual_candidate_reader_state_missing"] is True
+    assert blockers["residual_candidate_next_required_evidence"] == (
+        "internal_reader_state_evaluation"
+    )
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["recommendation"] == (
+        "preserve_current_best_and_run_reader_state_evaluation_on_provisional_residual_candidate"
+    )
+    assert decision["next_recommended_action"] == (
+        f"run_internal_reader_state_evaluation_on_{residual.payload['packet_id']}"
+    )
+    assert decision["provisional_residual_candidate_reader_state_evaluation_recommended"] is True
+    assert decision["no_phase_shift_claim"] is True
+
+    brief = read_payload(packet_dir / "macro_recomposition_brief.json")
+    assert brief["brief_type"] == (
+        "provisional_residual_candidate_reader_state_evaluation_brief_not_artifact"
+    )
+    assert brief["current_best_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert brief["provisional_candidate_packet_id"] == residual.payload["packet_id"]
+    assert brief["proof_basis_packet_id"] == proof.payload["packet_id"]
+    assert brief["next_evidence_need"] == "internal_reader_state_evaluation"
+    assert brief["run_internal_reader_state_evaluation_before_further_recomposition"] is True
+    assert brief["run_another_macro_recomposition_now"] is False
+    assert brief["no_phase_shift_claim"] is True
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    gate_results = {gate_result["gate_name"]: gate_result for gate_result in gate["gate_results"]}
+    assert gate_results["residual_candidate_evidence_consumed"]["passed"] is True
+    assert gate_results["residual_candidate_proof_linked"]["passed"] is True
+    assert gate_results["residual_candidate_reader_state_missing"]["passed"] is True
+    assert gate_results["no_final_claim"]["passed"] is True
+    assert gate_results["no_phase_shift_claim"]["passed"] is True
+    assert gate["residual_candidate_evidence_consumed"] is True
+    assert gate["residual_candidate_proof_linked"] is True
+    assert gate["residual_candidate_reader_state_missing"] is True
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    packet = read_payload(packet_dir / "autonomous_evidence_synthesis_packet.json")
+    assert residual.payload["packet_id"] in packet["residual_candidate_packets_consumed"]
+    assert proof.payload["packet_id"] in packet[
+        "residual_candidate_ablation_packets_consumed"
+    ]
+    assert packet["best_current_candidate"]["packet_id"] == chain["object_event"]["packet_id"]
+    assert packet["provisional_pending_candidate_count"] == 1
+    assert packet["proof_backed_pending_candidate_count"] == 1
+    assert packet["residual_candidate_reader_state_missing"] is True
+    assert packet["next_recommended_action"] == (
+        f"run_internal_reader_state_evaluation_on_{residual.payload['packet_id']}"
+    )
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_reader_state_eval_targets_proof_backed_provisional_residual_candidate(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_residual_candidate_authorization_chain(tmp_path)
+    config = chain["config"]
+    run_id = chain["run_id"]
+    residual_clients = []
+    residual = run_residual_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-object-motion-model",
+        client_factory=object_motion_causality_stub_factory(residual_clients),
+    )
+    assert residual.exit_code == 0
+    assert residual.payload["accepted"] is True
+
+    proof_clients = []
+    proof = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation-model",
+        client_factory=executed_ablation_stub_factory(proof_clients),
+    )
+    assert proof.exit_code == 0
+    assert proof.payload["accepted"] is True
+    _rewrite_macro2_proof(proof.payload, useful=True)
+
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["accepted"] is True
+
+    synthesis_packet_dir = Path(str(synthesis.payload["packet_dir"]))
+    residual_packet_dir = Path(str(residual.payload["packet_dir"]))
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    unsafe_default = run_internal_reader_state_evaluation(
+        config,
+        client_name="fake",
+        synthesis_packet=synthesis_packet_dir,
+    )
+    assert unsafe_default.exit_code == 1
+    assert unsafe_default.payload["accepted"] is False
+    assert unsafe_default.payload["refused"] is True
+    assert unsafe_default.payload["counts"]["model_calls"] == 0
+    assert "provisional candidate" in unsafe_default.payload["message"]
+    assert residual.payload["packet_id"] in unsafe_default.payload["message"]
+    assert chain["object_event"]["packet_id"] in unsafe_default.payload["message"]
+    assert "--target-candidate-packet" in unsafe_default.payload["message"]
+
+    openai_allow_guard = run_internal_reader_state_evaluation(
+        config,
+        client_name="openai",
+        synthesis_packet=synthesis_packet_dir,
+        target_candidate_packet=residual_packet_dir,
+    )
+    assert openai_allow_guard.exit_code == 1
+    assert openai_allow_guard.payload["counts"]["model_calls"] == 0
+    assert "--allow-live-model" in openai_allow_guard.payload["message"]
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    openai_key_guard = run_internal_reader_state_evaluation(
+        config,
+        client_name="openai",
+        synthesis_packet=synthesis_packet_dir,
+        target_candidate_packet=residual_packet_dir,
+        allow_live_model=True,
+        max_model_calls=5,
+    )
+    assert openai_key_guard.exit_code == 1
+    assert openai_key_guard.payload["counts"]["model_calls"] == 0
+    assert "OPENAI_API_KEY" in openai_key_guard.payload["message"]
+
+    openai_budget_guard = run_internal_reader_state_evaluation(
+        config,
+        client_name="openai",
+        synthesis_packet=synthesis_packet_dir,
+        target_candidate_packet=residual_packet_dir,
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=4,
+    )
+    assert openai_budget_guard.exit_code == 1
+    assert openai_budget_guard.payload["counts"]["model_calls"] == 0
+    assert "below required budget" in openai_budget_guard.payload["message"]
+
+    targeted = run_internal_reader_state_evaluation(
+        config,
+        client_name="fake",
+        synthesis_packet=synthesis_packet_dir,
+        target_candidate_packet=residual_packet_dir,
+    )
+    assert targeted.exit_code == 0
+    assert targeted.payload["accepted"] is True
+    assert targeted.payload["counts"]["model_calls"] == 0
+    assert targeted.payload["selected_candidate_packet_id"] == residual.payload["packet_id"]
+    assert targeted.payload["evaluated_candidate_packet_id"] == residual.payload["packet_id"]
+    assert targeted.payload["evaluated_candidate_is_provisional"] is True
+    assert targeted.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert targeted.payload["proof_packet_id"] == proof.payload["packet_id"]
+    assert targeted.payload["target_scope"] == OBJECT_MOTION_CAUSALITY_TARGET_ID
+    assert targeted.payload["target_movement"] == OBJECT_MOTION_CAUSALITY_TARGET_ID
+    assert targeted.payload["reader_state_eval_reason"] == (
+        "supersession_pending_reader_state"
+    )
+    assert targeted.payload["candidate_generated"] is False
+    assert targeted.payload["finalization_eligible"] is False
+    assert targeted.payload["no_phase_shift_claim"] is True
+    assert targeted.payload["next_recommended_action"] == (
+        "review_provisional_residual_reader_state_eval_before_synthesis"
+    )
+
+    reader_packet_dir = Path(str(targeted.payload["packet_dir"]))
+    manifest = read_payload(
+        reader_packet_dir / "internal_reader_state_eval_subject_manifest.json"
+    )
+    assert manifest["selected_candidate_packet_id"] == residual.payload["packet_id"]
+    assert manifest["evaluated_candidate_packet_id"] == residual.payload["packet_id"]
+    assert manifest["evaluated_candidate_is_provisional"] is True
+    assert manifest["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert manifest["proof_packet_id"] == proof.payload["packet_id"]
+    assert manifest["selected_region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    assert manifest["target_unit_ids"]
+
+    reader_subject = read_payload(
+        reader_packet_dir / "selected_candidate_reader_subject.json"
+    )
+    assert reader_subject["evaluation_subject"] == (
+        "targeted_provisional_residual_candidate"
+    )
+    assert reader_subject["selected_macro_candidate"]["packet_id"] == residual.payload[
+        "packet_id"
+    ]
+    assert reader_subject["selected_macro_candidate"]["packet_id"] != chain["object_event"][
+        "packet_id"
+    ]
+    assert reader_subject["current_best_candidate"]["packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert reader_subject["selected_macro_candidate"]["proof_packet_id"] == proof.payload[
+        "packet_id"
+    ]
+
+    packet = read_payload(reader_packet_dir / "internal_reader_state_eval_packet.json")
+    assert packet["accepted"] is True
+    assert packet["selected_candidate_packet_id"] == residual.payload["packet_id"]
+    assert packet["evaluated_candidate_is_provisional"] is True
+    assert packet["current_best_candidate_packet_id"] == chain["object_event"]["packet_id"]
+    assert packet["proof_packet_id"] == proof.payload["packet_id"]
+    assert packet["candidate_generated"] is False
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+    assert packet["next_recommended_action"] == (
+        "review_provisional_residual_reader_state_eval_before_synthesis"
+    )
+
+    gate = read_payload(reader_packet_dir / "internal_reader_state_eval_gate_report.json")
+    gate_results = {item["gate_name"]: item for item in gate["gate_results"]}
+    assert gate_results["synthesis_packet_consumed"]["passed"] is True
+    assert gate_results["target_candidate_resolved"]["passed"] is True
+    assert gate_results["provisional_candidate_targeted"]["passed"] is True
+    assert gate_results["proof_packet_linked"]["passed"] is True
+    assert gate_results["selected_candidate_evaluated"]["passed"] is True
+    assert gate_results["first_pass_trace_exists"]["passed"] is True
+    assert gate_results["reread_trace_exists"]["passed"] is True
+    assert gate_results["reader_delta_report_exists"]["passed"] is True
+    assert gate_results["rival_reader_state_comparison_exists"]["passed"] is True
+    assert gate_results["no_unresolved_internal_blockers"]["passed"] is False
+    assert gate_results["no_fixture_only_core_evidence"]["passed"] is False
+    assert gate_results["strongest_rival_defeated"]["passed"] is False
+    assert gate_results["human_validation_present"]["passed"] is False
+    assert gate_results["finalization_eligible"]["passed"] is False
+    assert gate_results["no_final_claim"]["passed"] is True
+    assert gate_results["no_phase_shift_claim"]["passed"] is True
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
 def test_autonomous_evidence_synthesis_links_object_event_reader_state_by_hash(
     tmp_path,
 ):
