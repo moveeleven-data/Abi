@@ -105,6 +105,8 @@ TACTILE_RESIDUAL_TARGET_ID = "tactile_inevitability_gap"
 TACTILE_FORCE_REMOVAL_OPERATION_ID = (
     "operation_preserve_object_motion_remove_tactile_force_relation"
 )
+TACTILE_REVERT_OPERATION_ID = "operation_revert_tactile_intervention_to_current_best"
+TACTILE_DECORATIVE_OPERATION_ID = "operation_decorative_or_abstract_tactile_control"
 
 ABLATION_INFORMED_REQUIRED_FILES = (
     "cycle2_packet.json",
@@ -750,8 +752,9 @@ def _prompt_for_internal_comparison(
             ),
             "target_aware_comparison_must_distinguish": (
                 [
-                    "full tactile candidate",
-                    "current-best object-motion baseline",
+                    f"full tactile candidate {subject.revision_packet_id}",
+                    f"{subject.base_candidate_packet_id} current-best object-motion baseline",
+                    "revert-to-current-best variant",
                     "object-motion-preserved tactile-force-removed variant",
                     "decorative or abstract tactile control",
                     "strongest rival",
@@ -761,6 +764,8 @@ def _prompt_for_internal_comparison(
             ),
             "target_aware_comparison_must_not_frame_as": (
                 [
+                    "revert variant restoring tactile force",
+                    "baseline as the full tactile candidate",
                     "proof/no-outside-answer isolation",
                     "record compression",
                     "macro summary",
@@ -777,13 +782,31 @@ def _prompt_for_internal_comparison(
                     "operation_type": variant["operation_type"],
                     "text": variant["text"],
                     "evidence_countable": variant["evidence_countable"],
+                    "variant_role": variant.get("variant_role"),
+                    "expected_effect_direction": variant.get("expected_effect_direction"),
+                    "expected_removed_mechanism": variant.get(
+                        "expected_removed_mechanism"
+                    ),
+                    "expected_preserved_mechanism": variant.get(
+                        "expected_preserved_mechanism"
+                    ),
+                    "comparator_do_not_confuse_with": variant.get(
+                        "comparator_do_not_confuse_with",
+                        [],
+                    ),
+                    "target_role_consistency_requirements": variant.get(
+                        "target_role_consistency_requirements",
+                        [],
+                    ),
                 }
                 for variant in variant_set["variants"]
             ],
             "comparison_contract": (
                 "Return interpretation only for exactly the provided variant_id values. "
                 "Do not decide execution status, evidence_countable, gates, finalization, "
-                "or rival defeat."
+                "or rival defeat. For target-aware tactile ablations, the decisive "
+                "question is whether the full candidate's tactile force/contact "
+                "necessity adds value beyond the current-best object-motion baseline."
             ),
         }
     )
@@ -829,6 +852,20 @@ def _merge_model_internal_comparison(
                 "operation_id": variant["operation_id"],
                 "evidence_countable": variant["evidence_countable"],
                 "planned_only": variant["planned_only"],
+                "variant_role": variant.get("variant_role"),
+                "expected_effect_direction": variant.get("expected_effect_direction"),
+                "expected_removed_mechanism": variant.get("expected_removed_mechanism"),
+                "expected_preserved_mechanism": variant.get(
+                    "expected_preserved_mechanism"
+                ),
+                "comparator_do_not_confuse_with": variant.get(
+                    "comparator_do_not_confuse_with",
+                    [],
+                ),
+                "target_role_consistency_requirements": variant.get(
+                    "target_role_consistency_requirements",
+                    [],
+                ),
                 "comparison_summary": row["comparison_summary"],
                 "reader_state_effect_estimate": row["reader_state_effect_estimate"],
                 "rationale": row["rationale"],
@@ -1562,7 +1599,7 @@ def _build_tactile_residual_variant_set(
     variants = [
         _target_aware_macro_variant_from_text(
             variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[0],
-            operation_id="operation_revert_tactile_intervention_to_current_best",
+            operation_id=TACTILE_REVERT_OPERATION_ID,
             operation_type="revert_tactile_intervention_to_current_best",
             source_span_id=changed_ref,
             base_text=revised,
@@ -1602,7 +1639,7 @@ def _build_tactile_residual_variant_set(
         ),
         _target_aware_macro_variant_from_text(
             variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[2],
-            operation_id="operation_decorative_or_abstract_tactile_control",
+            operation_id=TACTILE_DECORATIVE_OPERATION_ID,
             operation_type="decorative_or_abstract_tactile_control",
             source_span_id=changed_ref,
             base_text=revised,
@@ -2262,6 +2299,7 @@ def _target_aware_macro_variant_from_text(
         {
             "target_aware_ablation": True,
             "legacy_generic_ablation_fallback": False,
+            **_tactile_variant_role_metadata(operation_id),
             "target_adapter_id": subject.target_adapter_id,
             "selected_residual_target_id": subject.selected_residual_target_id,
             "target_scope": subject.target_scope,
@@ -2288,6 +2326,93 @@ def _target_aware_macro_variant_from_text(
         }
     )
     return variant
+
+
+def _tactile_variant_role_metadata(operation_id: str) -> dict[str, object]:
+    if operation_id == TACTILE_REVERT_OPERATION_ID:
+        return {
+            "variant_role": "current_best_object_motion_baseline",
+            "expected_effect_direction": (
+                "removes residual tactile intervention and restores current-best object-motion baseline"
+            ),
+            "expected_removed_mechanism": "tactile_force_contact_necessity",
+            "expected_preserved_mechanism": "packet_0061 object-motion causality",
+            "must_not_be_described_as": [
+                "full tactile intervention",
+                "restored tactile force",
+                "restoring strong tactile-force contact",
+            ],
+            "comparator_do_not_confuse_with": [
+                "full tactile candidate",
+                "object-motion-preserved tactile-force-removed control",
+                "restored tactile force/contact",
+            ],
+            "target_role_consistency_requirements": [
+                "describe as current-best/object-motion baseline",
+                "do not say this variant restores tactile force/contact",
+                "do not count as full tactile intervention",
+            ],
+        }
+    if operation_id == TACTILE_FORCE_REMOVAL_OPERATION_ID:
+        return {
+            "variant_role": "tactile_removed_object_motion_preserved_control",
+            "expected_effect_direction": (
+                "preserves object-motion consequences while removing force/contact necessity"
+            ),
+            "expected_removed_mechanism": "force/contact/pressure/weight/impact necessity",
+            "expected_preserved_mechanism": (
+                "object-motion trace/crossing/fall/crack causality"
+            ),
+            "must_not_be_described_as": [
+                "full tactile intervention",
+                "embodied tactile causality",
+                "restored tactile force",
+            ],
+            "comparator_do_not_confuse_with": [
+                "full tactile candidate",
+                "decorative or abstract tactile control",
+                "generic macro ablation",
+            ],
+            "target_role_consistency_requirements": [
+                "treat as primary test of whether tactile force adds value beyond object motion",
+                "do not describe as full tactile intervention",
+                "confirm object motion is preserved while tactile force/contact is removed",
+            ],
+        }
+    if operation_id == TACTILE_DECORATIVE_OPERATION_ID:
+        return {
+            "variant_role": "noncausal_vividness_or_explanation_control",
+            "expected_effect_direction": (
+                "replaces tactile causality with surface vividness or explicit explanation"
+            ),
+            "expected_removed_mechanism": "causal tactile force/contact",
+            "expected_preserved_mechanism": "surface vividness or explicit explanation",
+            "must_not_be_described_as": [
+                "embodied tactile causality",
+                "embodied tactile inevitability",
+                "material necessity",
+            ],
+            "comparator_do_not_confuse_with": [
+                "full tactile candidate",
+                "object-motion-preserved tactile-force-removed control",
+            ],
+            "target_role_consistency_requirements": [
+                "do not count as embodied tactile inevitability",
+                "describe as noncausal vividness or explanation",
+                "do not treat as material force/contact proof",
+            ],
+        }
+    return {
+        "variant_role": "diagnostic_control",
+        "expected_effect_direction": "not countable target-aware proof",
+        "expected_removed_mechanism": None,
+        "expected_preserved_mechanism": None,
+        "must_not_be_described_as": [],
+        "comparator_do_not_confuse_with": [],
+        "target_role_consistency_requirements": [
+            "do not count diagnostic controls as target-aware causal proof"
+        ],
+    }
 
 
 def _remove_tactile_force_relation(
@@ -2583,6 +2708,20 @@ def _build_internal_reader_comparison(
                 "operation_id": variant["operation_id"],
                 "evidence_countable": variant["evidence_countable"],
                 "planned_only": variant["planned_only"],
+                "variant_role": variant.get("variant_role"),
+                "expected_effect_direction": variant.get("expected_effect_direction"),
+                "expected_removed_mechanism": variant.get("expected_removed_mechanism"),
+                "expected_preserved_mechanism": variant.get(
+                    "expected_preserved_mechanism"
+                ),
+                "comparator_do_not_confuse_with": variant.get(
+                    "comparator_do_not_confuse_with",
+                    [],
+                ),
+                "target_role_consistency_requirements": variant.get(
+                    "target_role_consistency_requirements",
+                    [],
+                ),
                 "comparison_summary": _variant_summary(variant),
                 "reader_state_effect_estimate": _variant_effect_estimate(variant),
                 "rationale": "Deterministic internal comparison, not human reader evidence.",
@@ -2868,6 +3007,12 @@ def _build_comparison_consistency_report(
             contradictions.append(
                 f"{row.get('variant_id')} internal row counts planned-only evidence"
             )
+    role_report = _target_role_consistency_report(
+        variant_set=variant_set,
+        internal_comparison=internal_comparison,
+        old_new_comparison=old_new_comparison,
+    )
+    contradictions.extend(role_report["target_role_consistency_failures"])
     consistency_passed = not contradictions
     return {
         "worker": "comparison_consistency_report_v1_controller",
@@ -2876,10 +3021,158 @@ def _build_comparison_consistency_report(
         "contradiction_count": len(contradictions),
         "contradictory_verdicts_count_as_gate_evidence": False,
         "countable_as_gate_evidence": consistency_passed,
+        **role_report,
         "fixture_only": fixture_only,
         "not_human_data": True,
         "no_phase_shift_claim": True,
     }
+
+
+def _target_role_consistency_report(
+    *,
+    variant_set: dict[str, Any],
+    internal_comparison: dict[str, Any],
+    old_new_comparison: dict[str, Any],
+) -> dict[str, Any]:
+    if variant_set.get("target_aware_ablation") is not True:
+        return {
+            "target_role_consistency_checked": False,
+            "target_role_consistency_passed": True,
+            "target_role_consistency_failures": [],
+            "variant_role_alignment_by_id": {},
+            "comparator_row_operation_alignment_passed": True,
+            "causal_report_consistent_with_variant_roles": True,
+        }
+    variants_by_id = {str(variant["variant_id"]): variant for variant in variant_set["variants"]}
+    rows = [
+        row
+        for row in internal_comparison.get("comparison_rows", [])
+        if isinstance(row, dict)
+    ]
+    row_by_id = {str(row.get("variant_id")): row for row in rows}
+    failures: list[str] = []
+    alignment: dict[str, dict[str, object]] = {}
+    operation_alignment_passed = True
+    for variant_id, variant in variants_by_id.items():
+        row = row_by_id.get(variant_id)
+        row_text = _comparison_row_text(row or {})
+        expected_operation = str(variant.get("operation_id") or "")
+        actual_operation = str((row or {}).get("operation_id") or expected_operation)
+        operation_aligned = actual_operation == expected_operation
+        operation_alignment_passed = operation_alignment_passed and operation_aligned
+        row_failures = []
+        if row is None:
+            row_failures.append("missing comparator row")
+        if not operation_aligned:
+            row_failures.append(
+                f"row operation_id {actual_operation!r} does not match {expected_operation!r}"
+        )
+        row_failures.extend(_target_role_failures_for_row(variant, row_text))
+        row_stale_failures = _stale_tactile_comparator_label_failures(row_text)
+        row_failures.extend(row_stale_failures)
+        alignment[variant_id] = {
+            "operation_id": expected_operation,
+            "variant_role": variant.get("variant_role"),
+            "operation_aligned": operation_aligned,
+            "role_aligned": not row_failures,
+            "failures": row_failures,
+        }
+        failures.extend(f"{variant_id}: {failure}" for failure in row_failures)
+    causal_consistent = not (
+        bool(old_new_comparison.get("tactile_force_contact_adds_value"))
+        and bool(failures)
+    )
+    if not causal_consistent:
+        failures.append(
+            "causal report says tactile adds value while comparator rows contradict variant roles"
+        )
+    return {
+        "target_role_consistency_checked": True,
+        "target_role_consistency_passed": not failures,
+        "target_role_consistency_failures": failures,
+        "variant_role_alignment_by_id": alignment,
+        "comparator_row_operation_alignment_passed": operation_alignment_passed,
+        "causal_report_consistent_with_variant_roles": causal_consistent,
+    }
+
+
+def _comparison_row_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(field) or "")
+        for field in (
+            "comparison_summary",
+            "reader_state_effect_estimate",
+            "rationale",
+            "risk_notes",
+            "summary",
+        )
+    ).lower()
+
+
+def _target_role_failures_for_row(
+    variant: dict[str, Any],
+    row_text: str,
+) -> list[str]:
+    operation_id = str(variant.get("operation_id") or "")
+    failures: list[str] = []
+    if operation_id == TACTILE_REVERT_OPERATION_ID:
+        if _describes_restored_tactile_force(row_text):
+            failures.append(
+                "revert-to-current-best row describes restored tactile force/contact"
+            )
+        if "full tactile intervention" in row_text:
+            failures.append("revert-to-current-best row is described as full tactile intervention")
+    elif operation_id == TACTILE_FORCE_REMOVAL_OPERATION_ID:
+        if "full tactile intervention" in row_text or "full tactile candidate" in row_text:
+            failures.append("tactile-removed control is described as full tactile intervention")
+        if _describes_restored_tactile_force(row_text):
+            failures.append("tactile-removed control is described as restoring tactile force/contact")
+    elif operation_id == TACTILE_DECORATIVE_OPERATION_ID:
+        if (
+            "embodied tactile causality" in row_text
+            or "embodied tactile inevitability" in row_text
+            or "material necessity" in row_text
+        ):
+            failures.append(
+                "decorative/abstract control is described as embodied tactile causality"
+            )
+    return failures
+
+
+def _describes_restored_tactile_force(text: str) -> bool:
+    restored = any(term in text for term in ("restor", "restore", "restores", "restoring"))
+    tactile = any(
+        term in text
+        for term in (
+            "tactile force",
+            "tactile-force",
+            "force/contact",
+            "force contact",
+            "contact force",
+            "tactile contact",
+        )
+    )
+    return restored and tactile
+
+
+def _stale_tactile_comparator_label_failures(
+    row_text: str,
+) -> list[str]:
+    stale_terms = (
+        "proof/no-outside-answer",
+        "proof no outside answer",
+        "record compression",
+        "record-label compression",
+        "macro summary",
+        "generic macro",
+        "return echo",
+        "return-echo",
+    )
+    return [
+        f"stale generic macro comparator label used: {term}"
+        for term in stale_terms
+        if term in row_text
+    ]
 
 
 def _build_causal_effect_report(
@@ -2960,8 +3253,18 @@ def _build_tactile_causal_effect_report(
     consistency_report: dict[str, Any],
     fixture_only: bool,
 ) -> dict[str, Any]:
-    support = bool(old_new_comparison["tactile_intervention_has_causal_support"])
-    if not consistency_report["comparison_internal_consistency"]:
+    role_consistency_passed = bool(
+        consistency_report.get("target_role_consistency_passed", True)
+    )
+    internal_consistency_passed = bool(
+        consistency_report["comparison_internal_consistency"]
+    )
+    raw_support = bool(old_new_comparison["tactile_intervention_has_causal_support"])
+    support = raw_support and role_consistency_passed and internal_consistency_passed
+    if not role_consistency_passed:
+        status = "inconclusive_due_to_comparator_role_confusion"
+        next_action = "review_target_aware_ablation_comparator_inconsistency"
+    elif not internal_consistency_passed:
         status = "ambiguous"
         next_action = "repair target-aware tactile comparison contradictions before using evidence"
     elif support:
@@ -2994,7 +3297,8 @@ def _build_tactile_causal_effect_report(
         "tactile_intervention_has_causal_support": support,
         "tactile_force_contact_adds_value": bool(
             old_new_comparison["tactile_force_contact_adds_value"]
-        ),
+        )
+        and role_consistency_passed,
         "object_motion_preserved_tactile_removed_performs_same_or_better": bool(
             old_new_comparison[
                 "object_motion_preserved_tactile_removed_performs_same_or_better"
@@ -3008,11 +3312,14 @@ def _build_tactile_causal_effect_report(
                 "decorative_or_abstract_control_performs_same_or_better"
             ]
         ),
-        "packet_0063_earns_reader_state_eval": bool(
-            old_new_comparison["packet_0063_earns_reader_state_eval"]
+        "packet_0063_earns_reader_state_eval": support,
+        "candidate_earns_reader_state_eval": support,
+        "target_role_consistency_checked": bool(
+            consistency_report.get("target_role_consistency_checked", False)
         ),
-        "candidate_earns_reader_state_eval": bool(
-            old_new_comparison["candidate_earns_reader_state_eval"]
+        "target_role_consistency_passed": role_consistency_passed,
+        "target_role_consistency_failures": list(
+            consistency_report.get("target_role_consistency_failures", [])
         ),
         "evidence_supporting": [
             variant["variant_id"]
@@ -3126,6 +3433,15 @@ def _build_gate_report(
             "operation_mismatch_variant_count"
         ],
         "comparison_internal_consistency": consistency_passed,
+        "target_role_consistency_checked": bool(
+            consistency_report.get("target_role_consistency_checked", False)
+        ),
+        "target_role_consistency_passed": bool(
+            consistency_report.get("target_role_consistency_passed", True)
+        ),
+        "target_role_consistency_failures": list(
+            consistency_report.get("target_role_consistency_failures", [])
+        ),
         "unresolved_blockers": unresolved,
         "rival_remains_blocking": causal_effect_report[
             "strongest_rival_pressure_remains_blocking"
@@ -3225,6 +3541,18 @@ def _build_packet_summary(
         "comparison_internal_consistency": payloads["comparison_consistency_report"][
             "comparison_internal_consistency"
         ],
+        "target_role_consistency_checked": payloads["comparison_consistency_report"].get(
+            "target_role_consistency_checked",
+            False,
+        ),
+        "target_role_consistency_passed": payloads["comparison_consistency_report"].get(
+            "target_role_consistency_passed",
+            True,
+        ),
+        "target_role_consistency_failures": payloads["comparison_consistency_report"].get(
+            "target_role_consistency_failures",
+            [],
+        ),
         "gate_report": payloads["executed_ablation_gate_report"],
         "model_call_ids": [result.model_call.id for result in model_results],
         "non_final": True,
@@ -4469,6 +4797,22 @@ def _summary_payload(
             ),
         },
         "model_calls": [result.model_call_to_dict() for result in model_results],
+        "comparison_internal_consistency": payloads.get(
+            "comparison_consistency_report",
+            {},
+        ).get("comparison_internal_consistency"),
+        "target_role_consistency_checked": payloads.get(
+            "comparison_consistency_report",
+            {},
+        ).get("target_role_consistency_checked"),
+        "target_role_consistency_passed": payloads.get(
+            "comparison_consistency_report",
+            {},
+        ).get("target_role_consistency_passed"),
+        "target_role_consistency_failures": payloads.get(
+            "comparison_consistency_report",
+            {},
+        ).get("target_role_consistency_failures", []),
         "gate_report": payloads.get("executed_ablation_gate_report"),
         "message": message,
     }

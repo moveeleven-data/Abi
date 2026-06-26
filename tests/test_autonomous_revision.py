@@ -1580,20 +1580,49 @@ class StubExecutedAblationClient:
         if self.mode == "malformed":
             return dump_json({"comparison_rows": "wrong", "not_human_data": True})
         prompt = json.loads(request.input_text)
+        rows = []
+        for variant in prompt["variants"]:
+            summary = "stub comparison interpretation"
+            rationale = "stub rationale, not human data"
+            risk_notes = "stub risk note"
+            if (
+                self.mode == "confused_tactile_revert"
+                and variant["operation_id"]
+                == "operation_revert_tactile_intervention_to_current_best"
+            ):
+                summary = (
+                    "The revert restores strong tactile-force contact and reads as the "
+                    "full tactile intervention."
+                )
+                rationale = (
+                    "This row confuses the current-best object-motion baseline with "
+                    "the restored tactile repair, not human data."
+                )
+            if (
+                self.mode == "confused_tactile_removed"
+                and variant["operation_id"]
+                == "operation_preserve_object_motion_remove_tactile_force_relation"
+            ):
+                summary = (
+                    "The tactile-removed control is effectively the full tactile "
+                    "candidate with restored force/contact."
+                )
+            if self.mode == "stale_tactile_macro_label":
+                risk_notes = "This uses proof/no-outside-answer and record compression labels."
+            rows.append(
+                {
+                    "variant_id": variant["variant_id"],
+                    "comparison_summary": summary,
+                    "reader_state_effect_estimate": "stub reader-state estimate",
+                    "rationale": rationale,
+                    "uncertainty": "medium",
+                    "risk_notes": risk_notes,
+                    "not_human_data": True,
+                }
+            )
         return dump_json(
             {
-                "comparison_rows": [
-                    {
-                        "variant_id": variant["variant_id"],
-                        "comparison_summary": "stub comparison interpretation",
-                        "reader_state_effect_estimate": "stub reader-state estimate",
-                        "rationale": "stub rationale, not human data",
-                        "uncertainty": "medium",
-                        "risk_notes": "stub risk note",
-                        "not_human_data": True,
-                    }
-                    for variant in prompt["variants"]
-                ],
+                "comparison_rows": rows,
                 "summary": "stub executed ablation comparison",
                 "not_human_data": True,
             }
@@ -5037,6 +5066,133 @@ def test_executed_ablation_tactile_openai_guard_refuses_before_model_call(
     assert clients == []
 
 
+def test_target_aware_ablation_openai_prompt_and_clean_output_preserve_roles(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    config, residual_payload = build_fake_tactile_residual_candidate_packet(tmp_path)
+    clients = []
+
+    result = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual_payload["packet_dir"],
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-model",
+        client_factory=executed_ablation_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+    prompt = json.loads(clients[0].requests[0].input_text)
+    assert "revert-to-current-best variant" in prompt[
+        "target_aware_comparison_must_distinguish"
+    ]
+    assert "object-motion-preserved tactile-force-removed variant" in prompt[
+        "target_aware_comparison_must_distinguish"
+    ]
+    revert_variant = next(
+        variant
+        for variant in prompt["variants"]
+        if variant["operation_id"]
+        == "operation_revert_tactile_intervention_to_current_best"
+    )
+    tactile_removed = next(
+        variant
+        for variant in prompt["variants"]
+        if variant["operation_id"]
+        == "operation_preserve_object_motion_remove_tactile_force_relation"
+    )
+    assert revert_variant["variant_role"] == "current_best_object_motion_baseline"
+    assert "full tactile candidate" in revert_variant["comparator_do_not_confuse_with"]
+    assert (
+        tactile_removed["variant_role"]
+        == "tactile_removed_object_motion_preserved_control"
+    )
+    assert "force/contact" in str(tactile_removed["expected_removed_mechanism"])
+
+    consistency = read_payload(
+        result.payload["artifact_paths"]["comparison_consistency_report"]
+    )
+    assert consistency["target_role_consistency_checked"] is True
+    assert consistency["target_role_consistency_passed"] is True
+    assert consistency["target_role_consistency_failures"] == []
+    assert consistency["comparison_internal_consistency"] is True
+
+    causal = read_payload(result.payload["artifact_paths"]["ablation_causal_effect_report"])
+    assert causal["selected_repair_causal_status"] == "useful_but_insufficient"
+    assert causal["tactile_intervention_has_causal_support"] is True
+    assert causal["packet_0063_earns_reader_state_eval"] is True
+
+    gate = read_payload(result.payload["artifact_paths"]["executed_ablation_gate_report"])
+    assert gate["target_role_consistency_checked"] is True
+    assert gate["target_role_consistency_passed"] is True
+    assert gate["eligible"] is False
+
+
+def test_target_aware_ablation_marks_role_confused_comparator_non_authoritative(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    config, residual_payload = build_fake_tactile_residual_candidate_packet(tmp_path)
+    clients = []
+
+    result = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual_payload["packet_dir"],
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-model",
+        client_factory=executed_ablation_stub_factory(
+            clients,
+            mode="confused_tactile_revert",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["target_role_consistency_passed"] is False
+    assert result.payload["comparison_internal_consistency"] is False
+
+    consistency = read_payload(
+        result.payload["artifact_paths"]["comparison_consistency_report"]
+    )
+    failures = "\n".join(consistency["target_role_consistency_failures"])
+    assert consistency["target_role_consistency_checked"] is True
+    assert consistency["target_role_consistency_passed"] is False
+    assert "revert-to-current-best row describes restored tactile force/contact" in failures
+    assert "causal report says tactile adds value" in failures
+    revert_alignment = next(
+        alignment
+        for alignment in consistency["variant_role_alignment_by_id"].values()
+        if alignment["operation_id"]
+        == "operation_revert_tactile_intervention_to_current_best"
+    )
+    assert revert_alignment["role_aligned"] is False
+
+    causal = read_payload(result.payload["artifact_paths"]["ablation_causal_effect_report"])
+    assert (
+        causal["selected_repair_causal_status"]
+        == "inconclusive_due_to_comparator_role_confusion"
+    )
+    assert causal["tactile_intervention_has_causal_support"] is False
+    assert causal["packet_0063_earns_reader_state_eval"] is False
+    assert (
+        causal["recommended_next_action"]
+        == "review_target_aware_ablation_comparator_inconsistency"
+    )
+
+    gate = read_payload(result.payload["artifact_paths"]["executed_ablation_gate_report"])
+    assert gate["target_role_consistency_passed"] is False
+    assert "comparison_internal_consistency" in gate["failed_gates"]
+    assert gate["eligible"] is False
+
+
 def test_target_aware_ablation_supersedes_prior_generic_ablation_metadata(tmp_path):
     config, residual_payload = build_fake_tactile_residual_candidate_packet(tmp_path)
     prior = run_executed_ablation(
@@ -5341,6 +5497,56 @@ def test_executed_ablation_consistency_report_flags_contradictions():
     assert any("rival" in item for item in report["contradictions"])
     assert any("revert performs" in item for item in report["contradictions"])
     assert any("operation mismatch" in item for item in report["contradictions"])
+
+
+def test_target_aware_ablation_consistency_rejects_stale_macro_labels():
+    variant_set = {
+        "target_aware_ablation": True,
+        "variants": [
+            {
+                "variant_id": "executed_ablation_variant_001",
+                "operation_id": "operation_preserve_object_motion_remove_tactile_force_relation",
+                "variant_role": "tactile_removed_object_motion_preserved_control",
+                "evidence_countable": True,
+                "operation_matches_actual_change": True,
+                "planned_only": False,
+            }
+        ],
+    }
+    internal = {
+        "comparison_rows": [
+            {
+                "variant_id": "executed_ablation_variant_001",
+                "operation_id": "operation_preserve_object_motion_remove_tactile_force_relation",
+                "evidence_countable": True,
+                "planned_only": False,
+                "comparison_summary": "This is a proof/no-outside-answer isolation test.",
+                "reader_state_effect_estimate": "It improves record compression.",
+                "rationale": "Stale generic macro framing.",
+                "risk_notes": "",
+            }
+        ]
+    }
+    old_new = {
+        "tactile_force_contact_adds_value": False,
+        "summary": "diagnostic only",
+        "rationale": "diagnostic only",
+        "comparison_basis": "diagnostic only",
+    }
+
+    report = _build_comparison_consistency_report(
+        variant_set=variant_set,
+        internal_comparison=internal,
+        old_new_comparison=old_new,
+        fixture_only=True,
+    )
+
+    failures = "\n".join(report["target_role_consistency_failures"])
+    assert report["target_role_consistency_checked"] is True
+    assert report["target_role_consistency_passed"] is False
+    assert report["comparison_internal_consistency"] is False
+    assert "proof/no-outside-answer" in failures
+    assert "record compression" in failures
 
 
 def test_executed_ablation_openai_guard_refuses_before_model_call(tmp_path, monkeypatch):
