@@ -873,6 +873,202 @@ def build_completed_residual_loop_review_chain(tmp_path: Path):
     return chain
 
 
+def build_completed_tactile_residual_loop_review_chain(tmp_path: Path):
+    chain = build_tactile_residual_candidate_authorization_chain(tmp_path)
+    config = chain["config"]
+    run_id = chain["run_id"]
+
+    residual = run_residual_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-tactile-model",
+        client_factory=residual_intervention_stub_factory([]),
+    )
+    assert residual.exit_code == 0
+    assert residual.payload["accepted"] is True
+
+    generic_proof = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation",
+        client_factory=executed_ablation_stub_factory([]),
+    )
+    assert generic_proof.exit_code == 0
+    _rewrite_tactile_proof_as_generic_non_authoritative(generic_proof.payload)
+
+    role_failed_proof = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation",
+        client_factory=executed_ablation_stub_factory([]),
+    )
+    assert role_failed_proof.exit_code == 0
+    _rewrite_tactile_proof_as_role_consistency_failed(role_failed_proof.payload)
+
+    fixture_proof = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=residual.payload["packet_dir"],
+    )
+    assert fixture_proof.exit_code == 0
+
+    authoritative_proof = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation",
+        client_factory=executed_ablation_stub_factory([]),
+    )
+    assert authoritative_proof.exit_code == 0
+    assert authoritative_proof.payload["accepted"] is True
+    assert authoritative_proof.payload["target_aware_ablation"] is True
+    assert authoritative_proof.payload["target_role_consistency_passed"] is True
+
+    pre_reader_synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert pre_reader_synthesis.exit_code == 0
+    assert pre_reader_synthesis.payload["accepted"] is True
+
+    fixture_reader_state = run_internal_reader_state_evaluation(
+        config,
+        client_name="fake",
+        synthesis_packet=Path(str(pre_reader_synthesis.payload["packet_dir"])),
+        target_candidate_packet=Path(str(residual.payload["packet_dir"])),
+    )
+    assert fixture_reader_state.exit_code == 0
+    assert fixture_reader_state.payload["accepted"] is True
+
+    def _reader_state_client_factory(model: str) -> FakeInternalReaderLabModelClient:
+        return FakeInternalReaderLabModelClient(provider="openai", model=model)
+
+    reader_state = run_internal_reader_state_evaluation(
+        config,
+        client_name="openai",
+        synthesis_packet=Path(str(pre_reader_synthesis.payload["packet_dir"])),
+        target_candidate_packet=Path(str(residual.payload["packet_dir"])),
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=5,
+        model="stub-reader-state-model",
+        client_factory=_reader_state_client_factory,
+    )
+    assert reader_state.exit_code == 0
+    assert reader_state.payload["accepted"] is True
+
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=run_id)
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["accepted"] is True
+    assert synthesis.payload["best_current_candidate"]["packet_id"] == residual.payload[
+        "packet_id"
+    ]
+    assert synthesis.payload["best_current_candidate"]["proof_packet_id"] == (
+        authoritative_proof.payload["packet_id"]
+    )
+    assert synthesis.payload["best_current_candidate"]["reader_state_packet_id"] == (
+        reader_state.payload["packet_id"]
+    )
+
+    loop_review = run_evidence_loop_review(
+        config,
+        synthesis_packet=Path(str(synthesis.payload["packet_dir"])),
+    )
+    assert loop_review.exit_code == 0
+    assert loop_review.payload["accepted"] is True
+
+    chain["residual_candidate"] = residual.payload
+    chain["generic_proof"] = generic_proof.payload
+    chain["role_failed_proof"] = role_failed_proof.payload
+    chain["fixture_proof"] = fixture_proof.payload
+    chain["residual_proof"] = authoritative_proof.payload
+    chain["fixture_reader_state"] = fixture_reader_state.payload
+    chain["residual_reader_state"] = reader_state.payload
+    chain["residual_synthesis"] = synthesis.payload
+    chain["residual_loop_review"] = loop_review.payload
+    return chain
+
+
+def retarget_cleanup_chain_to_proof(
+    chain: dict[str, object],
+    proof_payload: dict[str, object],
+) -> None:
+    proof_packet_id = str(proof_payload["packet_id"])
+    proof_packet_dir = str(proof_payload["packet_dir"])
+    synthesis_dir = Path(str(chain["residual_synthesis"]["packet_dir"]))
+    loop_dir = Path(str(chain["residual_loop_review"]["packet_dir"]))
+    reader_state_dir = Path(str(chain["residual_reader_state"]["packet_dir"]))
+
+    def _update_best_candidate(candidate: dict[str, object]) -> None:
+        candidate["proof_packet_id"] = proof_packet_id
+        candidate["proof_packet_dir"] = proof_packet_dir
+
+    def _update_synthesis_packet(payload: dict[str, object]) -> None:
+        _update_best_candidate(payload["best_current_candidate"])
+
+    def _update_best_selection(payload: dict[str, object]) -> None:
+        _update_best_candidate(payload["selected_best_candidate"])
+
+    def _update_graph(payload: dict[str, object]) -> None:
+        for node in payload["nodes"]:
+            if node["candidate_packet_id"] == chain["residual_candidate"]["packet_id"]:
+                _update_best_candidate(node)
+
+    def _update_adjudication(payload: dict[str, object]) -> None:
+        payload["proof_packet_id"] = proof_packet_id
+
+    def _update_reader_state(payload: dict[str, object]) -> None:
+        payload["proof_packet_id"] = proof_packet_id
+
+    def _update_loop_packet(payload: dict[str, object]) -> None:
+        payload["proof_packet_id"] = proof_packet_id
+
+    def _update_manifest(payload: dict[str, object]) -> None:
+        payload["proof_packet_id"] = proof_packet_id
+        payload["proof_packet_dir"] = proof_packet_dir
+
+    def _update_cycle_map(payload: dict[str, object]) -> None:
+        for cycle in payload["cycles"]:
+            if cycle["candidate_packet_id"] == chain["residual_candidate"]["packet_id"]:
+                cycle["proof_packet_id"] = proof_packet_id
+                cycle["proof_packet_dir"] = proof_packet_dir
+
+    rewrite_payload(
+        synthesis_dir / "autonomous_evidence_synthesis_packet.json",
+        _update_synthesis_packet,
+    )
+    rewrite_payload(
+        synthesis_dir / "best_current_candidate_selection.json",
+        _update_best_selection,
+    )
+    rewrite_payload(synthesis_dir / "candidate_evidence_graph.json", _update_graph)
+    rewrite_payload(
+        synthesis_dir / "residual_candidate_reader_state_adjudication.json",
+        _update_adjudication,
+    )
+    rewrite_payload(
+        reader_state_dir / "internal_reader_state_eval_packet.json",
+        _update_reader_state,
+    )
+    rewrite_payload(loop_dir / "evidence_loop_review_packet.json", _update_loop_packet)
+    rewrite_payload(
+        loop_dir / "evidence_loop_review_subject_manifest.json",
+        _update_manifest,
+    )
+    rewrite_payload(loop_dir / "completed_cycle_map.json", _update_cycle_map)
+
+
 def build_object_event_strategy_chain(tmp_path: Path):
     chain = build_next_target_strategy_ready_chain(tmp_path)
     strategy = run_next_target_strategy(
@@ -12793,6 +12989,197 @@ def test_loop_integrity_cleanup_accepts_completed_residual_cycle(tmp_path):
 
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_loop_integrity_cleanup_accepts_target_aware_residual_cycle(tmp_path):
+    chain = build_completed_tactile_residual_loop_review_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_loop_integrity_cleanup(
+        config,
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["source_loop_review_packet_id"] == chain[
+        "residual_loop_review"
+    ]["packet_id"]
+    assert result.payload["source_synthesis_packet_id"] == chain["residual_synthesis"][
+        "packet_id"
+    ]
+    assert result.payload["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert result.payload["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["target_adapter_id"] == "tactile_inevitability"
+    assert result.payload["target_scope"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    manifest = read_payload(packet_dir / "loop_integrity_cleanup_subject_manifest.json")
+    assert manifest["current_best_candidate_packet_id"] == chain["residual_candidate"][
+        "packet_id"
+    ]
+    assert manifest["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert manifest["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert manifest["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert manifest["target_adapter_id"] == "tactile_inevitability"
+
+    checkpoint = read_payload(packet_dir / "active_evidence_state_checkpoint.json")
+    assert checkpoint["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert checkpoint["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert checkpoint["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert checkpoint["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert checkpoint["target_adapter_id"] == "tactile_inevitability"
+
+    stale = read_payload(packet_dir / "stale_recommendation_registry.json")
+    entries = stale["stale_recommendations"]
+    assert any(
+        entry["reference_type"] == "prior_best_candidate"
+        and entry["reference_packet_id"] == chain["object_event"]["packet_id"]
+        for entry in entries
+    )
+    assert any(
+        entry["reference_type"] == "prior_best_proof"
+        and entry["reference_packet_id"] == chain["object_event_proof"]["packet_id"]
+        for entry in entries
+    )
+    assert any(
+        entry["reference_type"] == "prior_best_reader_state"
+        and entry["reference_packet_id"]
+        == chain["object_event_reader_state"]["packet_id"]
+        for entry in entries
+    )
+    assert any(
+        entry["reference_type"] == "non_authoritative_proof_attempt"
+        and entry["reference_packet_id"] == chain["generic_proof"]["packet_id"]
+        and "target_aware_proof_required_for_residual_target"
+        in entry["rejection_reasons"]
+        for entry in entries
+    )
+    assert any(
+        entry["reference_type"] == "non_authoritative_proof_attempt"
+        and entry["reference_packet_id"] == chain["role_failed_proof"]["packet_id"]
+        and "target_role_consistency_failed" in entry["rejection_reasons"]
+        for entry in entries
+    )
+    assert any(
+        entry["reference_type"] == "fixture_reader_state_attempt"
+        and entry["reference_packet_id"] == chain["fixture_reader_state"]["packet_id"]
+        for entry in entries
+    )
+
+    supersession = read_payload(packet_dir / "prior_cycle_supersession_map.json")
+    assert supersession["active_target_cycle_led_to_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert supersession["active_target_cycle_proof_packet_id"] == chain[
+        "residual_proof"
+    ]["packet_id"]
+    assert supersession["active_target_cycle_reader_state_packet_id"] == chain[
+        "residual_reader_state"
+    ]["packet_id"]
+    assert supersession["active_target_cycle_target_id"] == (
+        TACTILE_INEVITABILITY_TARGET_ID
+    )
+    assert supersession["active_target_cycle_adapter_id"] == "tactile_inevitability"
+
+    packet = read_payload(packet_dir / "loop_integrity_cleanup_packet.json")
+    assert packet["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert packet["target_adapter_id"] == "tactile_inevitability"
+    assert packet["model_calls"] == 0
+    assert packet["next_generation_authorized"] is False
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+@pytest.mark.parametrize(
+    ("proof_key", "expected_message"),
+    [
+        ("generic_proof", "target-aware proof"),
+        ("role_failed_proof", "target role consistency"),
+        ("fixture_proof", "fixture-only"),
+    ],
+)
+def test_loop_integrity_cleanup_refuses_invalid_target_aware_proof(
+    tmp_path,
+    proof_key,
+    expected_message,
+):
+    chain = build_completed_tactile_residual_loop_review_chain(tmp_path)
+    retarget_cleanup_chain_to_proof(chain, chain[proof_key])
+
+    result = run_loop_integrity_cleanup(
+        chain["config"],
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+def test_loop_integrity_cleanup_refuses_mismatched_source_synthesis(tmp_path):
+    chain = build_completed_tactile_residual_loop_review_chain(tmp_path)
+    synthesis_dir = Path(str(chain["residual_synthesis"]["packet_dir"]))
+
+    def _mismatch_best(payload: dict[str, object]) -> None:
+        payload["best_current_candidate"]["packet_id"] = chain["object_event"]["packet_id"]
+
+    rewrite_payload(
+        synthesis_dir / "autonomous_evidence_synthesis_packet.json",
+        _mismatch_best,
+    )
+
+    result = run_loop_integrity_cleanup(
+        chain["config"],
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "current best candidate mismatch" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["next_generation_authorized"] is False
 
 
 def test_cleanup_aware_authorization_refuses_invalid_source_flags(tmp_path):

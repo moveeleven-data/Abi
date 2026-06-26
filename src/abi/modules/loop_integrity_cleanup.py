@@ -28,13 +28,6 @@ from abi.packets import (
 LOOP_INTEGRITY_CLEANUP_LINEAGE_ID = "loop_integrity_cleanup_v1"
 LOOP_INTEGRITY_CLEANUP_CREATED_BY = "loop_integrity_cleanup_v1_controller"
 
-KNOWN_RESIDUAL_RUN_ID = "run_8fa54199f23f3d8e"
-KNOWN_CURRENT_BEST_PACKET_ID = "packet_0061"
-KNOWN_PROOF_PACKET_ID = "packet_0023"
-KNOWN_READER_STATE_PACKET_ID = "packet_0011"
-KNOWN_SOURCE_SYNTHESIS_PACKET_ID = "packet_0026"
-KNOWN_LOOP_REVIEW_PACKET_ID = "packet_0006"
-
 LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES = (
     "loop_integrity_cleanup_subject_manifest",
     "loop_review_intake_summary",
@@ -70,14 +63,20 @@ class LoopIntegrityCleanupSubject:
     source_synthesis_packet_dir: Path
     source_synthesis_payload: dict[str, Any]
     source_synthesis_artifact_id: str | None
+    current_best_candidate: dict[str, Any]
     current_best_candidate_packet_id: str
     current_best_candidate_kind: str
     current_best_candidate_packet_dir: Path
     proof_packet_id: str
     proof_packet_dir: Path
+    proof_payload: dict[str, Any]
     reader_state_packet_id: str
     reader_state_packet_dir: Path
+    reader_state_payload: dict[str, Any]
     source_synthesis_packet_id: str
+    selected_residual_target_id: str | None
+    target_adapter_id: str | None
+    target_scope: str | None
     reader_state_transformation_strength: str
     strongest_rival_still_blocks: bool
     prior_best_packet_id: str
@@ -303,10 +302,49 @@ def _load_subject(
     _validate_no_final_or_phase_claim(payloads)
     _validate_loop_review_does_not_authorize_generation(payloads)
 
+    source_synthesis_packet_id = _required_text(
+        loop_packet.get("source_synthesis_packet_id")
+        or manifest.get("source_synthesis_packet_id"),
+        "loop-review missing source synthesis packet ID",
+    )
+    source_synthesis_packet_dir = _resolve_packet_dir(
+        config=config,
+        run_id=run_id,
+        family="autonomous_evidence_synthesis",
+        packet_id=source_synthesis_packet_id,
+        preferred=manifest.get("source_synthesis_packet_dir"),
+    )
+    source_synthesis_payload = _require_packet_file(
+        source_synthesis_packet_dir,
+        "autonomous_evidence_synthesis_packet.json",
+        "source synthesis cannot be resolved",
+    )
+    _validate_payload_no_final_or_phase_claim(source_synthesis_payload, "source synthesis")
+    current_best = _as_dict(source_synthesis_payload.get("best_current_candidate"))
+    if not current_best:
+        best_selection = _optional_packet_payload(
+            source_synthesis_packet_dir,
+            "best_current_candidate_selection.json",
+        )
+        current_best = _as_dict(best_selection.get("selected_best_candidate"))
+    if not current_best:
+        raise ValueError(
+            "Loop-integrity cleanup refused; source synthesis does not expose "
+            "best_current_candidate."
+        )
+
     current_best_packet_id = _required_text(
         loop_packet.get("current_best_candidate_packet_id")
         or manifest.get("current_best_candidate_packet_id"),
         "loop-review missing current best candidate packet ID",
+    )
+    _validate_packet_id_match(
+        label="current best candidate",
+        expected=_required_text(
+            current_best.get("packet_id"),
+            "source synthesis current best is missing packet_id",
+        ),
+        actual=current_best_packet_id,
     )
     current_best_packet_dir = _resolve_packet_dir(
         config=config,
@@ -325,6 +363,14 @@ def _load_subject(
         loop_packet.get("proof_packet_id") or manifest.get("proof_packet_id"),
         "loop-review missing proof packet ID",
     )
+    _validate_packet_id_match(
+        label="proof packet",
+        expected=_required_text(
+            current_best.get("proof_packet_id"),
+            "source synthesis current best is missing proof_packet_id",
+        ),
+        actual=proof_packet_id,
+    )
     proof_packet_dir = _resolve_packet_dir(
         config=config,
         run_id=run_id,
@@ -332,7 +378,7 @@ def _load_subject(
         packet_id=proof_packet_id,
         preferred=manifest.get("proof_packet_dir"),
     )
-    _require_packet_file(
+    proof_payload = _require_packet_file(
         proof_packet_dir,
         "executed_ablation_packet.json",
         "proof packet cannot be resolved",
@@ -342,6 +388,14 @@ def _load_subject(
         loop_packet.get("reader_state_packet_id") or manifest.get("reader_state_packet_id"),
         "loop-review missing reader-state packet ID",
     )
+    _validate_packet_id_match(
+        label="reader-state packet",
+        expected=_required_text(
+            current_best.get("reader_state_packet_id"),
+            "source synthesis current best is missing reader_state_packet_id",
+        ),
+        actual=reader_state_packet_id,
+    )
     reader_state_packet_dir = _resolve_packet_dir(
         config=config,
         run_id=run_id,
@@ -349,60 +403,38 @@ def _load_subject(
         packet_id=reader_state_packet_id,
         preferred=manifest.get("reader_state_packet_dir"),
     )
-    _require_packet_file(
+    reader_state_payload = _require_packet_file(
         reader_state_packet_dir,
         "internal_reader_state_eval_packet.json",
         "reader-state packet cannot be resolved",
     )
 
-    source_synthesis_packet_id = _required_text(
-        loop_packet.get("source_synthesis_packet_id")
-        or manifest.get("source_synthesis_packet_id"),
-        "loop-review missing source synthesis packet ID",
+    selected_residual_target_id = _optional_text(
+        current_best.get("selected_residual_target_id")
+        or current_best.get("target_movement")
+        or current_best.get("target_scope")
     )
-    source_synthesis_packet_dir = _resolve_packet_dir(
-        config=config,
-        run_id=run_id,
-        family="autonomous_evidence_synthesis",
-        packet_id=source_synthesis_packet_id,
-        preferred=manifest.get("source_synthesis_packet_dir"),
+    target_adapter_id = _optional_text(current_best.get("target_adapter_id"))
+    target_scope = _optional_text(current_best.get("target_scope"))
+    _validate_completed_cycle_alignment(
+        payloads=payloads,
+        source_synthesis_packet_id=source_synthesis_packet_id,
+        current_best_packet_id=current_best_packet_id,
+        proof_packet_id=proof_packet_id,
+        reader_state_packet_id=reader_state_packet_id,
     )
-    source_synthesis_payload = _require_packet_file(
-        source_synthesis_packet_dir,
-        "autonomous_evidence_synthesis_packet.json",
-        "source synthesis cannot be resolved",
+    _validate_current_cycle_packets(
+        current_best=current_best,
+        proof_payload=proof_payload,
+        proof_packet_dir=proof_packet_dir,
+        reader_state_payload=reader_state_payload,
+        reader_state_packet_dir=reader_state_packet_dir,
+        current_best_packet_id=current_best_packet_id,
+        proof_packet_id=proof_packet_id,
+        reader_state_packet_id=reader_state_packet_id,
+        selected_residual_target_id=selected_residual_target_id,
+        target_adapter_id=target_adapter_id,
     )
-
-    if run_id == KNOWN_RESIDUAL_RUN_ID:
-        expected = {
-            "current best candidate": (
-                current_best_packet_id,
-                KNOWN_CURRENT_BEST_PACKET_ID,
-            ),
-            "proof packet": (proof_packet_id, KNOWN_PROOF_PACKET_ID),
-            "reader-state packet": (
-                reader_state_packet_id,
-                KNOWN_READER_STATE_PACKET_ID,
-            ),
-            "source synthesis packet": (
-                source_synthesis_packet_id,
-                KNOWN_SOURCE_SYNTHESIS_PACKET_ID,
-            ),
-            "loop review packet": (
-                str(loop_packet.get("packet_id") or loop_review_packet_dir.name),
-                KNOWN_LOOP_REVIEW_PACKET_ID,
-            ),
-        }
-        mismatches = [
-            f"{label} is {actual}, expected {expected_value}"
-            for label, (actual, expected_value) in expected.items()
-            if actual != expected_value
-        ]
-        if mismatches:
-            raise ValueError(
-                "Loop-integrity cleanup refused; exact residual evidence cycle "
-                f"mismatch for {run_id}: {'; '.join(mismatches)}."
-            )
 
     packet_path = loop_review_packet_dir / "evidence_loop_review_packet.json"
     synthesis_path = source_synthesis_packet_dir / "autonomous_evidence_synthesis_packet.json"
@@ -418,7 +450,6 @@ def _load_subject(
             *loop_artifact_ids.values(),
         ]
     )
-    current_best = _as_dict(source_synthesis_payload.get("best_current_candidate"))
     return LoopIntegrityCleanupSubject(
         run_id=run_id,
         loop_review_packet_dir=loop_review_packet_dir,
@@ -431,6 +462,7 @@ def _load_subject(
         source_synthesis_packet_dir=source_synthesis_packet_dir,
         source_synthesis_payload=source_synthesis_payload,
         source_synthesis_artifact_id=synthesis_artifact.id if synthesis_artifact else None,
+        current_best_candidate=current_best,
         current_best_candidate_packet_id=current_best_packet_id,
         current_best_candidate_kind=str(
             manifest.get("current_best_candidate_packet_kind")
@@ -440,9 +472,14 @@ def _load_subject(
         current_best_candidate_packet_dir=current_best_packet_dir,
         proof_packet_id=proof_packet_id,
         proof_packet_dir=proof_packet_dir,
+        proof_payload=proof_payload,
         reader_state_packet_id=reader_state_packet_id,
         reader_state_packet_dir=reader_state_packet_dir,
+        reader_state_payload=reader_state_payload,
         source_synthesis_packet_id=source_synthesis_packet_id,
+        selected_residual_target_id=selected_residual_target_id,
+        target_adapter_id=target_adapter_id,
+        target_scope=target_scope,
         reader_state_transformation_strength=str(
             current_best.get("reader_state_reread_transformation_strength")
             or "partial"
@@ -504,6 +541,9 @@ def _build_subject_manifest(
         "proof_packet_dir": str(subject.proof_packet_dir),
         "reader_state_packet_id": subject.reader_state_packet_id,
         "reader_state_packet_dir": str(subject.reader_state_packet_dir),
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
         "operator_reviewed": True,
         "candidate_generated": False,
         "model_calls": 0,
@@ -528,6 +568,9 @@ def _build_loop_review_intake_summary(
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "proof_packet_id": subject.proof_packet_id,
         "reader_state_packet_id": subject.reader_state_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
         "loop_integrity_cleanup_required": (
             packet.get("loop_integrity_cleanup_required") is True
         ),
@@ -561,6 +604,9 @@ def _build_active_evidence_state_checkpoint(
         "synthesis_packet_dir": str(subject.source_synthesis_packet_dir),
         "loop_review_packet_id": subject.loop_review_packet_id,
         "loop_review_packet_dir": str(subject.loop_review_packet_dir),
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
         "current_best_candidate_finalization_eligible": False,
         "reader_state_transformation_strength": subject.reader_state_transformation_strength,
         "strongest_rival_still_blocks": subject.strongest_rival_still_blocks,
@@ -594,6 +640,54 @@ def _build_stale_recommendation_registry(
                 "reuse_allowed_for_new_generation": False,
             }
         )
+        prior_node = _candidate_graph_node(subject, subject.prior_best_packet_id)
+        prior_proof_packet_id = _optional_text(prior_node.get("proof_packet_id"))
+        if prior_proof_packet_id and prior_proof_packet_id != subject.proof_packet_id:
+            entries.append(
+                {
+                    "registry_id": f"prior_proof_{prior_proof_packet_id}_historical",
+                    "reference_packet_id": prior_proof_packet_id,
+                    "reference_type": "prior_best_proof",
+                    "status": "historical_proof_superseded_by_active_cycle",
+                    "prior_best_candidate_packet_id": subject.prior_best_packet_id,
+                    "superseded_by_proof_packet_id": subject.proof_packet_id,
+                    "superseded_by_candidate_packet_id": (
+                        subject.current_best_candidate_packet_id
+                    ),
+                    "reuse_allowed_for_new_generation": False,
+                }
+            )
+        prior_reader_state_packet_id = _optional_text(
+            prior_node.get("reader_state_packet_id")
+        )
+        if (
+            prior_reader_state_packet_id
+            and prior_reader_state_packet_id != subject.reader_state_packet_id
+        ):
+            entries.append(
+                {
+                    "registry_id": (
+                        f"prior_reader_state_{prior_reader_state_packet_id}_historical"
+                    ),
+                    "reference_packet_id": prior_reader_state_packet_id,
+                    "reference_type": "prior_best_reader_state",
+                    "status": "historical_reader_state_superseded_by_active_cycle",
+                    "prior_best_candidate_packet_id": subject.prior_best_packet_id,
+                    "superseded_by_reader_state_packet_id": (
+                        subject.reader_state_packet_id
+                    ),
+                    "superseded_by_candidate_packet_id": (
+                        subject.current_best_candidate_packet_id
+                    ),
+                    "reuse_allowed_for_new_generation": False,
+                }
+            )
+    for entry in _completed_cycle_stale_entries(subject):
+        entries.append(entry)
+    for proof_entry in _rejected_proof_attempt_entries(subject):
+        entries.append(proof_entry)
+    for reader_state_entry in _fixture_reader_state_stale_entries(config, subject):
+        entries.append(reader_state_entry)
     synthesis_sources = [
         source
         for source in source_chain
@@ -717,6 +811,9 @@ def _build_prior_cycle_supersession_map(
             or subject.current_best_candidate_packet_id,
             "proof_packet_id": subject.proof_packet_id,
             "reader_state_packet_id": subject.reader_state_packet_id,
+            "selected_residual_target_id": subject.selected_residual_target_id,
+            "target_adapter_id": subject.target_adapter_id,
+            "target_scope": subject.target_scope,
             "status": "current_best_non_final",
         },
     ]
@@ -728,6 +825,11 @@ def _build_prior_cycle_supersession_map(
         "residual_object_motion_cycle_led_to_packet_id": (
             (residual or {}).get("packet_id") or subject.current_best_candidate_packet_id
         ),
+        "active_target_cycle_led_to_packet_id": subject.current_best_candidate_packet_id,
+        "active_target_cycle_proof_packet_id": subject.proof_packet_id,
+        "active_target_cycle_reader_state_packet_id": subject.reader_state_packet_id,
+        "active_target_cycle_target_id": subject.selected_residual_target_id,
+        "active_target_cycle_adapter_id": subject.target_adapter_id,
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "superseded_prior_best_packet_id": subject.prior_best_packet_id,
         "current_best_supersedes_prior_best": bool(subject.prior_best_packet_id),
@@ -964,6 +1066,9 @@ def _build_packet_summary(
         "current_best_candidate_kind": subject.current_best_candidate_kind,
         "proof_packet_id": subject.proof_packet_id,
         "reader_state_packet_id": subject.reader_state_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
         "loop_integrity_cleanup_completed": True,
         "next_generation_authorized": False,
         "ready_for_supervised_strategy_authorization": True,
@@ -1014,6 +1119,9 @@ def _result_payload(
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "proof_packet_id": subject.proof_packet_id,
         "reader_state_packet_id": subject.reader_state_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
         "loop_integrity_cleanup_completed": True,
         "next_generation_authorized": False,
         "ready_for_supervised_strategy_authorization": True,
@@ -1061,6 +1169,192 @@ def _validate_loop_review_does_not_authorize_generation(
         )
 
 
+def _validate_payload_no_final_or_phase_claim(payload: dict[str, Any], label: str) -> None:
+    if (
+        payload.get("finalization_eligible") is True
+        or payload.get("candidate_final") is True
+        or payload.get("phase_shift_claim") is True
+        or payload.get("no_phase_shift_claim") is False
+    ):
+        raise ValueError(
+            "Loop-integrity cleanup refused; "
+            f"{label} contains finality or phase-shift claim fields."
+        )
+
+
+def _validate_packet_id_match(*, label: str, expected: str, actual: str) -> None:
+    if expected != actual:
+        raise ValueError(
+            "Loop-integrity cleanup refused; "
+            f"{label} mismatch: loop review has {actual}, source synthesis has "
+            f"{expected}."
+        )
+
+
+def _validate_completed_cycle_alignment(
+    *,
+    payloads: dict[str, dict[str, Any]],
+    source_synthesis_packet_id: str,
+    current_best_packet_id: str,
+    proof_packet_id: str,
+    reader_state_packet_id: str,
+) -> None:
+    completed_cycle_map = payloads.get("completed_cycle_map", {})
+    cycles = completed_cycle_map.get("cycles")
+    if not isinstance(cycles, list):
+        return
+    matching_cycles = [
+        cycle
+        for cycle in cycles
+        if isinstance(cycle, dict)
+        and cycle.get("candidate_packet_id") == current_best_packet_id
+    ]
+    if not matching_cycles:
+        raise ValueError(
+            "Loop-integrity cleanup refused; completed cycle map does not include "
+            f"current best candidate {current_best_packet_id}."
+        )
+    cycle = matching_cycles[-1]
+    mismatches = []
+    expected_pairs = {
+        "source synthesis packet": (
+            str(cycle.get("synthesis_packet_id") or ""),
+            source_synthesis_packet_id,
+        ),
+        "proof packet": (str(cycle.get("proof_packet_id") or ""), proof_packet_id),
+        "reader-state packet": (
+            str(cycle.get("reader_state_packet_id") or ""),
+            reader_state_packet_id,
+        ),
+    }
+    for label, (cycle_value, actual) in expected_pairs.items():
+        if cycle_value and cycle_value != actual:
+            mismatches.append(f"{label} is {actual}, cycle map has {cycle_value}")
+    if mismatches:
+        raise ValueError(
+            "Loop-integrity cleanup refused; completed cycle map mismatch: "
+            + "; ".join(mismatches)
+            + "."
+        )
+
+
+def _validate_current_cycle_packets(
+    *,
+    current_best: dict[str, Any],
+    proof_payload: dict[str, Any],
+    proof_packet_dir: Path,
+    reader_state_payload: dict[str, Any],
+    reader_state_packet_dir: Path,
+    current_best_packet_id: str,
+    proof_packet_id: str,
+    reader_state_packet_id: str,
+    selected_residual_target_id: str | None,
+    target_adapter_id: str | None,
+) -> None:
+    _validate_payload_no_final_or_phase_claim(proof_payload, "proof packet")
+    _validate_payload_no_final_or_phase_claim(reader_state_payload, "reader-state packet")
+    if _packet_fixture_only(proof_packet_dir, "executed_ablation_packet.json"):
+        raise ValueError(
+            "Loop-integrity cleanup refused; proof packet is fixture-only and "
+            "cannot anchor cleanup."
+        )
+    if _packet_fixture_only(
+        reader_state_packet_dir,
+        "internal_reader_state_eval_packet.json",
+    ):
+        raise ValueError(
+            "Loop-integrity cleanup refused; reader-state packet is fixture-only "
+            "and cannot anchor cleanup."
+        )
+    _validate_packet_id_match(
+        label="proof source revision",
+        expected=current_best_packet_id,
+        actual=_required_text(
+            proof_payload.get("source_revision_packet_id"),
+            "proof packet missing source_revision_packet_id",
+        ),
+    )
+    if proof_payload.get("source_revision_packet_kind") not in (
+        None,
+        "",
+        current_best.get("packet_kind"),
+        "bounded_macro_recomposition",
+    ):
+        raise ValueError(
+            "Loop-integrity cleanup refused; proof packet source kind does not "
+            "match current best candidate."
+        )
+    selected_reader_candidate = _required_text(
+        reader_state_payload.get("selected_candidate_packet_id")
+        or reader_state_payload.get("evaluated_candidate_packet_id"),
+        "reader-state packet missing selected candidate packet ID",
+    )
+    _validate_packet_id_match(
+        label="reader-state selected candidate",
+        expected=current_best_packet_id,
+        actual=selected_reader_candidate,
+    )
+    _validate_packet_id_match(
+        label="reader-state proof packet",
+        expected=proof_packet_id,
+        actual=_required_text(
+            reader_state_payload.get("proof_packet_id"),
+            "reader-state packet missing proof_packet_id",
+        ),
+    )
+    if reader_state_payload.get("packet_id") not in (None, "", reader_state_packet_id):
+        _validate_packet_id_match(
+            label="reader-state packet self ID",
+            expected=reader_state_packet_id,
+            actual=str(reader_state_payload.get("packet_id")),
+        )
+    requires_target_aware_proof = (
+        current_best.get("proof_target_aware_ablation") is True
+        or target_adapter_id == "tactile_inevitability"
+    )
+    if requires_target_aware_proof:
+        if proof_payload.get("target_aware_ablation") is not True:
+            raise ValueError(
+                "Loop-integrity cleanup refused; target-aware current best requires "
+                "target-aware proof, but proof is generic."
+            )
+        _validate_packet_id_match(
+            label="target adapter",
+            expected=target_adapter_id,
+            actual=_required_text(
+                proof_payload.get("target_adapter_id"),
+                "proof packet missing target_adapter_id",
+            ),
+        )
+        _validate_packet_id_match(
+            label="selected residual target",
+            expected=_required_text(
+                selected_residual_target_id,
+                "current best missing selected residual target",
+            ),
+            actual=_required_text(
+                proof_payload.get("selected_residual_target_id"),
+                "proof packet missing selected_residual_target_id",
+            ),
+        )
+        if proof_payload.get("target_role_consistency_passed") is not True:
+            raise ValueError(
+                "Loop-integrity cleanup refused; target-aware proof failed target "
+                "role consistency."
+            )
+        if proof_payload.get("comparison_internal_consistency") is not True:
+            raise ValueError(
+                "Loop-integrity cleanup refused; target-aware proof failed "
+                "comparison internal consistency."
+            )
+    causal_status = proof_payload.get("selected_repair_causal_status")
+    if causal_status not in ("useful_but_insufficient", "stronger_than_prior"):
+        raise ValueError(
+            "Loop-integrity cleanup refused; proof packet is not useful current "
+            f"cycle evidence: {causal_status}."
+        )
+
+
 def _resolve_packet_dir(
     *,
     config: AbiConfig,
@@ -1105,6 +1399,21 @@ def _optional_packet_payload(packet_dir: object, file_name: str) -> dict[str, An
     return payload if isinstance(payload, dict) else {}
 
 
+def _packet_fixture_only(packet_dir: Path, file_name: str) -> bool:
+    path = packet_dir / file_name
+    if not path.exists():
+        return False
+    envelope = read_json_file(path)
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    return bool(
+        isinstance(envelope, dict)
+        and (
+            envelope.get("fixture_only") is True
+            or (isinstance(payload, dict) and payload.get("fixture_only") is True)
+        )
+    )
+
+
 def _source_chain(source_synthesis_payload: dict[str, Any]) -> list[dict[str, Any]]:
     source_chain = source_synthesis_payload.get("source_chain")
     if not isinstance(source_chain, list):
@@ -1127,6 +1436,138 @@ def _latest_candidate_for_scope(
         )
     ]
     return candidates[-1] if candidates else None
+
+
+def _candidate_graph_node(
+    subject: LoopIntegrityCleanupSubject,
+    candidate_packet_id: str,
+) -> dict[str, Any]:
+    graph = _optional_packet_payload(
+        subject.source_synthesis_packet_dir,
+        "candidate_evidence_graph.json",
+    )
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return {}
+    for node in nodes:
+        if isinstance(node, dict) and node.get("candidate_packet_id") == candidate_packet_id:
+            return node
+    return {}
+
+
+def _completed_cycle_stale_entries(
+    subject: LoopIntegrityCleanupSubject,
+) -> list[dict[str, object]]:
+    completed_cycle_map = subject.payloads.get("completed_cycle_map", {})
+    cycles = completed_cycle_map.get("cycles")
+    if not isinstance(cycles, list):
+        return []
+    entries: list[dict[str, object]] = []
+    for cycle in cycles:
+        if not isinstance(cycle, dict):
+            continue
+        candidate_packet_id = _optional_text(cycle.get("candidate_packet_id"))
+        if not candidate_packet_id or candidate_packet_id == subject.current_best_candidate_packet_id:
+            continue
+        cycle_id = str(cycle.get("cycle_id") or candidate_packet_id)
+        entries.append(
+            {
+                "registry_id": f"completed_cycle_{cycle_id}_historical",
+                "reference_packet_id": candidate_packet_id,
+                "reference_type": "historical_completed_cycle_candidate",
+                "status": "historical_cycle_preserved_not_active",
+                "proof_packet_id": _optional_text(cycle.get("proof_packet_id")),
+                "reader_state_packet_id": _optional_text(
+                    cycle.get("reader_state_packet_id")
+                ),
+                "synthesis_packet_id": _optional_text(cycle.get("synthesis_packet_id")),
+                "superseded_by_candidate_packet_id": (
+                    subject.current_best_candidate_packet_id
+                ),
+                "reuse_allowed_for_new_generation": False,
+            }
+        )
+    return entries
+
+
+def _rejected_proof_attempt_entries(
+    subject: LoopIntegrityCleanupSubject,
+) -> list[dict[str, object]]:
+    rejected = subject.current_best_candidate.get("rejected_proof_candidates")
+    if not isinstance(rejected, list):
+        return []
+    entries: list[dict[str, object]] = []
+    for proof in rejected:
+        if not isinstance(proof, dict):
+            continue
+        packet_id = _optional_text(proof.get("proof_packet_id"))
+        if not packet_id or packet_id == subject.proof_packet_id:
+            continue
+        reasons = proof.get("rejection_reasons")
+        entries.append(
+            {
+                "registry_id": f"proof_attempt_{packet_id}_non_authoritative",
+                "reference_packet_id": packet_id,
+                "reference_type": "non_authoritative_proof_attempt",
+                "status": "rejected_for_active_target_or_quality",
+                "rejection_reasons": reasons if isinstance(reasons, list) else [],
+                "proof_fixture_only": proof.get("proof_fixture_only"),
+                "proof_model_backed": proof.get("proof_model_backed"),
+                "proof_target_aware_ablation": proof.get("proof_target_aware_ablation"),
+                "proof_target_adapter_id": proof.get("proof_target_adapter_id"),
+                "proof_selected_residual_target_id": proof.get(
+                    "proof_selected_residual_target_id"
+                ),
+                "proof_target_role_consistency_passed": proof.get(
+                    "proof_target_role_consistency_passed"
+                ),
+                "active_proof_packet_id": subject.proof_packet_id,
+                "active_current_best_candidate_packet_id": (
+                    subject.current_best_candidate_packet_id
+                ),
+                "reuse_allowed_for_new_generation": False,
+            }
+        )
+    return entries
+
+
+def _fixture_reader_state_stale_entries(
+    config: AbiConfig,
+    subject: LoopIntegrityCleanupSubject,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for packet_dir in _packet_dirs(
+        config.run_dir(subject.run_id) / "internal_reader_state_evaluation"
+    ):
+        if packet_dir.name == subject.reader_state_packet_id:
+            continue
+        payload = _optional_packet_payload(
+            packet_dir,
+            "internal_reader_state_eval_packet.json",
+        )
+        selected = _optional_text(
+            payload.get("selected_candidate_packet_id")
+            or payload.get("evaluated_candidate_packet_id")
+        )
+        if selected != subject.current_best_candidate_packet_id:
+            continue
+        if not _packet_fixture_only(packet_dir, "internal_reader_state_eval_packet.json"):
+            continue
+        entries.append(
+            {
+                "registry_id": f"reader_state_{packet_dir.name}_fixture_not_selected",
+                "reference_packet_id": packet_dir.name,
+                "reference_type": "fixture_reader_state_attempt",
+                "status": "fixture_only_reader_state_not_authoritative",
+                "selected_candidate_packet_id": selected,
+                "active_reader_state_packet_id": subject.reader_state_packet_id,
+                "active_current_best_candidate_packet_id": (
+                    subject.current_best_candidate_packet_id
+                ),
+                "reuse_allowed_for_new_generation": False,
+            }
+        )
+    return entries
 
 
 def _find_residual_work_order_id(run_dir: Path, current_best: dict[str, Any]) -> str | None:
