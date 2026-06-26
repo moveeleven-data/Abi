@@ -108,6 +108,8 @@ READER_STATE_MACRO_2_TARGET_SCOPE = "reader_state_informed_macro_2"
 OBJECT_EVENT_TARGET_SCOPE = "first_read_object_event_pressure_gap"
 OBJECT_EVENT_SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
 RESIDUAL_OBJECT_MOTION_TARGET_ID = "object_motion_causality_specificity"
+TACTILE_RESIDUAL_TARGET_ID = "tactile_inevitability_gap"
+TACTILE_TARGET_ADAPTER_ID = "tactile_inevitability"
 USEFUL_OR_STRONGER_CAUSAL_STATUSES = {
     "useful_but_insufficient",
     "causal",
@@ -574,21 +576,29 @@ def _discover_source_packets(
     run_dir = config.run_dir(run_id)
     missing_expected: list[str] = []
     packet_dirs: list[tuple[str, Path]] = []
+    seen_packet_dirs: set[Path] = set()
+
+    def _append_packet_dir(packet_kind: str, packet_dir: Path) -> None:
+        resolved = packet_dir.resolve()
+        if resolved in seen_packet_dirs:
+            return
+        seen_packet_dirs.add(resolved)
+        packet_dirs.append((packet_kind, packet_dir))
+
     if run_id == KNOWN_SYNTHESIS_RUN_ID:
         for packet_kind, packet_id in KNOWN_PACKET_CHAIN:
             packet_dir = run_dir / packet_kind / packet_id
             if packet_dir.exists():
-                packet_dirs.append((packet_kind, packet_dir))
+                _append_packet_dir(packet_kind, packet_dir)
             else:
                 missing_expected.append(str(packet_dir))
-    else:
-        for packet_kind in SOURCE_PACKET_FILES:
-            packet_base = run_dir / packet_kind
-            if not packet_base.exists():
-                continue
-            for packet_dir in sorted(packet_base.glob("packet_*"), key=_packet_sort_key):
-                if packet_dir.is_dir():
-                    packet_dirs.append((packet_kind, packet_dir))
+    for packet_kind in SOURCE_PACKET_FILES:
+        packet_base = run_dir / packet_kind
+        if not packet_base.exists():
+            continue
+        for packet_dir in sorted(packet_base.glob("packet_*"), key=_packet_sort_key):
+            if packet_dir.is_dir():
+                _append_packet_dir(packet_kind, packet_dir)
 
     sources: list[SourcePacket] = []
     for packet_kind, packet_dir in packet_dirs:
@@ -1063,6 +1073,14 @@ def _bounded_macro_history_row(source: SourcePacket) -> dict[str, object]:
         or diff_report.get("selected_residual_target_id")
         or gate_report.get("selected_residual_target_id")
     )
+    target_adapter_id = (
+        source.payload.get("target_adapter_id")
+        or subject_manifest.get("target_adapter_id")
+        or recomposition_plan.get("target_adapter_id")
+        or patch_plan.get("target_adapter_id")
+        or diff_report.get("target_adapter_id")
+        or gate_report.get("target_adapter_id")
+    )
     object_motion_causality_generation = bool(
         source.payload.get("object_motion_causality_generation")
         or subject_manifest.get("object_motion_causality_generation")
@@ -1101,6 +1119,30 @@ def _bounded_macro_history_row(source: SourcePacket) -> dict[str, object]:
         source.payload.get("source_authorization_packet_dir")
         or subject_manifest.get("source_authorization_packet_dir")
     )
+    source_work_order_packet_id = (
+        source.payload.get("source_work_order_packet_id")
+        or subject_manifest.get("source_work_order_packet_id")
+        or recomposition_plan.get("source_work_order_packet_id")
+        or patch_plan.get("source_work_order_packet_id")
+        or diff_report.get("source_work_order_packet_id")
+    )
+    source_work_order_packet_dir = (
+        source.payload.get("source_work_order_packet_dir")
+        or subject_manifest.get("source_work_order_packet_dir")
+    )
+    target_specific_ablation_controls = _unique(
+        [
+            *_string_list(source.payload.get("target_specific_ablation_controls")),
+            *_string_list(source.payload.get("ablation_controls")),
+            *_string_list(subject_manifest.get("target_specific_ablation_controls")),
+            *_string_list(subject_manifest.get("ablation_controls")),
+            *_string_list(recomposition_plan.get("target_specific_ablation_controls")),
+            *_string_list(patch_plan.get("target_specific_ablation_controls")),
+            *_string_list(diff_report.get("target_specific_ablation_controls")),
+            *_string_list(gate_report.get("target_specific_ablation_controls")),
+            *_string_list(gate_report.get("ablation_controls")),
+        ]
+    )
     authorization_consumed = bool(
         source.payload.get("authorization_consumed")
         or patch_plan.get("authorization_consumed")
@@ -1113,6 +1155,14 @@ def _bounded_macro_history_row(source: SourcePacket) -> dict[str, object]:
         or candidate.get("candidate_generated")
         or gate_report.get("candidate_generated")
         or bool(candidate.get("text"))
+    )
+    residual_candidate_generation = bool(
+        object_motion_causality_generation
+        or selected_residual_target_id
+        or target_adapter_id
+        or source_authorization_packet_id
+        or source_work_order_packet_id
+        or target_specific_ablation_controls
     )
     return _base_history_row(source) | {
         "source_packet": source.payload.get("source_synthesis_packet_id"),
@@ -1130,12 +1180,16 @@ def _bounded_macro_history_row(source: SourcePacket) -> dict[str, object]:
         or patch_plan.get("target_submovement"),
         "selected_region_id": selected_region_id,
         "selected_residual_target_id": selected_residual_target_id,
+        "target_adapter_id": target_adapter_id,
         "object_motion_causality_generation": object_motion_causality_generation,
-        "residual_candidate_generation": object_motion_causality_generation,
+        "residual_candidate_generation": residual_candidate_generation,
         "target_unit_count": target_unit_count,
         "target_unit_ids": target_unit_ids,
         "source_authorization_packet_id": source_authorization_packet_id,
         "source_authorization_packet_dir": source_authorization_packet_dir,
+        "source_work_order_packet_id": source_work_order_packet_id,
+        "source_work_order_packet_dir": source_work_order_packet_dir,
+        "target_specific_ablation_controls": target_specific_ablation_controls,
         "authorization_consumed": authorization_consumed,
         "candidate_generated": candidate_generated,
         "object_event_pressure_recomposition": object_event_recomposition,
@@ -1400,6 +1454,93 @@ def _executed_ablation_history_row(source: SourcePacket) -> dict[str, object]:
         {"operation_flatten_macro_to_summary_or_restore_return_echo"},
     )
     non_evidence_control_variant_ids = _non_evidence_control_variant_ids(variant_set)
+    target_scope = _first_present(
+        source.payload.get("target_scope"),
+        causal.get("target_scope"),
+        comparison.get("target_scope"),
+        subject_coverage.get("target_scope"),
+        subject.get("target_movement"),
+        subject.get("target_scope"),
+    )
+    selected_residual_target_id = _first_present(
+        source.payload.get("selected_residual_target_id"),
+        causal.get("selected_residual_target_id"),
+        comparison.get("selected_residual_target_id"),
+        gate_report.get("selected_residual_target_id"),
+        (
+            subject_coverage.get("target_scope")
+            if subject_coverage.get("target_scope")
+            == RESIDUAL_OBJECT_MOTION_TARGET_ID
+            else None
+        ),
+    )
+    target_adapter_id = _first_present(
+        source.payload.get("target_adapter_id"),
+        causal.get("target_adapter_id"),
+        comparison.get("target_adapter_id"),
+        gate_report.get("target_adapter_id"),
+        subject.get("target_adapter_id"),
+        variant_set.get("target_adapter_id"),
+    )
+    target_aware_ablation = bool(
+        source.payload.get("target_aware_ablation")
+        or causal.get("target_aware_ablation")
+        or comparison.get("target_aware_ablation")
+        or gate_report.get("target_aware_ablation")
+    )
+    target_role_consistency_checked = _first_present(
+        source.payload.get("target_role_consistency_checked"),
+        consistency.get("target_role_consistency_checked"),
+        gate_report.get("target_role_consistency_checked"),
+    )
+    target_role_consistency_passed = _first_present(
+        source.payload.get("target_role_consistency_passed"),
+        consistency.get("target_role_consistency_passed"),
+        gate_report.get("target_role_consistency_passed"),
+    )
+    target_role_consistency_failures = _unique(
+        [
+            *_string_list(source.payload.get("target_role_consistency_failures")),
+            *_string_list(consistency.get("target_role_consistency_failures")),
+            *_string_list(gate_report.get("target_role_consistency_failures")),
+        ]
+    )
+    target_specific_ablation_controls = _unique(
+        [
+            *_string_list(source.payload.get("target_specific_ablation_controls")),
+            *_string_list(causal.get("target_specific_ablation_controls")),
+            *_string_list(comparison.get("target_specific_ablation_controls")),
+            *_string_list(gate_report.get("target_specific_ablation_controls")),
+            *_string_list(variant_set.get("target_specific_ablation_controls")),
+        ]
+    )
+    target_unit_ids = _unique(
+        [
+            *_string_list(source.payload.get("target_unit_ids")),
+            *_string_list(causal.get("target_unit_ids")),
+            *_string_list(comparison.get("target_unit_ids")),
+            *_string_list(subject_coverage.get("target_unit_ids")),
+            *_string_list(subject.get("target_unit_ids")),
+            *_string_list(gate_report.get("target_unit_ids")),
+        ]
+    )
+    repair_has_causal_support = _first_present(
+        comparison.get("repair_has_causal_support"),
+        comparison.get("tactile_intervention_has_causal_support"),
+        causal.get("tactile_intervention_has_causal_support"),
+        source.payload.get("tactile_intervention_has_causal_support"),
+    )
+    revert_performs_same_or_better = _first_present(
+        comparison.get("revert_performs_same_or_better"),
+        comparison.get("revert_to_current_best_performs_same_or_better"),
+        causal.get("revert_to_current_best_performs_same_or_better"),
+        source.payload.get("revert_to_current_best_performs_same_or_better"),
+    )
+    comparison_internal_consistency = _first_present(
+        source.payload.get("comparison_internal_consistency"),
+        consistency.get("comparison_internal_consistency"),
+        gate_report.get("comparison_internal_consistency"),
+    )
     return _base_history_row(source) | {
         "source_packet": source.payload.get("source_revision_packet_id"),
         "source_revision_packet_id": source.payload.get("source_revision_packet_id"),
@@ -1418,24 +1559,38 @@ def _executed_ablation_history_row(source: SourcePacket) -> dict[str, object]:
         "normalized_subject_kind": subject_kind,
         "source_packet_kind": source.payload.get("source_revision_packet_kind")
         or subject_kind,
-        "target_scope": (
-            source.payload.get("target_scope")
-            or subject_coverage.get("target_scope")
-            or subject.get("target_movement")
-            or subject.get("target_scope")
+        "target_scope": target_scope,
+        "selected_region_id": _first_present(
+            source.payload.get("selected_region_id"),
+            causal.get("selected_region_id"),
+            comparison.get("selected_region_id"),
+            subject_coverage.get("selected_region_id"),
         ),
-        "selected_region_id": subject_coverage.get("selected_region_id"),
-        "selected_residual_target_id": (
-            source.payload.get("selected_residual_target_id")
-            or (
-                subject_coverage.get("target_scope")
-                if subject_coverage.get("target_scope")
-                == RESIDUAL_OBJECT_MOTION_TARGET_ID
-                else None
-            )
+        "selected_residual_target_id": selected_residual_target_id,
+        "target_adapter_id": target_adapter_id,
+        "target_aware_ablation": target_aware_ablation,
+        "target_role_consistency_checked": target_role_consistency_checked,
+        "target_role_consistency_passed": target_role_consistency_passed,
+        "target_role_consistency_failures": target_role_consistency_failures,
+        "target_specific_ablation_controls": target_specific_ablation_controls,
+        "previous_generic_ablation_packet_id": _first_present(
+            source.payload.get("previous_generic_ablation_packet_id"),
+            causal.get("previous_generic_ablation_packet_id"),
+            gate_report.get("previous_generic_ablation_packet_id"),
         ),
-        "target_unit_count": len(_string_list(subject_coverage.get("target_unit_ids"))),
-        "target_unit_ids": _string_list(subject_coverage.get("target_unit_ids")),
+        "previous_generic_ablation_not_authoritative_for_target": bool(
+            source.payload.get("previous_generic_ablation_not_authoritative_for_target")
+            or causal.get("previous_generic_ablation_not_authoritative_for_target")
+            or gate_report.get("previous_generic_ablation_not_authoritative_for_target")
+        ),
+        "supersedes_generic_ablation_for_target": bool(
+            source.payload.get("supersedes_generic_ablation_for_target")
+            or causal.get("supersedes_generic_ablation_for_target")
+            or comparison.get("supersedes_generic_ablation_for_target")
+            or gate_report.get("supersedes_generic_ablation_for_target")
+        ),
+        "target_unit_count": len(target_unit_ids),
+        "target_unit_ids": target_unit_ids,
         "selected_handle": None,
         "selected_base": None,
         "proposed_patch_count": None,
@@ -1443,8 +1598,8 @@ def _executed_ablation_history_row(source: SourcePacket) -> dict[str, object]:
         "causal_status": causal_status,
         "selected_repair_causal_status": causal_status,
         "selected_repair_appears_causal": causal.get("selected_repair_appears_causal"),
-        "repair_has_causal_support": comparison.get("repair_has_causal_support"),
-        "revert_performs_same_or_better": comparison.get("revert_performs_same_or_better"),
+        "repair_has_causal_support": repair_has_causal_support,
+        "revert_performs_same_or_better": revert_performs_same_or_better,
         "reverting_patch_weakens_candidate": comparison.get(
             "reverting_patch_weakens_candidate"
         ),
@@ -1453,9 +1608,41 @@ def _executed_ablation_history_row(source: SourcePacket) -> dict[str, object]:
         ),
         "reduced_overexplanation": causal.get("reduced_overexplanation"),
         "damaged_local_embodiment": causal.get("damaged_local_embodiment"),
+        "tactile_intervention_has_causal_support": _first_present(
+            source.payload.get("tactile_intervention_has_causal_support"),
+            causal.get("tactile_intervention_has_causal_support"),
+            comparison.get("tactile_intervention_has_causal_support"),
+        ),
+        "tactile_force_contact_adds_value": _first_present(
+            causal.get("tactile_force_contact_adds_value"),
+            comparison.get("tactile_force_contact_adds_value"),
+        ),
+        "object_motion_preserved_tactile_removed_performs_same_or_better": _first_present(
+            causal.get("object_motion_preserved_tactile_removed_performs_same_or_better"),
+            comparison.get("object_motion_preserved_tactile_removed_performs_same_or_better"),
+        ),
+        "revert_to_current_best_performs_same_or_better": _first_present(
+            causal.get("revert_to_current_best_performs_same_or_better"),
+            comparison.get("revert_to_current_best_performs_same_or_better"),
+            source.payload.get("revert_to_current_best_performs_same_or_better"),
+        ),
+        "decorative_or_abstract_control_performs_same_or_better": _first_present(
+            causal.get("decorative_or_abstract_control_performs_same_or_better"),
+            comparison.get("decorative_or_abstract_control_performs_same_or_better"),
+        ),
+        "candidate_earns_reader_state_eval": _first_present(
+            causal.get("candidate_earns_reader_state_eval"),
+            comparison.get("candidate_earns_reader_state_eval"),
+        ),
+        "packet_0063_earns_reader_state_eval": _first_present(
+            causal.get("packet_0063_earns_reader_state_eval"),
+            comparison.get("packet_0063_earns_reader_state_eval"),
+        ),
         "recommended_next_action": causal.get("recommended_next_action"),
         "strongest_rival_pressure_remains_blocking": bool(
             causal.get("strongest_rival_pressure_remains_blocking")
+            or causal.get("strongest_rival_still_blocks")
+            or source.payload.get("strongest_rival_still_blocks")
             or comparison.get("strongest_rival_still_beats_candidate")
             or _nested_bool(gate_report, ("rival_remains_blocking",))
         ),
@@ -1463,10 +1650,7 @@ def _executed_ablation_history_row(source: SourcePacket) -> dict[str, object]:
             "strongest_rival_still_beats_candidate"
         ),
         "model_calls": int(counts.get("model_calls") or len(source.model_call_ids)),
-        "comparison_internal_consistency": source.payload.get(
-            "comparison_internal_consistency"
-        )
-        or consistency.get("comparison_internal_consistency"),
+        "comparison_internal_consistency": comparison_internal_consistency,
         "actual_executed_ablation_evidence_exists": bool(
             gate_report.get("actual_executed_ablation_evidence_exists")
         ),
@@ -1562,7 +1746,7 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
         for row in residual_candidate_rows
         if any(
             _proof_matches_candidate(proof, row)
-            and _proof_supports_candidate(proof)
+            and _proof_supports_candidate_for_candidate(proof, row)
             for proof in residual_proof_rows
         )
     ]
@@ -1876,8 +2060,44 @@ def _build_candidate_proof_pairs(rows: list[dict[str, object]]) -> list[dict[str
             for proof in proof_rows
             if _proof_matches_candidate(proof, candidate)
         ]
-        linked_proofs.sort(key=lambda proof: (str(proof.get("created_at", "")), str(proof["packet_id"])))
-        proof = linked_proofs[-1] if linked_proofs else None
+        linked_proofs.sort(
+            key=lambda proof: (
+                str(proof.get("created_at", "")),
+                str(proof["packet_id"]),
+            )
+        )
+        proof = _authoritative_proof_for_candidate(candidate, linked_proofs)
+        proof_rejection_reasons = (
+            _proof_rejection_reasons_for_candidate(proof, candidate) if proof else []
+        )
+        rejected_proof_candidates = [
+            {
+                "proof_packet_id": linked_proof.get("packet_id"),
+                "proof_packet_dir": linked_proof.get("packet_dir"),
+                "proof_target_aware_ablation": bool(
+                    linked_proof.get("target_aware_ablation")
+                ),
+                "proof_target_adapter_id": linked_proof.get("target_adapter_id"),
+                "proof_selected_residual_target_id": linked_proof.get(
+                    "selected_residual_target_id"
+                ),
+                "proof_fixture_only": bool(linked_proof.get("fixture_only")),
+                "proof_model_backed": bool(linked_proof.get("model_backed")),
+                "proof_comparison_internal_consistency": bool(
+                    linked_proof.get("comparison_internal_consistency")
+                ),
+                "proof_target_role_consistency_passed": linked_proof.get(
+                    "target_role_consistency_passed"
+                ),
+                "rejection_reasons": _proof_rejection_reasons_for_candidate(
+                    linked_proof,
+                    candidate,
+                ),
+            }
+            for linked_proof in linked_proofs
+            if linked_proof is not proof
+            or _proof_rejection_reasons_for_candidate(linked_proof, candidate)
+        ]
         eligible, blockers = _candidate_supersession_result(candidate, proof)
         pairs.append(
             {
@@ -1890,6 +2110,7 @@ def _build_candidate_proof_pairs(rows: list[dict[str, object]]) -> list[dict[str
                 "candidate_selected_residual_target_id": candidate.get(
                     "selected_residual_target_id"
                 ),
+                "candidate_target_adapter_id": candidate.get("target_adapter_id"),
                 "candidate_residual_candidate_generation": _is_residual_candidate(
                     candidate
                 ),
@@ -1901,6 +2122,20 @@ def _build_candidate_proof_pairs(rows: list[dict[str, object]]) -> list[dict[str
                 "candidate_target_unit_ids": list(
                     candidate.get("target_unit_ids", [])
                     if isinstance(candidate.get("target_unit_ids"), list)
+                    else []
+                ),
+                "candidate_source_work_order_packet_id": candidate.get(
+                    "source_work_order_packet_id"
+                ),
+                "candidate_source_authorization_packet_id": candidate.get(
+                    "source_authorization_packet_id"
+                ),
+                "candidate_target_specific_ablation_controls": list(
+                    candidate.get("target_specific_ablation_controls", [])
+                    if isinstance(
+                        candidate.get("target_specific_ablation_controls"),
+                        list,
+                    )
                     else []
                 ),
                 "candidate_object_event_pressure_recomposition": _is_object_event_candidate(
@@ -1915,6 +2150,31 @@ def _build_candidate_proof_pairs(rows: list[dict[str, object]]) -> list[dict[str
                 "proof_packet_id": proof.get("packet_id") if proof else None,
                 "proof_packet_dir": proof.get("packet_dir") if proof else None,
                 "proof_causal_status": proof.get("causal_status") if proof else None,
+                "proof_target_aware_ablation": proof.get("target_aware_ablation")
+                if proof
+                else None,
+                "proof_target_adapter_id": proof.get("target_adapter_id") if proof else None,
+                "proof_selected_residual_target_id": proof.get(
+                    "selected_residual_target_id"
+                )
+                if proof
+                else None,
+                "proof_target_role_consistency_checked": proof.get(
+                    "target_role_consistency_checked"
+                )
+                if proof
+                else None,
+                "proof_target_role_consistency_passed": proof.get(
+                    "target_role_consistency_passed"
+                )
+                if proof
+                else None,
+                "proof_target_specific_ablation_controls": list(
+                    proof.get("target_specific_ablation_controls", [])
+                    if proof
+                    and isinstance(proof.get("target_specific_ablation_controls"), list)
+                    else []
+                ),
                 "proof_model_backed": proof.get("model_backed") if proof else None,
                 "proof_fixture_only": proof.get("fixture_only") if proof else None,
                 "proof_countable_evidence_variant_count": proof.get(
@@ -1930,9 +2190,10 @@ def _build_candidate_proof_pairs(rows: list[dict[str, object]]) -> list[dict[str
                 )
                 if proof
                 else False,
-                "proof_supports_candidate": _proof_supports_candidate(proof)
-                if proof
-                else False,
+                "proof_supports_candidate": not proof_rejection_reasons if proof else False,
+                "proof_rejection_reasons": proof_rejection_reasons,
+                "authoritative_proof_packet_id": proof.get("packet_id") if proof else None,
+                "rejected_proof_candidates": rejected_proof_candidates,
                 "supersession_eligible": eligible,
                 "supersession_blockers": blockers,
             }
@@ -1965,6 +2226,26 @@ def _annotate_candidate_evidence_links(rows: list[dict[str, object]]) -> None:
                 "proof_causal_status": proof_pair.get("proof_causal_status"),
                 "proof_fixture_only": proof_pair.get("proof_fixture_only"),
                 "proof_model_backed": proof_pair.get("proof_model_backed"),
+                "proof_target_aware_ablation": proof_pair.get(
+                    "proof_target_aware_ablation"
+                ),
+                "proof_target_adapter_id": proof_pair.get("proof_target_adapter_id"),
+                "proof_selected_residual_target_id": proof_pair.get(
+                    "proof_selected_residual_target_id"
+                ),
+                "proof_target_role_consistency_passed": proof_pair.get(
+                    "proof_target_role_consistency_passed"
+                ),
+                "proof_rejection_reasons": list(
+                    proof_pair.get("proof_rejection_reasons", [])
+                    if isinstance(proof_pair.get("proof_rejection_reasons"), list)
+                    else []
+                ),
+                "rejected_proof_candidates": list(
+                    proof_pair.get("rejected_proof_candidates", [])
+                    if isinstance(proof_pair.get("rejected_proof_candidates"), list)
+                    else []
+                ),
                 "reader_state_evaluated": reader_state_row is not None,
                 "reader_state_packet_id": reader_state_row.get("packet_id")
                 if reader_state_row
@@ -2069,39 +2350,7 @@ def _candidate_supersession_result(
     if proof is None:
         blockers.append("no_executed_ablation_proof_linked")
         return False, blockers
-    if not bool(proof.get("accepted", True)):
-        blockers.append("proof_not_accepted")
-    if not bool(proof.get("model_backed")) or bool(proof.get("fixture_only")):
-        blockers.append("proof_not_live_model_backed")
-    if str(proof.get("causal_status")) not in USEFUL_OR_STRONGER_CAUSAL_STATUSES:
-        blockers.append("proof_causal_status_not_useful_or_stronger")
-    if not bool(proof.get("actual_executed_ablation_evidence_exists")):
-        blockers.append("actual_executed_ablation_evidence_missing")
-    if not bool(proof.get("actual_ablation_comparison_exists")):
-        blockers.append("actual_ablation_comparison_missing")
-    if int(proof.get("countable_evidence_variant_count") or 0) <= 0:
-        blockers.append("countable_evidence_missing")
-    if not bool(proof.get("comparison_internal_consistency")):
-        blockers.append("comparison_internal_consistency_missing")
-    if not (
-        bool(proof.get("selected_repair_appears_causal"))
-        or bool(proof.get("repair_has_causal_support"))
-    ):
-        blockers.append("causal_support_missing")
-    if proof.get("reverting_patch_weakens_candidate") is not True:
-        blockers.append("revert_does_not_weaken_candidate")
-    if proof.get("revert_performs_same_or_better") is not False:
-        blockers.append("revert_performs_same_or_better_not_false")
-    if "reduced_overexplanation" in proof and proof.get("reduced_overexplanation") is False:
-        blockers.append("reduced_overexplanation_not_supported")
-    if "damaged_local_embodiment" in proof and proof.get("damaged_local_embodiment") is True:
-        blockers.append("local_embodiment_damaged")
-    if not bool(proof.get("strongest_rival_pressure_remains_blocking")):
-        blockers.append("strongest_rival_pressure_not_preserved_as_blocking")
-    if bool(proof.get("finalization_eligible", False)):
-        blockers.append("proof_finalization_eligible")
-    if not bool(proof.get("no_phase_shift_claim", True)):
-        blockers.append("proof_phase_shift_claim")
+    blockers.extend(_proof_rejection_reasons_for_candidate(proof, candidate))
     return not blockers, blockers
 
 
@@ -2123,8 +2372,13 @@ def _is_object_event_candidate(row: dict[str, object]) -> bool:
 def _is_residual_candidate(row: dict[str, object]) -> bool:
     return row.get("packet_kind") == "bounded_macro_recomposition" and (
         row.get("selected_residual_target_id") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+        or bool(row.get("selected_residual_target_id"))
         or row.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID
         or row.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+        or bool(row.get("target_adapter_id"))
+        or bool(row.get("source_work_order_packet_id"))
+        or bool(row.get("source_authorization_packet_id"))
+        or bool(row.get("target_specific_ablation_controls"))
         or bool(row.get("residual_candidate_generation"))
         or bool(row.get("object_motion_causality_generation"))
     )
@@ -2135,11 +2389,36 @@ def _is_residual_candidate_source_packet(source: SourcePacket) -> bool:
         return False
     if source.payload.get("selected_residual_target_id") == RESIDUAL_OBJECT_MOTION_TARGET_ID:
         return True
+    if source.payload.get("selected_residual_target_id"):
+        return True
     if source.payload.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID:
         return True
     if source.payload.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID:
         return True
+    if source.payload.get("target_adapter_id"):
+        return True
+    if source.payload.get("source_work_order_packet_id"):
+        return True
+    if source.payload.get("source_authorization_packet_id"):
+        return True
+    if source.payload.get("target_specific_ablation_controls"):
+        return True
+    if source.payload.get("ablation_controls"):
+        return True
     return bool(source.payload.get("object_motion_causality_generation"))
+
+
+def _is_residual_candidate_graph_node(node: dict[str, object]) -> bool:
+    return bool(
+        node.get("selected_residual_target_id")
+        or node.get("target_adapter_id")
+        or node.get("source_work_order_packet_id")
+        or node.get("source_authorization_packet_id")
+        or node.get("target_specific_ablation_controls")
+    ) or (
+        node.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+        or node.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+    )
 
 
 def _is_object_event_source_packet(source: SourcePacket) -> bool:
@@ -2204,6 +2483,123 @@ def _proof_supports_candidate(proof: dict[str, object]) -> bool:
         and not bool(proof.get("finalization_eligible"))
         and bool(proof.get("no_phase_shift_claim", True))
     )
+
+
+def _candidate_requires_target_aware_proof(candidate: dict[str, object]) -> bool:
+    return (
+        candidate.get("target_adapter_id") == TACTILE_TARGET_ADAPTER_ID
+        or candidate.get("selected_residual_target_id") == TACTILE_RESIDUAL_TARGET_ID
+    )
+
+
+def _proof_rejection_reasons_for_candidate(
+    proof: dict[str, object],
+    candidate: dict[str, object],
+) -> list[str]:
+    reasons: list[str] = []
+    if not bool(proof.get("accepted", True)):
+        reasons.append("proof_not_accepted")
+    if not bool(proof.get("model_backed")) or bool(proof.get("fixture_only")):
+        reasons.append("proof_not_live_model_backed")
+    if str(proof.get("causal_status")) not in USEFUL_OR_STRONGER_CAUSAL_STATUSES:
+        reasons.append("proof_causal_status_not_useful_or_stronger")
+    if not bool(proof.get("actual_executed_ablation_evidence_exists")):
+        reasons.append("actual_executed_ablation_evidence_missing")
+    if not bool(proof.get("actual_ablation_comparison_exists")):
+        reasons.append("actual_ablation_comparison_missing")
+    if int(proof.get("countable_evidence_variant_count") or 0) <= 0:
+        reasons.append("countable_evidence_missing")
+    if not bool(proof.get("comparison_internal_consistency")):
+        reasons.append("comparison_internal_consistency_missing")
+    if not (
+        bool(proof.get("selected_repair_appears_causal"))
+        or bool(proof.get("repair_has_causal_support"))
+    ):
+        reasons.append("causal_support_missing")
+    if proof.get("reverting_patch_weakens_candidate") is not True:
+        reasons.append("revert_does_not_weaken_candidate")
+    if proof.get("revert_performs_same_or_better") is not False:
+        reasons.append("revert_performs_same_or_better_not_false")
+    if "reduced_overexplanation" in proof and proof.get("reduced_overexplanation") is False:
+        reasons.append("reduced_overexplanation_not_supported")
+    if "damaged_local_embodiment" in proof and proof.get("damaged_local_embodiment") is True:
+        reasons.append("local_embodiment_damaged")
+    if not bool(proof.get("strongest_rival_pressure_remains_blocking")):
+        reasons.append("strongest_rival_pressure_not_preserved_as_blocking")
+    if bool(proof.get("finalization_eligible", False)):
+        reasons.append("proof_finalization_eligible")
+    if not bool(proof.get("no_phase_shift_claim", True)):
+        reasons.append("proof_phase_shift_claim")
+
+    if _candidate_requires_target_aware_proof(candidate):
+        candidate_target_id = str(candidate.get("selected_residual_target_id") or "")
+        proof_target_id = str(proof.get("selected_residual_target_id") or "")
+        candidate_adapter_id = str(candidate.get("target_adapter_id") or "")
+        proof_adapter_id = str(proof.get("target_adapter_id") or "")
+        if not bool(proof.get("target_aware_ablation")):
+            reasons.append("target_aware_proof_required_for_residual_target")
+        if candidate_target_id and proof_target_id != candidate_target_id:
+            reasons.append("selected_residual_target_id_mismatch")
+        if candidate_adapter_id and proof_adapter_id != candidate_adapter_id:
+            reasons.append("target_adapter_id_mismatch")
+        if proof.get("target_role_consistency_checked") is not True:
+            reasons.append("target_role_consistency_not_checked")
+        if proof.get("target_role_consistency_passed") is not True:
+            reasons.append("target_role_consistency_failed")
+        if proof.get("tactile_intervention_has_causal_support") is not True:
+            reasons.append("tactile_intervention_causal_support_missing")
+        if proof.get("tactile_force_contact_adds_value") is not True:
+            reasons.append("tactile_force_contact_value_missing")
+        if (
+            proof.get("object_motion_preserved_tactile_removed_performs_same_or_better")
+            is not False
+        ):
+            reasons.append("tactile_removed_control_not_weaker")
+        earns_reader_state_eval = _first_present(
+            proof.get("candidate_earns_reader_state_eval"),
+            proof.get("packet_0063_earns_reader_state_eval"),
+        )
+        if earns_reader_state_eval is not True:
+            reasons.append("target_aware_candidate_not_earned_reader_state_eval")
+    return _unique(reasons)
+
+
+def _proof_supports_candidate_for_candidate(
+    proof: dict[str, object] | None,
+    candidate: dict[str, object],
+) -> bool:
+    if proof is None:
+        return False
+    return not _proof_rejection_reasons_for_candidate(proof, candidate)
+
+
+def _proof_authority_sort_key(
+    proof: dict[str, object],
+    candidate: dict[str, object],
+) -> tuple[int, int, int, int, int, int, str, str]:
+    reasons = _proof_rejection_reasons_for_candidate(proof, candidate)
+    return (
+        int(not reasons),
+        int(bool(proof.get("target_aware_ablation"))),
+        int(bool(proof.get("model_backed")) and not bool(proof.get("fixture_only"))),
+        int(bool(proof.get("comparison_internal_consistency"))),
+        int(bool(proof.get("target_role_consistency_passed"))),
+        int(proof.get("event_index") or 0),
+        str(proof.get("created_at") or ""),
+        str(proof.get("packet_id") or ""),
+    )
+
+
+def _authoritative_proof_for_candidate(
+    candidate: dict[str, object],
+    linked_proofs: list[dict[str, object]],
+) -> dict[str, object] | None:
+    if not linked_proofs:
+        return None
+    return sorted(
+        linked_proofs,
+        key=lambda proof: _proof_authority_sort_key(proof, candidate),
+    )[-1]
 
 
 def _reader_state_action_for_packet(packet_id: object) -> str:
@@ -2332,6 +2728,7 @@ def _build_best_candidate_selection(
             "target_scope": row.get("target_scope"),
             "selected_region_id": row.get("selected_region_id"),
             "selected_residual_target_id": row.get("selected_residual_target_id"),
+            "target_adapter_id": row.get("target_adapter_id"),
             "residual_candidate_generation": row.get("residual_candidate_generation"),
             "object_motion_causality_generation": row.get(
                 "object_motion_causality_generation"
@@ -2340,6 +2737,13 @@ def _build_best_candidate_selection(
             "candidate_generated": row.get("candidate_generated"),
             "source_authorization_packet_id": row.get("source_authorization_packet_id"),
             "source_authorization_packet_dir": row.get("source_authorization_packet_dir"),
+            "source_work_order_packet_id": row.get("source_work_order_packet_id"),
+            "source_work_order_packet_dir": row.get("source_work_order_packet_dir"),
+            "target_specific_ablation_controls": list(
+                row.get("target_specific_ablation_controls", [])
+                if isinstance(row.get("target_specific_ablation_controls"), list)
+                else []
+            ),
             "target_unit_count": row.get("target_unit_count"),
             "target_unit_ids": list(
                 row.get("target_unit_ids", [])
@@ -2366,6 +2770,16 @@ def _build_best_candidate_selection(
                 "proof_causal_status": proof_pair.get("proof_causal_status"),
                 "proof_model_backed": proof_pair.get("proof_model_backed"),
                 "proof_fixture_only": proof_pair.get("proof_fixture_only"),
+                "proof_target_aware_ablation": proof_pair.get(
+                    "proof_target_aware_ablation"
+                ),
+                "proof_target_adapter_id": proof_pair.get("proof_target_adapter_id"),
+                "proof_selected_residual_target_id": proof_pair.get(
+                    "proof_selected_residual_target_id"
+                ),
+                "proof_target_role_consistency_passed": proof_pair.get(
+                    "proof_target_role_consistency_passed"
+                ),
                 "proof_countable_evidence_variant_count": proof_pair.get(
                     "proof_countable_evidence_variant_count",
                     0,
@@ -2377,6 +2791,11 @@ def _build_best_candidate_selection(
                 "supersession_blockers": list(
                     proof_pair.get("supersession_blockers", [])
                     if isinstance(proof_pair.get("supersession_blockers"), list)
+                    else []
+                ),
+                "rejected_proof_candidates": list(
+                    proof_pair.get("rejected_proof_candidates", [])
+                    if isinstance(proof_pair.get("rejected_proof_candidates"), list)
                     else []
                 ),
             }
@@ -2671,10 +3090,20 @@ def _build_candidate_evidence_graph(
                 "target_scope": row.get("target_scope"),
                 "target_movement": row.get("target_movement"),
                 "selected_residual_target_id": row.get("selected_residual_target_id"),
+                "target_adapter_id": row.get("target_adapter_id"),
                 "selected_region_id": row.get("selected_region_id"),
                 "target_unit_ids": list(
                     row.get("target_unit_ids", [])
                     if isinstance(row.get("target_unit_ids"), list)
+                    else []
+                ),
+                "source_work_order_packet_id": row.get("source_work_order_packet_id"),
+                "source_authorization_packet_id": row.get(
+                    "source_authorization_packet_id"
+                ),
+                "target_specific_ablation_controls": list(
+                    row.get("target_specific_ablation_controls", [])
+                    if isinstance(row.get("target_specific_ablation_controls"), list)
                     else []
                 ),
                 "candidate_generated": bool(row.get("candidate_generated")),
@@ -2685,6 +3114,19 @@ def _build_candidate_evidence_graph(
                 "proof_fixture_only": row.get("proof_fixture_only"),
                 "proof_model_backed": row.get("proof_model_backed"),
                 "proof_causal_status": row.get("proof_causal_status"),
+                "proof_target_aware_ablation": row.get("proof_target_aware_ablation"),
+                "proof_target_adapter_id": row.get("proof_target_adapter_id"),
+                "proof_selected_residual_target_id": row.get(
+                    "proof_selected_residual_target_id"
+                ),
+                "proof_target_role_consistency_passed": row.get(
+                    "proof_target_role_consistency_passed"
+                ),
+                "rejected_proof_candidates": list(
+                    row.get("rejected_proof_candidates", [])
+                    if isinstance(row.get("rejected_proof_candidates"), list)
+                    else []
+                ),
                 "reader_state_packet_id": row.get("reader_state_packet_id"),
                 "reader_state_packet_dir": row.get("reader_state_packet_dir"),
                 "reader_state_evaluated": reader_state_evaluated,
@@ -2711,9 +3153,7 @@ def _build_candidate_evidence_graph(
     residual_nodes = [
         node
         for node in nodes
-        if node.get("selected_residual_target_id") == RESIDUAL_OBJECT_MOTION_TARGET_ID
-        or node.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID
-        or node.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID
+        if _is_residual_candidate_graph_node(node)
     ]
     return {
         "nodes": nodes,
@@ -2770,11 +3210,7 @@ def _build_provisional_candidate_queue(
     evaluated_contenders = [
         node
         for node in graph_nodes
-        if (
-            node.get("selected_residual_target_id") == RESIDUAL_OBJECT_MOTION_TARGET_ID
-            or node.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID
-            or node.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID
-        )
+        if _is_residual_candidate_graph_node(node)
         and node.get("proof_backed")
         and node.get("reader_state_evaluated")
     ]
@@ -2791,12 +3227,29 @@ def _build_provisional_candidate_queue(
                 "selected_residual_target_id": candidate.get(
                     "selected_residual_target_id"
                 ),
+                "target_adapter_id": candidate.get("target_adapter_id"),
                 "selected_region_id": candidate.get("selected_region_id"),
+                "target_scope": candidate.get("target_scope"),
+                "target_movement": candidate.get("target_movement"),
                 "source_authorization_packet_id": candidate.get(
                     "source_authorization_packet_id"
                 ),
                 "source_authorization_packet_dir": candidate.get(
                     "source_authorization_packet_dir"
+                ),
+                "source_work_order_packet_id": candidate.get(
+                    "source_work_order_packet_id"
+                ),
+                "source_work_order_packet_dir": candidate.get(
+                    "source_work_order_packet_dir"
+                ),
+                "target_specific_ablation_controls": list(
+                    candidate.get("target_specific_ablation_controls", [])
+                    if isinstance(
+                        candidate.get("target_specific_ablation_controls"),
+                        list,
+                    )
+                    else []
                 ),
                 "authorization_consumed": bool(candidate.get("authorization_consumed")),
                 "candidate_generated": bool(candidate.get("candidate_generated")),
@@ -2810,6 +3263,16 @@ def _build_provisional_candidate_queue(
                 "proof_packet_id": candidate.get("proof_packet_id"),
                 "proof_packet_dir": candidate.get("proof_packet_dir"),
                 "proof_causal_status": candidate.get("proof_causal_status"),
+                "proof_target_aware_ablation": candidate.get(
+                    "proof_target_aware_ablation"
+                ),
+                "proof_target_adapter_id": candidate.get("proof_target_adapter_id"),
+                "proof_selected_residual_target_id": candidate.get(
+                    "proof_selected_residual_target_id"
+                ),
+                "proof_target_role_consistency_passed": candidate.get(
+                    "proof_target_role_consistency_passed"
+                ),
                 "proof_model_backed": bool(candidate.get("proof_model_backed")),
                 "proof_fixture_only": bool(candidate.get("proof_fixture_only")),
                 "proof_countable_evidence_variant_count": int(
@@ -2867,9 +3330,19 @@ def _build_provisional_candidate_queue(
                 "packet_dir": node.get("candidate_packet_dir"),
                 "base_candidate_packet_id": node.get("base_candidate_packet_id"),
                 "selected_residual_target_id": node.get("selected_residual_target_id"),
+                "target_adapter_id": node.get("target_adapter_id"),
                 "selected_region_id": node.get("selected_region_id"),
                 "target_scope": node.get("target_scope"),
                 "target_movement": node.get("target_movement"),
+                "source_work_order_packet_id": node.get("source_work_order_packet_id"),
+                "source_authorization_packet_id": node.get(
+                    "source_authorization_packet_id"
+                ),
+                "target_specific_ablation_controls": list(
+                    node.get("target_specific_ablation_controls", [])
+                    if isinstance(node.get("target_specific_ablation_controls"), list)
+                    else []
+                ),
                 "target_unit_ids": list(
                     node.get("target_unit_ids", [])
                     if isinstance(node.get("target_unit_ids"), list)
@@ -3077,6 +3550,32 @@ def _build_failed_or_rejected_repairs(history: dict[str, object]) -> dict[str, o
                     "source_evidence": [str(value) for value in control_ids],
                 }
             )
+        rejected_proofs = row.get("rejected_proof_candidates")
+        if isinstance(rejected_proofs, list):
+            for proof in rejected_proofs:
+                if not isinstance(proof, dict):
+                    continue
+                repairs.append(
+                    {
+                        "packet_id": proof.get("proof_packet_id"),
+                        "packet_kind": "executed_ablation",
+                        "subject_kind": "bounded_macro_recomposition",
+                        "packet_dir": proof.get("proof_packet_dir"),
+                        "selected_handle": "target_aware_residual_proof_authority",
+                        "causal_status": "non_authoritative_proof",
+                        "classification": "rejected",
+                        "rejection_reason": ", ".join(
+                            str(reason)
+                            for reason in proof.get("rejection_reasons", [])
+                            if isinstance(reason, str)
+                        )
+                        or "linked proof is not authoritative for the residual target",
+                        "source_evidence": [
+                            str(row.get("packet_id")),
+                            str(proof.get("proof_packet_id")),
+                        ],
+                    }
+                )
     return {
         "failed_or_rejected_repairs": repairs,
         "failed_or_rejected_count": len(repairs),
@@ -3506,12 +4005,7 @@ def _build_residual_candidate_reader_state_adjudication(
     residual_nodes = [
         node
         for node in candidate_evidence_graph.get("nodes", [])
-        if isinstance(node, dict)
-        and (
-            node.get("selected_residual_target_id") == RESIDUAL_OBJECT_MOTION_TARGET_ID
-            or node.get("target_scope") == RESIDUAL_OBJECT_MOTION_TARGET_ID
-            or node.get("target_movement") == RESIDUAL_OBJECT_MOTION_TARGET_ID
-        )
+        if isinstance(node, dict) and _is_residual_candidate_graph_node(node)
     ]
     evaluated = [
         node
@@ -5869,8 +6363,33 @@ def _source_packet_summary(source: SourcePacket) -> dict[str, object]:
         "target_movement": source.payload.get("target_movement"),
         "selected_region_id": source.payload.get("selected_region_id"),
         "selected_residual_target_id": source.payload.get("selected_residual_target_id"),
+        "target_adapter_id": source.payload.get("target_adapter_id"),
+        "target_aware_ablation": source.payload.get("target_aware_ablation"),
+        "target_role_consistency_checked": source.payload.get(
+            "target_role_consistency_checked"
+        ),
+        "target_role_consistency_passed": source.payload.get(
+            "target_role_consistency_passed"
+        ),
         "authorization_consumed": source.payload.get("authorization_consumed"),
         "candidate_generated": source.payload.get("candidate_generated"),
+        "source_work_order_packet_id": source.payload.get("source_work_order_packet_id"),
+        "source_authorization_packet_id": source.payload.get(
+            "source_authorization_packet_id"
+        ),
+        "target_specific_ablation_controls": source.payload.get(
+            "target_specific_ablation_controls"
+        )
+        or source.payload.get("ablation_controls"),
+        "previous_generic_ablation_packet_id": source.payload.get(
+            "previous_generic_ablation_packet_id"
+        ),
+        "previous_generic_ablation_not_authoritative_for_target": source.payload.get(
+            "previous_generic_ablation_not_authoritative_for_target"
+        ),
+        "supersedes_generic_ablation_for_target": source.payload.get(
+            "supersedes_generic_ablation_for_target"
+        ),
         "target_unit_count": source.payload.get("target_unit_count"),
         "target_unit_ids": source.payload.get("target_unit_ids"),
         "object_motion_causality_generation": bool(
@@ -5941,6 +6460,13 @@ def _optional_payload(packet_dir: Path, file_name: str) -> dict[str, Any]:
 
 def _as_dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _first_present(*values: object) -> object:
+    for value in values:
+        if value is not None:
+            return value
+    return None
 
 
 def _rows(history: dict[str, object]) -> list[dict[str, object]]:

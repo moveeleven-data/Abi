@@ -1111,6 +1111,139 @@ def _rewrite_macro2_proof(proof_payload: dict[str, object], *, useful: bool) -> 
     rewrite_payload(proof_payload["artifact_paths"]["executed_ablation_gate_report"], _gate)
 
 
+def _rewrite_tactile_proof_as_generic_non_authoritative(
+    proof_payload: dict[str, object],
+) -> None:
+    def _causal(payload):
+        payload["target_aware_ablation"] = False
+        payload["selected_repair_causal_status"] = "noncausal_or_cosmetic"
+        payload["selected_repair_appears_causal"] = False
+        payload["tactile_intervention_has_causal_support"] = False
+        payload["tactile_force_contact_adds_value"] = False
+        payload["object_motion_preserved_tactile_removed_performs_same_or_better"] = True
+        payload["packet_0063_earns_reader_state_eval"] = False
+        payload["candidate_earns_reader_state_eval"] = False
+        payload["previous_generic_ablation_not_authoritative_for_target"] = True
+        payload["supersedes_generic_ablation_for_target"] = False
+        payload["strongest_rival_pressure_remains_blocking"] = True
+
+    def _comparison(payload):
+        payload["target_aware_ablation"] = False
+        payload["repair_has_causal_support"] = False
+        payload["tactile_intervention_has_causal_support"] = False
+        payload["tactile_force_contact_adds_value"] = False
+        payload["object_motion_preserved_tactile_removed_performs_same_or_better"] = True
+        payload["revert_performs_same_or_better"] = True
+        payload["reverting_patch_weakens_candidate"] = False
+        payload["packet_0063_earns_reader_state_eval"] = False
+        payload["strongest_rival_still_beats_candidate"] = True
+
+    def _consistency(payload):
+        payload["target_role_consistency_checked"] = False
+        payload["target_role_consistency_passed"] = True
+        payload["target_role_consistency_failures"] = []
+        payload["comparison_internal_consistency"] = True
+
+    def _packet(payload):
+        payload["target_aware_ablation"] = False
+        payload["selected_repair_causal_status"] = "noncausal_or_cosmetic"
+        payload["comparison_internal_consistency"] = True
+        payload["tactile_intervention_has_causal_support"] = False
+        payload["target_role_consistency_checked"] = False
+        payload["target_role_consistency_passed"] = True
+        payload["previous_generic_ablation_not_authoritative_for_target"] = True
+        payload["supersedes_generic_ablation_for_target"] = False
+        gate_report = payload.get("gate_report", {})
+        if isinstance(gate_report, dict):
+            gate_report["target_aware_ablation"] = False
+            gate_report["comparison_internal_consistency"] = True
+            gate_report["target_role_consistency_checked"] = False
+            gate_report["target_role_consistency_passed"] = True
+            gate_report["previous_generic_ablation_not_authoritative_for_target"] = True
+            gate_report["supersedes_generic_ablation_for_target"] = False
+
+    def _gate(payload):
+        payload["target_aware_ablation"] = False
+        payload["comparison_internal_consistency"] = True
+        payload["target_role_consistency_checked"] = False
+        payload["target_role_consistency_passed"] = True
+        payload["previous_generic_ablation_not_authoritative_for_target"] = True
+        payload["supersedes_generic_ablation_for_target"] = False
+        payload["rival_remains_blocking"] = True
+
+    rewrite_payload(proof_payload["artifact_paths"]["ablation_causal_effect_report"], _causal)
+    rewrite_payload(
+        proof_payload["artifact_paths"]["ablation_old_new_rival_comparison"],
+        _comparison,
+    )
+    rewrite_payload(proof_payload["artifact_paths"]["comparison_consistency_report"], _consistency)
+    rewrite_payload(proof_payload["artifact_paths"]["executed_ablation_packet"], _packet)
+    rewrite_payload(proof_payload["artifact_paths"]["executed_ablation_gate_report"], _gate)
+
+
+def _rewrite_tactile_proof_as_role_consistency_failed(
+    proof_payload: dict[str, object],
+) -> None:
+    failures = [
+        "target-aware comparator row roles contradicted the target control operations"
+    ]
+
+    def _causal(payload):
+        payload["selected_repair_causal_status"] = (
+            "inconclusive_due_to_comparator_role_confusion"
+        )
+        payload["selected_repair_appears_causal"] = False
+        payload["tactile_intervention_has_causal_support"] = False
+        payload["tactile_force_contact_adds_value"] = False
+        payload["packet_0063_earns_reader_state_eval"] = False
+        payload["candidate_earns_reader_state_eval"] = False
+        payload["target_role_consistency_checked"] = True
+        payload["target_role_consistency_passed"] = False
+        payload["target_role_consistency_failures"] = failures
+
+    def _comparison(payload):
+        payload["repair_has_causal_support"] = False
+        payload["tactile_intervention_has_causal_support"] = False
+        payload["tactile_force_contact_adds_value"] = False
+        payload["packet_0063_earns_reader_state_eval"] = False
+
+    def _consistency(payload):
+        payload["comparison_internal_consistency"] = False
+        payload["target_role_consistency_checked"] = True
+        payload["target_role_consistency_passed"] = False
+        payload["target_role_consistency_failures"] = failures
+
+    def _packet(payload):
+        payload["selected_repair_causal_status"] = (
+            "inconclusive_due_to_comparator_role_confusion"
+        )
+        payload["comparison_internal_consistency"] = False
+        payload["target_role_consistency_checked"] = True
+        payload["target_role_consistency_passed"] = False
+        payload["target_role_consistency_failures"] = failures
+        gate_report = payload.get("gate_report", {})
+        if isinstance(gate_report, dict):
+            gate_report["comparison_internal_consistency"] = False
+            gate_report["target_role_consistency_checked"] = True
+            gate_report["target_role_consistency_passed"] = False
+            gate_report["target_role_consistency_failures"] = failures
+
+    def _gate(payload):
+        payload["comparison_internal_consistency"] = False
+        payload["target_role_consistency_checked"] = True
+        payload["target_role_consistency_passed"] = False
+        payload["target_role_consistency_failures"] = failures
+
+    rewrite_payload(proof_payload["artifact_paths"]["ablation_causal_effect_report"], _causal)
+    rewrite_payload(
+        proof_payload["artifact_paths"]["ablation_old_new_rival_comparison"],
+        _comparison,
+    )
+    rewrite_payload(proof_payload["artifact_paths"]["comparison_consistency_report"], _consistency)
+    rewrite_payload(proof_payload["artifact_paths"]["executed_ablation_packet"], _packet)
+    rewrite_payload(proof_payload["artifact_paths"]["executed_ablation_gate_report"], _gate)
+
+
 def revision_stub_factory(
     clients: list[FakeAutonomousRevisionModelClient],
     *,
@@ -11232,6 +11365,255 @@ def test_autonomous_evidence_synthesis_surfaces_proof_backed_residual_candidate(
         final_report = check_finalization(
             connection,
             run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_queues_target_aware_tactile_residual_candidate(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    chain = build_tactile_residual_candidate_authorization_chain(tmp_path)
+    config = chain["config"]
+    residual_clients = []
+    residual = run_residual_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-tactile-model",
+        client_factory=residual_intervention_stub_factory(residual_clients),
+    )
+    assert residual.exit_code == 0
+    assert residual.payload["accepted"] is True
+    assert residual.payload["selected_residual_target_id"] == (
+        TACTILE_INEVITABILITY_TARGET_ID
+    )
+    assert residual.payload["target_adapter_id"] == "tactile_inevitability"
+
+    generic_proof = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation",
+        client_factory=executed_ablation_stub_factory([]),
+    )
+    assert generic_proof.exit_code == 0
+    _rewrite_tactile_proof_as_generic_non_authoritative(generic_proof.payload)
+
+    role_confused = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation",
+        client_factory=executed_ablation_stub_factory(
+            [],
+            mode="confused_tactile_revert",
+        ),
+    )
+    assert role_confused.exit_code == 0
+    assert role_confused.payload["target_role_consistency_passed"] is False
+
+    role_failed = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation",
+        client_factory=executed_ablation_stub_factory([]),
+    )
+    assert role_failed.exit_code == 0
+    _rewrite_tactile_proof_as_role_consistency_failed(role_failed.payload)
+
+    fake_proof = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=residual.payload["packet_dir"],
+    )
+    assert fake_proof.exit_code == 0
+    fake_packet_envelope = json.loads(
+        (Path(str(fake_proof.payload["packet_dir"])) / "executed_ablation_packet.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert fake_packet_envelope["fixture_only"] is True
+
+    authoritative = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual.payload["packet_dir"],
+        allow_live_model=True,
+        api_key="stub-key",
+        model="stub-executed-ablation",
+        client_factory=executed_ablation_stub_factory([]),
+    )
+    assert authoritative.exit_code == 0
+    assert authoritative.payload["accepted"] is True
+    assert authoritative.payload["target_aware_ablation"] is True
+    assert authoritative.payload["target_adapter_id"] == "tactile_inevitability"
+    assert authoritative.payload["target_role_consistency_passed"] is True
+
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    synthesis = run_autonomous_evidence_synthesis(config, run_id=chain["run_id"])
+
+    assert synthesis.exit_code == 0
+    packet_dir = Path(str(synthesis.payload["packet_dir"]))
+    manifest = read_payload(packet_dir / "autonomous_evidence_synthesis_subject_manifest.json")
+    assert residual.payload["packet_id"] in manifest["residual_candidate_packets_consumed"]
+    assert authoritative.payload["packet_id"] in manifest[
+        "residual_candidate_ablation_packets_consumed"
+    ]
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    residual_row = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "bounded_macro_recomposition"
+        and row["packet_id"] == residual.payload["packet_id"]
+    ][0]
+    assert residual_row["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert residual_row["target_adapter_id"] == "tactile_inevitability"
+    assert residual_row["source_work_order_packet_id"] == chain["residual_work_order"][
+        "packet_id"
+    ]
+    assert residual_row["source_authorization_packet_id"] == chain[
+        "residual_generation_authorization"
+    ]["packet_id"]
+    assert residual_row["residual_candidate_generation"] is True
+
+    authoritative_row = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "executed_ablation"
+        and row["packet_id"] == authoritative.payload["packet_id"]
+    ][0]
+    assert authoritative_row["source_revision_packet_id"] == residual.payload["packet_id"]
+    assert authoritative_row["target_aware_ablation"] is True
+    assert authoritative_row["target_adapter_id"] == "tactile_inevitability"
+    assert authoritative_row["target_role_consistency_passed"] is True
+    assert authoritative_row["tactile_intervention_has_causal_support"] is True
+    assert authoritative_row["tactile_force_contact_adds_value"] is True
+    assert (
+        authoritative_row[
+            "object_motion_preserved_tactile_removed_performs_same_or_better"
+        ]
+        is False
+    )
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == chain["object_event"]["packet_id"]
+    assert selected["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert selected["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    residual_option = [
+        option
+        for option in best["candidate_options"]
+        if option["packet_id"] == residual.payload["packet_id"]
+    ][0]
+    assert residual_option["candidate_proof_linked"] is True
+    assert residual_option["proof_packet_id"] == authoritative.payload["packet_id"]
+    assert residual_option["proof_supports_candidate"] is True
+    assert residual_option["proof_target_aware_ablation"] is True
+    assert residual_option["proof_target_adapter_id"] == "tactile_inevitability"
+    assert residual_option["supersession_pending_reader_state"] is True
+    assert residual_option["reader_state_evaluated"] is False
+    rejected_by_id = {
+        proof["proof_packet_id"]: proof["rejection_reasons"]
+        for proof in residual_option["rejected_proof_candidates"]
+    }
+    assert "target_aware_proof_required_for_residual_target" in rejected_by_id[
+        generic_proof.payload["packet_id"]
+    ]
+    assert "target_role_consistency_failed" in rejected_by_id[
+        role_confused.payload["packet_id"]
+    ]
+    assert "comparison_internal_consistency_missing" in rejected_by_id[
+        role_failed.payload["packet_id"]
+    ]
+    assert "proof_not_live_model_backed" in rejected_by_id[fake_proof.payload["packet_id"]]
+
+    graph = read_payload(packet_dir / "candidate_evidence_graph.json")
+    graph_node = [
+        node
+        for node in graph["nodes"]
+        if node["candidate_packet_id"] == residual.payload["packet_id"]
+    ][0]
+    assert graph_node["proof_packet_id"] == authoritative.payload["packet_id"]
+    assert graph_node["target_adapter_id"] == "tactile_inevitability"
+    assert graph_node["proof_backed"] is True
+    assert residual.payload["packet_id"] in graph["residual_reader_state_pending_packet_ids"]
+
+    queue = read_payload(packet_dir / "provisional_candidate_queue.json")
+    assert queue["proof_backed_pending_count"] == 1
+    pending = queue["pending_candidates"][0]
+    assert pending["packet_id"] == residual.payload["packet_id"]
+    assert pending["proof_packet_id"] == authoritative.payload["packet_id"]
+    assert pending["target_adapter_id"] == "tactile_inevitability"
+    assert pending["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert pending["reader_state_evaluated"] is False
+    assert pending["current_best_candidate_remains"] == chain["object_event"]["packet_id"]
+    assert pending["next_required_evidence"] == "internal_reader_state_evaluation"
+    assert pending["recommended_next_action"] == (
+        f"run_internal_reader_state_evaluation_on_{residual.payload['packet_id']}"
+    )
+
+    failed = read_payload(packet_dir / "failed_or_rejected_repairs.json")
+    rejected_packets = {
+        item["packet_id"]: item["rejection_reason"]
+        for item in failed["failed_or_rejected_repairs"]
+        if item["packet_kind"] == "executed_ablation"
+    }
+    assert generic_proof.payload["packet_id"] in rejected_packets
+    assert role_confused.payload["packet_id"] in rejected_packets
+    assert role_failed.payload["packet_id"] in rejected_packets
+    assert fake_proof.payload["packet_id"] in rejected_packets
+
+    causal = read_payload(packet_dir / "causal_status_summary.json")
+    assert residual.payload["packet_id"] in causal["residual_candidate_packet_ids"]
+    assert authoritative.payload["packet_id"] in causal[
+        "residual_candidate_proof_packet_ids"
+    ]
+    assert residual.payload["packet_id"] in causal[
+        "residual_candidate_proof_backed_pending_packet_ids"
+    ]
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["next_recommended_action"] == (
+        f"run_internal_reader_state_evaluation_on_{residual.payload['packet_id']}"
+    )
+    assert decision["strongest_rival_still_blocks"] is True
+    assert decision["no_phase_shift_claim"] is True
+
+    packet = read_payload(packet_dir / "autonomous_evidence_synthesis_packet.json")
+    assert packet["best_current_candidate"]["packet_id"] == chain["object_event"]["packet_id"]
+    assert packet["proof_backed_pending_candidate_count"] == 1
+    assert packet["provisional_pending_candidate_count"] == 1
+    assert packet["residual_candidate_reader_state_missing"] is True
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
 
