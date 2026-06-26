@@ -778,6 +778,24 @@ def build_tactile_residual_candidate_authorization_chain(
     return chain
 
 
+def build_fake_tactile_residual_candidate_packet(tmp_path: Path):
+    chain = build_tactile_residual_candidate_authorization_chain(
+        tmp_path,
+        fixture_only=True,
+    )
+    residual = run_residual_candidate_generation(
+        chain["config"],
+        client_name="fake",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+    )
+    assert residual.exit_code == 0
+    assert residual.payload["accepted"] is True
+    assert residual.payload["target_adapter_id"] == "tactile_inevitability"
+    return chain["config"], residual.payload
+
+
 def build_completed_residual_loop_review_chain(tmp_path: Path):
     chain = build_residual_candidate_authorization_chain(tmp_path)
     config = chain["config"]
@@ -4875,6 +4893,186 @@ def test_executed_ablation_accepts_bounded_macro_recomposition_packet(tmp_path):
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
     assert final_report.refused is True
+
+
+def test_executed_ablation_detects_tactile_residual_candidate_as_target_aware(tmp_path):
+    config, residual_payload = build_fake_tactile_residual_candidate_packet(tmp_path)
+
+    with connect(config.db_path) as connection:
+        subject = _load_subject(connection, Path(str(residual_payload["packet_dir"])))
+
+    assert subject.subject_packet_kind == REVISION_PACKET_KIND_BOUNDED_MACRO
+    assert subject.target_aware_ablation is True
+    assert subject.legacy_generic_ablation_fallback is False
+    assert subject.target_adapter_id == "tactile_inevitability"
+    assert subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID
+    assert subject.base_candidate_packet_id
+    assert subject.selected_region_id == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    assert subject.target_scope == TACTILE_INEVITABILITY_TARGET_ID
+    assert subject.target_movement == TACTILE_INEVITABILITY_TARGET_ID
+    assert set(subject.target_unit_ids) == {
+        "tactile_unit_001",
+        "tactile_unit_002",
+        "tactile_unit_003",
+    }
+    assert "preserve_object_motion_remove_tactile_force_relation" in (
+        subject.target_specific_ablation_controls
+        or subject.ablation_controls
+    )
+
+
+def test_executed_ablation_fake_tactile_residual_uses_target_specific_controls(
+    tmp_path,
+):
+    config, residual_payload = build_fake_tactile_residual_candidate_packet(tmp_path)
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=residual_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["target_aware_ablation"] is True
+    assert result.payload["target_adapter_id"] == "tactile_inevitability"
+    assert result.payload["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["counts"]["model_calls"] == 0
+
+    subject = read_payload(result.payload["artifact_paths"]["executed_ablation_subject_manifest"])
+    assert subject["target_aware_ablation"] is True
+    assert subject["legacy_generic_ablation_fallback"] is False
+    assert subject["target_adapter_id"] == "tactile_inevitability"
+    assert subject["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert subject["target_unit_ids"] == [
+        "tactile_unit_001",
+        "tactile_unit_002",
+        "tactile_unit_003",
+    ]
+
+    work_order = read_payload(result.payload["artifact_paths"]["executed_ablation_work_order"])
+    assert work_order["target_aware_ablation"] is True
+    assert work_order["legacy_generic_ablation_fallback"] is False
+    assert work_order["base_candidate_packet_id"]
+    assert work_order["selected_region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    assert "preserve_object_motion_remove_tactile_force_relation" in work_order[
+        "target_specific_ablation_controls"
+    ]
+
+    variants = read_payload(result.payload["artifact_paths"]["actual_ablation_variant_set"])
+    assert variants["target_aware_ablation"] is True
+    operation_ids = [variant["operation_id"] for variant in variants["variants"]]
+    assert "operation_revert_tactile_intervention_to_current_best" in operation_ids
+    assert "operation_preserve_object_motion_remove_tactile_force_relation" in operation_ids
+    assert "operation_decorative_or_abstract_tactile_control" in operation_ids
+    assert "operation_revert_full_macro_section_to_base" not in operation_ids
+    assert "operation_isolate_proof_no_outside_answer_region" not in operation_ids
+    assert "operation_flatten_macro_to_summary_or_restore_return_echo" not in operation_ids
+
+    tactile_removed = next(
+        variant
+        for variant in variants["variants"]
+        if variant["operation_id"]
+        == "operation_preserve_object_motion_remove_tactile_force_relation"
+    )
+    assert tactile_removed["target_region_coverage"][
+        "covers_full_selected_region"
+    ] is True
+    report = tactile_removed["object_motion_preservation_report"]
+    assert report["preserves_required_object_motion_content"] is True
+    assert report["required_object_motion_terms"]
+    assert set(report["preserved_object_motion_terms"]) == set(
+        report["required_object_motion_terms"]
+    )
+    for term in report["required_object_motion_terms"]:
+        assert term in tactile_removed["after_text"].lower()
+    for leaked in ("cup’s weight", "pressed into", "rubbed", "forced open"):
+        assert leaked not in tactile_removed["after_text"].lower()
+    assert tactile_removed["tactile_force_contact_terms_removed"] is True
+
+    comparison = read_payload(
+        result.payload["artifact_paths"]["ablation_old_new_rival_comparison"]
+    )
+    assert comparison["target_aware_ablation"] is True
+    assert comparison["target_adapter_id"] == "tactile_inevitability"
+    assert "tactile_force_contact_adds_value" in comparison
+    assert "object_motion_preserved_tactile_removed_performs_same_or_better" in comparison
+    assert comparison["strongest_rival_still_beats_candidate"] is True
+
+    causal = read_payload(result.payload["artifact_paths"]["ablation_causal_effect_report"])
+    assert causal["target_aware_ablation"] is True
+    assert causal["target_adapter_id"] == "tactile_inevitability"
+    assert "tactile_intervention_has_causal_support" in causal
+    assert "tactile_force_contact_adds_value" in causal
+    assert "packet_0063_earns_reader_state_eval" in causal
+    assert causal["strongest_rival_still_blocks"] is True
+    assert causal["finalization_eligible"] is False
+    assert causal["no_phase_shift_claim"] is True
+
+    gate = read_payload(result.payload["artifact_paths"]["executed_ablation_gate_report"])
+    assert gate["eligible"] is False
+    assert gate["target_aware_ablation"] is True
+    assert gate["final_gates_marked_passed"] == []
+
+
+def test_executed_ablation_tactile_openai_guard_refuses_before_model_call(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+    config, residual_payload = build_fake_tactile_residual_candidate_packet(tmp_path)
+    clients = []
+
+    result = run_executed_ablation(
+        config,
+        client_name="openai",
+        revision_packet=residual_payload["packet_dir"],
+        client_factory=executed_ablation_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["refused"] is True
+    assert "--allow-live-model" in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert clients == []
+
+
+def test_target_aware_ablation_supersedes_prior_generic_ablation_metadata(tmp_path):
+    config, residual_payload = build_fake_tactile_residual_candidate_packet(tmp_path)
+    prior = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=residual_payload["packet_dir"],
+    )
+    assert prior.exit_code == 0
+
+    def _make_prior_generic(payload):
+        payload["target_aware_ablation"] = False
+        payload["legacy_generic_ablation_fallback"] = True
+
+    rewrite_payload(
+        prior.payload["artifact_paths"]["executed_ablation_packet"],
+        _make_prior_generic,
+    )
+
+    result = run_executed_ablation(
+        config,
+        client_name="fake",
+        revision_packet=residual_payload["packet_dir"],
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["target_aware_ablation"] is True
+    assert result.payload["previous_generic_ablation_packet_id"] == prior.payload[
+        "packet_id"
+    ]
+    assert result.payload["previous_generic_ablation_not_authoritative_for_target"] is True
+    assert result.payload["supersedes_generic_ablation_for_target"] is True
+
+    packet = read_payload(result.payload["artifact_paths"]["executed_ablation_packet"])
+    assert packet["previous_generic_ablation_packet_id"] == prior.payload["packet_id"]
+    assert packet["supersedes_generic_ablation_for_target"] is True
+    assert "target-specific tactile controls" in packet["supersession_reason"]
 
 
 def test_executed_ablation_refuses_invalid_bounded_macro_packets(tmp_path):

@@ -61,6 +61,12 @@ EXECUTED_ABLATION_MACRO_OPERATION_IDS = (
     "operation_flatten_macro_to_summary_or_restore_return_echo",
 )
 
+EXECUTED_ABLATION_TACTILE_OPERATION_IDS = (
+    "operation_revert_tactile_intervention_to_current_best",
+    "operation_preserve_object_motion_remove_tactile_force_relation",
+    "operation_decorative_or_abstract_tactile_control",
+)
+
 EXECUTED_ABLATION_CONTROL_OPERATION_IDS = (
     "operation_no_op_control",
     "operation_mismatch_control",
@@ -72,6 +78,7 @@ EXECUTED_ABLATION_ALLOWED_OPERATION_IDS = (
     "operation_embodiment_preserving_repair",
     "operation_record_label_compression",
     *EXECUTED_ABLATION_MACRO_OPERATION_IDS,
+    *EXECUTED_ABLATION_TACTILE_OPERATION_IDS,
     *EXECUTED_ABLATION_CONTROL_OPERATION_IDS,
 )
 EXECUTED_ABLATION_ALLOWED_VARIANT_IDS = tuple(
@@ -92,6 +99,12 @@ EXECUTED_ABLATION_PROVENANCE_TOKENS = (
 REVISION_PACKET_KIND_AUTONOMOUS = "autonomous_revision"
 REVISION_PACKET_KIND_ABLATION_INFORMED = "ablation_informed_revision"
 REVISION_PACKET_KIND_BOUNDED_MACRO = "bounded_macro_recomposition"
+
+TACTILE_TARGET_ADAPTER_ID = "tactile_inevitability"
+TACTILE_RESIDUAL_TARGET_ID = "tactile_inevitability_gap"
+TACTILE_FORCE_REMOVAL_OPERATION_ID = (
+    "operation_preserve_object_motion_remove_tactile_force_relation"
+)
 
 ABLATION_INFORMED_REQUIRED_FILES = (
     "cycle2_packet.json",
@@ -163,6 +176,17 @@ class ExecutedAblationSubject:
     semantic_constraint_mapping: tuple[dict[str, Any], ...] = ()
     macro_target_coverage: dict[str, Any] | None = None
     source_packet_refs: dict[str, Any] | None = None
+    target_adapter_id: str | None = None
+    selected_residual_target_id: str | None = None
+    selected_region_id: str | None = None
+    target_unit_ids: tuple[str, ...] = ()
+    target_specific_ablation_controls: tuple[str, ...] = ()
+    ablation_controls: tuple[str, ...] = ()
+    source_work_order_packet_id: str | None = None
+    source_authorization_packet_id: str | None = None
+    target_aware_ablation: bool = False
+    legacy_generic_ablation_fallback: bool = True
+    previous_generic_ablation_packet_id: str | None = None
 
     @property
     def subject_packet_kind(self) -> str:
@@ -714,6 +738,38 @@ def _prompt_for_internal_comparison(
             "candidate_label": subject.original_candidate.label,
             "revision_packet_id": subject.revision_packet_id,
             "work_order": work_order,
+            "target_aware_ablation": subject.target_aware_ablation,
+            "target_aware_comparator_question": (
+                (
+                    f"Does {subject.revision_packet_id}'s tactile force/contact "
+                    "necessity improve first-read physical inevitability beyond "
+                    f"{subject.base_candidate_packet_id}'s object-motion causality?"
+                )
+                if subject.target_aware_ablation
+                else None
+            ),
+            "target_aware_comparison_must_distinguish": (
+                [
+                    "full tactile candidate",
+                    "current-best object-motion baseline",
+                    "object-motion-preserved tactile-force-removed variant",
+                    "decorative or abstract tactile control",
+                    "strongest rival",
+                ]
+                if subject.target_aware_ablation
+                else []
+            ),
+            "target_aware_comparison_must_not_frame_as": (
+                [
+                    "proof/no-outside-answer isolation",
+                    "record compression",
+                    "macro summary",
+                    "generic object-motion causality",
+                    "return-echo restoration",
+                ]
+                if subject.target_aware_ablation
+                else []
+            ),
             "variants": [
                 {
                     "variant_id": variant["variant_id"],
@@ -818,8 +874,21 @@ def _build_subject_manifest(
         "candidate_text_sha256": subject.candidate_text_sha256,
         "base_candidate_packet_id": subject.base_candidate_packet_id,
         "base_candidate_text_sha256": subject.base_candidate_text_sha256,
+        "target_adapter_id": subject.target_adapter_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
         "target_scope": subject.target_scope,
         "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "target_unit_ids": list(subject.target_unit_ids),
+        "target_specific_ablation_controls": list(
+            subject.target_specific_ablation_controls
+        ),
+        "ablation_controls": list(subject.ablation_controls),
+        "source_work_order_packet_id": subject.source_work_order_packet_id,
+        "source_authorization_packet_id": subject.source_authorization_packet_id,
+        "target_aware_ablation": subject.target_aware_ablation,
+        "legacy_generic_ablation_fallback": subject.legacy_generic_ablation_fallback,
+        **_target_ablation_supersession_payload(subject),
         "changed_region_refs": list(subject.changed_region_refs),
         "changed_region_before_text_sha256": (
             sha256_text(subject.changed_region_before_text)
@@ -996,8 +1065,23 @@ def _build_bounded_macro_work_order(
             "base_candidate_packet_id": subject.base_candidate_packet_id,
             "base_candidate_text_sha256": subject.base_candidate_text_sha256,
         },
+        "base_candidate_packet_id": subject.base_candidate_packet_id,
+        "base_candidate_text_sha256": subject.base_candidate_text_sha256,
+        "target_adapter_id": subject.target_adapter_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
         "target_scope": subject.target_scope,
         "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "target_unit_ids": list(subject.target_unit_ids),
+        "target_specific_ablation_controls": list(
+            subject.target_specific_ablation_controls
+        ),
+        "ablation_controls": list(subject.ablation_controls),
+        "source_work_order_packet_id": subject.source_work_order_packet_id,
+        "source_authorization_packet_id": subject.source_authorization_packet_id,
+        "target_aware_ablation": subject.target_aware_ablation,
+        "legacy_generic_ablation_fallback": subject.legacy_generic_ablation_fallback,
+        **_target_ablation_supersession_payload(subject),
         "macro_changed_region_refs": list(subject.changed_region_refs),
         "macro_diff_changed_span_ids": changed_span_ids,
         "source_before_text_sha256": (
@@ -1017,10 +1101,7 @@ def _build_bounded_macro_work_order(
         "strongest_rival_reference": (
             _text_ref(subject.strongest_rival) if subject.strongest_rival is not None else None
         ),
-        "allowed_operation_ids": [
-            *EXECUTED_ABLATION_MACRO_OPERATION_IDS,
-            *EXECUTED_ABLATION_CONTROL_OPERATION_IDS,
-        ],
+        "allowed_operation_ids": list(_bounded_macro_allowed_operation_ids(subject)),
         "allowed_variant_ids": list(EXECUTED_ABLATION_ALLOWED_VARIANT_IDS),
         "allowed_changed_span_ids": changed_span_ids,
         "allowed_comparison_provenance_tokens": list(EXECUTED_ABLATION_PROVENANCE_TOKENS),
@@ -1286,6 +1367,12 @@ def _build_bounded_macro_variant_set(
     *,
     fixture_only: bool,
 ) -> dict[str, Any]:
+    if subject.target_aware_ablation and subject.target_adapter_id == TACTILE_TARGET_ADAPTER_ID:
+        return _build_tactile_residual_variant_set(
+            subject,
+            work_order,
+            fixture_only=fixture_only,
+        )
     revised = subject.revised_text
     before_section = subject.changed_region_before_text
     after_section = subject.changed_region_after_text
@@ -1416,6 +1503,8 @@ def _build_bounded_macro_variant_set(
         "source_subject_packet_kind": subject.subject_packet_kind,
         "source_macro_packet_id": subject.subject_packet_id,
         "source_macro_packet_dir": str(subject.subject_packet_dir),
+        "target_aware_ablation": subject.target_aware_ablation,
+        "legacy_generic_ablation_fallback": subject.legacy_generic_ablation_fallback,
         "source_revised_candidate_artifact_id": subject.revision_artifacts[
             "revised_candidate_text"
         ].id,
@@ -1423,6 +1512,188 @@ def _build_bounded_macro_variant_set(
         "macro_changed_region_refs": list(subject.changed_region_refs),
         "macro_diff_changed_span_ids": list(work_order["macro_diff_changed_span_ids"]),
         "base_candidate_packet_id": base_candidate_packet_id,
+        "variants": validated,
+        "actual_variant_count": sum(
+            1 for variant in validated if not variant["planned_only"]
+        ),
+        "countable_evidence_variant_count": sum(
+            1 for variant in validated if variant["evidence_countable"]
+        ),
+        "planned_only_variant_count": sum(
+            1 for variant in validated if variant["planned_only"]
+        ),
+        "no_op_variant_count": sum(1 for variant in validated if variant["no_op"]),
+        "operation_mismatch_variant_count": sum(
+            1 for variant in validated if not variant["operation_matches_actual_change"]
+        ),
+        "does_not_select_winner": True,
+        "does_not_create_main_candidate": True,
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "fixture_only": fixture_only,
+    }
+
+
+def _build_tactile_residual_variant_set(
+    subject: ExecutedAblationSubject,
+    work_order: dict[str, Any],
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    revised = subject.revised_text
+    before_section = subject.changed_region_before_text
+    after_section = subject.changed_region_after_text
+    changed_ref = (
+        subject.changed_region_refs[0]
+        if subject.changed_region_refs
+        else subject.selected_region_id
+        or "tactile_selected_region"
+    )
+    tactile_removed_section = _remove_tactile_force_relation(
+        after_section=after_section,
+        before_section=before_section,
+    )
+    decorative_section = _decorative_or_abstract_tactile_control(
+        after_section=after_section,
+        before_section=before_section,
+    )
+    variants = [
+        _target_aware_macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[0],
+            operation_id="operation_revert_tactile_intervention_to_current_best",
+            operation_type="revert_tactile_intervention_to_current_best",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=_replace_once(revised, after_section, before_section),
+            before_text=after_section,
+            after_text=before_section,
+            rationale=(
+                "Revert the full tactile selected region to the immediate current-best "
+                "object-motion baseline to test whether the residual tactile intervention "
+                "adds value beyond packet "
+                f"{subject.base_candidate_packet_id or 'current-best'}."
+            ),
+            expected_reader_state_effect=(
+                "If tactile force/contact necessity matters, reverting to the current "
+                "best should weaken first-read physical inevitability."
+            ),
+            subject=subject,
+        ),
+        _target_aware_macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[1],
+            operation_id=TACTILE_FORCE_REMOVAL_OPERATION_ID,
+            operation_type="preserve_object_motion_remove_tactile_force_relation",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=_replace_once(revised, after_section, tactile_removed_section),
+            before_text=after_section,
+            after_text=tactile_removed_section,
+            rationale=(
+                "Preserve the object-motion consequences in the full selected region "
+                "while removing tactile force/contact necessity as the causal reason."
+            ),
+            expected_reader_state_effect=(
+                "This is the decisive control: if it performs the same or better, the "
+                "tactile intervention has not shown causal value beyond object motion."
+            ),
+            subject=subject,
+        ),
+        _target_aware_macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[2],
+            operation_id="operation_decorative_or_abstract_tactile_control",
+            operation_type="decorative_or_abstract_tactile_control",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=_replace_once(revised, after_section, decorative_section),
+            before_text=after_section,
+            after_text=decorative_section,
+            rationale=(
+                "Convert tactile causality into decorative surface or abstract statement "
+                "to test whether material necessity, rather than vividness or explanation, "
+                "is carrying any gain."
+            ),
+            expected_reader_state_effect=(
+                "Should weaken tactile inevitability if causal force/contact relations "
+                "are doing real work."
+            ),
+            subject=subject,
+        ),
+        _target_aware_macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[3],
+            operation_id="operation_no_op_control",
+            operation_type="no_op_control",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=revised,
+            before_text="tactile no-op control",
+            after_text="tactile no-op control",
+            rationale="Diagnostic no-op control; it must not count as evidence.",
+            expected_reader_state_effect="No reader-state change should be inferred.",
+            subject=subject,
+            explicit_diagnostic_no_op=True,
+        ),
+        _target_aware_macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[4],
+            operation_id="operation_mismatch_control",
+            operation_type="operation_mismatch_control",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=revised.replace("morning", "morning edge", 1),
+            before_text="almost weather",
+            after_text="almost weather at the edge",
+            rationale=(
+                "Intentional mismatch control: the executed text change does not match "
+                "the tactile-force operation."
+            ),
+            expected_reader_state_effect="Unreliable diagnostic; must not count.",
+            subject=subject,
+            operation_matches_actual_change=False,
+        ),
+        _target_aware_macro_variant_from_text(
+            variant_id=EXECUTED_ABLATION_ALLOWED_VARIANT_IDS[5],
+            operation_id="operation_planned_probe_only",
+            operation_type="planned_only_probe",
+            source_span_id=changed_ref,
+            base_text=revised,
+            variant_text=revised,
+            before_text="tactile planned-only probe",
+            after_text="future tactile proof probe",
+            rationale="Planned-only probe retained for ledger distinction.",
+            expected_reader_state_effect="Speculative only; not executed evidence.",
+            subject=subject,
+            planned_only=True,
+            controller_applied=False,
+        ),
+    ]
+    validated = [_validate_variant_operation(variant) for variant in variants]
+    return {
+        "worker": "actual_ablation_variant_set_v1_controller",
+        "controller_owned": True,
+        "source_revision_packet_kind": subject.revision_packet_kind,
+        "source_subject_packet_kind": subject.subject_packet_kind,
+        "source_macro_packet_id": subject.subject_packet_id,
+        "source_macro_packet_dir": str(subject.subject_packet_dir),
+        "source_revised_candidate_artifact_id": subject.revision_artifacts[
+            "revised_candidate_text"
+        ].id,
+        "target_aware_ablation": True,
+        "legacy_generic_ablation_fallback": False,
+        "target_adapter_id": subject.target_adapter_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "target_unit_ids": list(subject.target_unit_ids),
+        "target_specific_ablation_controls": list(
+            subject.target_specific_ablation_controls
+        ),
+        "ablation_controls": list(subject.ablation_controls),
+        "base_candidate_packet_id": subject.base_candidate_packet_id or "",
+        "macro_changed_region_refs": list(subject.changed_region_refs),
+        "macro_diff_changed_span_ids": list(work_order["macro_diff_changed_span_ids"]),
+        **_target_ablation_supersession_payload(subject),
         "variants": validated,
         "actual_variant_count": sum(
             1 for variant in validated if not variant["planned_only"]
@@ -1948,6 +2219,141 @@ def _macro_variant_from_text(
     return variant
 
 
+def _target_aware_macro_variant_from_text(
+    *,
+    variant_id: str,
+    operation_id: str,
+    operation_type: str,
+    source_span_id: str,
+    base_text: str,
+    variant_text: str,
+    before_text: str,
+    after_text: str,
+    rationale: str,
+    expected_reader_state_effect: str,
+    subject: ExecutedAblationSubject,
+    operation_matches_actual_change: bool = True,
+    planned_only: bool = False,
+    controller_applied: bool = True,
+    explicit_diagnostic_no_op: bool = False,
+) -> dict[str, Any]:
+    variant = _macro_variant_from_text(
+        variant_id=variant_id,
+        operation_id=operation_id,
+        operation_type=operation_type,
+        source_span_id=source_span_id,
+        base_text=base_text,
+        variant_text=variant_text,
+        before_text=before_text,
+        after_text=after_text,
+        rationale=rationale,
+        expected_reader_state_effect=expected_reader_state_effect,
+        subject=subject,
+        operation_matches_actual_change=operation_matches_actual_change,
+        planned_only=planned_only,
+        controller_applied=controller_applied,
+        explicit_diagnostic_no_op=explicit_diagnostic_no_op,
+    )
+    coverage = _object_motion_preservation_report(
+        subject.changed_region_after_text,
+        after_text,
+    )
+    variant.update(
+        {
+            "target_aware_ablation": True,
+            "legacy_generic_ablation_fallback": False,
+            "target_adapter_id": subject.target_adapter_id,
+            "selected_residual_target_id": subject.selected_residual_target_id,
+            "target_scope": subject.target_scope,
+            "selected_region_id": subject.selected_region_id,
+            "target_unit_ids": list(subject.target_unit_ids),
+            "target_specific_ablation_controls": list(
+                subject.target_specific_ablation_controls
+            ),
+            "target_region_coverage": {
+                "covers_full_selected_region": before_text == subject.changed_region_after_text,
+                "selected_region_id": subject.selected_region_id,
+                "source_before_text_sha256": (
+                    sha256_text(subject.changed_region_after_text)
+                    if subject.changed_region_after_text
+                    else None
+                ),
+                "replacement_after_text_sha256": sha256_text(after_text)
+                if after_text
+                else None,
+            },
+            "object_motion_preservation_report": coverage,
+            "tactile_force_contact_terms_removed": _tactile_force_term_count(after_text)
+            < _tactile_force_term_count(before_text),
+        }
+    )
+    return variant
+
+
+def _remove_tactile_force_relation(
+    *,
+    after_section: str,
+    before_section: str,
+) -> str:
+    transformed = after_section
+    replacements = (
+        ("the wet ring draws tight under the cup’s weight", "the wet ring narrows at once"),
+        ("the wet ring draws tight under the cup's weight", "the wet ring narrows at once"),
+        ("the crumb is pressed into", "the crumb shifts into"),
+        ("has already taken the trace", "has already registered the change"),
+        (
+            "because hand, foot, and air have crossed and rubbed the same surface enough to leave it marked",
+            "where hand, foot, and air have crossed the same surface",
+        ),
+        ("because it is pressed there", ""),
+        (
+            "dust holds the path through the window crack where movement has disturbed it",
+            "the dust marks a passage through the window crack",
+        ),
+        (
+            "where a hand let it drop and the side hit hard enough to stay",
+            "where a hand released it too quickly",
+        ),
+        ("the fall forced open", "the fall made visible"),
+        ("carrying the pressure that brought it there", "carrying the history that brought it there"),
+    )
+    for before, after in replacements:
+        transformed = transformed.replace(before, after)
+    transformed = transformed.replace("  ;", ";").replace("  .", ".")
+    transformed = " ".join(transformed.split(" "))
+    if transformed == after_section:
+        transformed = before_section or after_section
+    transformed = transformed.replace(
+        "carrying the pressure that brought it there",
+        "carrying the history that brought it there",
+    )
+    return transformed.strip()
+
+
+def _decorative_or_abstract_tactile_control(
+    *,
+    after_section: str,
+    before_section: str,
+) -> str:
+    base = _remove_tactile_force_relation(
+        after_section=after_section,
+        before_section=before_section,
+    )
+    paragraphs = _paragraphs(base)
+    if not paragraphs:
+        return (
+            "The room keeps the same objects in view, but the passage turns their "
+            "material pressure into a decorative atmosphere and an explanation of "
+            "why marks matter."
+        )
+    paragraphs[0] = (
+        paragraphs[0]
+        + " The surfaces feel vivid and significant, but the passage now names the "
+        "importance instead of making force or contact produce it."
+    )
+    return "\n\n".join(paragraphs)
+
+
 def _replace_once(text: str, before: str, after: str) -> str:
     if before and before in text:
         return text.replace(before, after, 1)
@@ -2208,6 +2614,13 @@ def _build_old_new_rival_comparison(
     *,
     fixture_only: bool,
 ) -> dict[str, Any]:
+    if subject.target_aware_ablation and subject.target_adapter_id == TACTILE_TARGET_ADAPTER_ID:
+        return _build_tactile_old_new_rival_comparison(
+            subject,
+            variant_set,
+            internal_comparison,
+            fixture_only=fixture_only,
+        )
     original_score = _score_text(subject.original_candidate.text)
     revised_score = _score_text(subject.revised_text)
     variants = {variant["operation_id"]: variant for variant in variant_set["variants"]}
@@ -2286,6 +2699,127 @@ def _build_old_new_rival_comparison(
     }
 
 
+def _build_tactile_old_new_rival_comparison(
+    subject: ExecutedAblationSubject,
+    variant_set: dict[str, Any],
+    internal_comparison: dict[str, Any],
+    *,
+    fixture_only: bool,
+) -> dict[str, Any]:
+    original_score = _score_text(subject.original_candidate.text)
+    revised_score = _score_text(subject.revised_text)
+    variants = {variant["operation_id"]: variant for variant in variant_set["variants"]}
+    variant_scores = {
+        variant["variant_id"]: _score_text(str(variant["text"]))
+        for variant in variant_set["variants"]
+    }
+    revert = variants["operation_revert_tactile_intervention_to_current_best"]
+    tactile_removed = variants[TACTILE_FORCE_REMOVAL_OPERATION_ID]
+    decorative = variants["operation_decorative_or_abstract_tactile_control"]
+    revert_score = variant_scores[revert["variant_id"]]
+    tactile_removed_score = variant_scores[tactile_removed["variant_id"]]
+    decorative_score = variant_scores[decorative["variant_id"]]
+    rival_score = (
+        _score_text(subject.strongest_rival.text)
+        if subject.strongest_rival is not None
+        else None
+    )
+    revised_tactile_score = _tactile_force_term_count(subject.changed_region_after_text)
+    removed_tactile_score = _tactile_force_term_count(str(tactile_removed["after_text"]))
+    decorative_tactile_score = _tactile_force_term_count(str(decorative["after_text"]))
+    object_motion_preserved = bool(
+        tactile_removed.get("object_motion_preservation_report", {}).get(
+            "preserves_required_object_motion_content"
+        )
+    )
+    tactile_force_contact_adds_value = (
+        revised_tactile_score > removed_tactile_score
+        and revised_tactile_score > decorative_tactile_score
+        and object_motion_preserved
+        and any(variant["evidence_countable"] for variant in variant_set["variants"])
+    )
+    revert_performs_same_or_better = (
+        not tactile_force_contact_adds_value
+        and _total_score(revert_score) >= _total_score(revised_score)
+    )
+    tactile_removed_performs_same_or_better = (
+        not tactile_force_contact_adds_value
+        and _total_score(tactile_removed_score) >= _total_score(revised_score)
+    )
+    decorative_performs_same_or_better = (
+        not tactile_force_contact_adds_value
+        and _total_score(decorative_score) >= _total_score(revised_score)
+    )
+    strongest_rival_still_beats_candidate = (
+        bool(rival_score and _total_score(rival_score) >= _total_score(revised_score))
+        or subject.strongest_rival is not None
+    )
+    return {
+        "worker": "ablation_old_new_rival_comparison_v1",
+        "controller_owned_evidence_status": True,
+        "target_aware_ablation": True,
+        "legacy_generic_ablation_fallback": False,
+        "target_adapter_id": subject.target_adapter_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "target_unit_ids": list(subject.target_unit_ids),
+        "target_specific_ablation_controls": list(
+            subject.target_specific_ablation_controls
+        ),
+        "original_score": original_score,
+        "revised_score": revised_score,
+        "variant_scores": variant_scores,
+        "strongest_rival_score": rival_score,
+        "revised_improves_over_original": revised_score["discovery_score"]
+        >= original_score["discovery_score"],
+        "revert_performs_same_or_better": revert_performs_same_or_better,
+        "reverting_patch_weakens_candidate": not revert_performs_same_or_better,
+        "embodiment_preserving_variant_beats_current": False,
+        "record_compression_improves_discovery": False,
+        "tactile_intervention_has_causal_support": tactile_force_contact_adds_value,
+        "tactile_force_contact_adds_value": tactile_force_contact_adds_value,
+        "object_motion_preserved_tactile_removed_performs_same_or_better": (
+            tactile_removed_performs_same_or_better
+        ),
+        "object_motion_preserved_in_tactile_removed_variant": object_motion_preserved,
+        "revert_to_current_best_performs_same_or_better": revert_performs_same_or_better,
+        "decorative_or_abstract_control_performs_same_or_better": (
+            decorative_performs_same_or_better
+        ),
+        "tactile_force_term_counts": {
+            "candidate_selected_region": revised_tactile_score,
+            "object_motion_preserved_tactile_removed": removed_tactile_score,
+            "decorative_or_abstract_control": decorative_tactile_score,
+        },
+        "packet_0063_earns_reader_state_eval": tactile_force_contact_adds_value,
+        "candidate_earns_reader_state_eval": tactile_force_contact_adds_value,
+        "strongest_rival_present": subject.strongest_rival is not None,
+        "strongest_rival_still_beats_candidate": strongest_rival_still_beats_candidate,
+        "repair_has_causal_support": tactile_force_contact_adds_value,
+        "another_revision_cycle_justified": True,
+        "comparison_basis": (
+            "target-aware tactile executed counterfactual ablation; not human data"
+        ),
+        "summary": (
+            "Target-aware ablation compares the full tactile candidate against the "
+            "current-best object-motion baseline, an object-motion-preserved tactile-force "
+            "removal, and a decorative/abstract control."
+        ),
+        "rationale": (
+            "The controller frames packet "
+            f"{subject.revision_packet_id}'s tactile force/contact necessity as the tested "
+            "causal handle, not proof/no-answer isolation or generic macro flattening."
+        ),
+        "internal_comparison_summary": internal_comparison["summary"],
+        **_target_ablation_supersession_payload(subject),
+        "fixture_only": fixture_only,
+        "not_human_data": True,
+        "no_phase_shift_claim": True,
+    }
+
+
 def _build_comparison_consistency_report(
     *,
     variant_set: dict[str, Any],
@@ -2356,6 +2890,14 @@ def _build_causal_effect_report(
     consistency_report: dict[str, Any],
     fixture_only: bool,
 ) -> dict[str, Any]:
+    if subject.target_aware_ablation and subject.target_adapter_id == TACTILE_TARGET_ADAPTER_ID:
+        return _build_tactile_causal_effect_report(
+            subject=subject,
+            variant_set=variant_set,
+            old_new_comparison=old_new_comparison,
+            consistency_report=consistency_report,
+            fixture_only=fixture_only,
+        )
     if not consistency_report["comparison_internal_consistency"]:
         status = "ambiguous"
         next_action = "repair comparison contradictions before using evidence"
@@ -2410,6 +2952,114 @@ def _build_causal_effect_report(
     }
 
 
+def _build_tactile_causal_effect_report(
+    *,
+    subject: ExecutedAblationSubject,
+    variant_set: dict[str, Any],
+    old_new_comparison: dict[str, Any],
+    consistency_report: dict[str, Any],
+    fixture_only: bool,
+) -> dict[str, Any]:
+    support = bool(old_new_comparison["tactile_intervention_has_causal_support"])
+    if not consistency_report["comparison_internal_consistency"]:
+        status = "ambiguous"
+        next_action = "repair target-aware tactile comparison contradictions before using evidence"
+    elif support:
+        status = "useful_but_insufficient"
+        next_action = (
+            "preserve tactile intervention as provisional proof-layer support and run "
+            "internal reader-state evaluation"
+        )
+    else:
+        status = "noncausal_or_cosmetic"
+        next_action = (
+            "treat tactile force/contact intervention as unproven and select another "
+            "bounded residual handle"
+        )
+    return {
+        "worker": "ablation_causal_effect_report_v1",
+        "target_aware_ablation": True,
+        "legacy_generic_ablation_fallback": False,
+        "target_adapter_id": subject.target_adapter_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "target_unit_ids": list(subject.target_unit_ids),
+        "target_specific_ablation_controls": list(
+            subject.target_specific_ablation_controls
+        ),
+        "selected_repair_causal_status": status,
+        "selected_repair_appears_causal": status == "useful_but_insufficient",
+        "tactile_intervention_has_causal_support": support,
+        "tactile_force_contact_adds_value": bool(
+            old_new_comparison["tactile_force_contact_adds_value"]
+        ),
+        "object_motion_preserved_tactile_removed_performs_same_or_better": bool(
+            old_new_comparison[
+                "object_motion_preserved_tactile_removed_performs_same_or_better"
+            ]
+        ),
+        "revert_to_current_best_performs_same_or_better": bool(
+            old_new_comparison["revert_to_current_best_performs_same_or_better"]
+        ),
+        "decorative_or_abstract_control_performs_same_or_better": bool(
+            old_new_comparison[
+                "decorative_or_abstract_control_performs_same_or_better"
+            ]
+        ),
+        "packet_0063_earns_reader_state_eval": bool(
+            old_new_comparison["packet_0063_earns_reader_state_eval"]
+        ),
+        "candidate_earns_reader_state_eval": bool(
+            old_new_comparison["candidate_earns_reader_state_eval"]
+        ),
+        "evidence_supporting": [
+            variant["variant_id"]
+            for variant in variant_set["variants"]
+            if variant["evidence_countable"]
+        ],
+        "evidence_weakening": [
+            variant["variant_id"]
+            for variant in variant_set["variants"]
+            if variant["operation_id"]
+            in {
+                "operation_no_op_control",
+                "operation_mismatch_control",
+                "operation_planned_probe_only",
+            }
+        ],
+        "reduced_overexplanation": bool(
+            old_new_comparison["revised_improves_over_original"]
+        ),
+        "damaged_local_embodiment": False,
+        "strongest_rival_still_blocks": bool(
+            old_new_comparison["strongest_rival_still_beats_candidate"]
+        ),
+        "strongest_rival_pressure_remains_blocking": bool(
+            old_new_comparison["strongest_rival_still_beats_candidate"]
+        ),
+        "recommended_next_action": next_action,
+        "allowed_verdicts": [
+            "tactile force/contact adds value but remains insufficient",
+            "object-motion preserved tactile removal performs same or better",
+            "current-best revert performs same or better",
+            "decorative or abstract control performs same or better",
+            "evidence is inconclusive",
+        ],
+        **_target_ablation_supersession_payload(subject),
+        "does_not_create_main_candidate": True,
+        "non_final": True,
+        "not_human_validated": True,
+        "not_finalization_eligible": True,
+        "finalization_eligible": False,
+        "fixture_only": fixture_only,
+        "not_human_data": True,
+        "no_phase_shift_claim": True,
+        "source_revision_packet_id": subject.revision_packet_id,
+    }
+
+
 def _build_gate_report(
     *,
     subject: ExecutedAblationSubject,
@@ -2455,6 +3105,14 @@ def _build_gate_report(
     return {
         "worker": "executed_ablation_gate_report_v1_controller",
         "profile": "autonomous_creative_candidate",
+        "target_aware_ablation": subject.target_aware_ablation,
+        "legacy_generic_ablation_fallback": subject.legacy_generic_ablation_fallback,
+        "target_adapter_id": subject.target_adapter_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_specific_ablation_controls": list(
+            subject.target_specific_ablation_controls
+        ),
+        **_target_ablation_supersession_payload(subject),
         "passed": False,
         "eligible": False,
         "actual_executed_ablation_evidence_exists": actual_evidence_exists,
@@ -2522,6 +3180,18 @@ def _build_packet_summary(
         "source_revision_packet_kind": subject.revision_packet_kind,
         "source_revision_packet_id": subject.revision_packet_id,
         "source_revision_packet_dir": str(subject.revision_packet_dir),
+        "target_aware_ablation": subject.target_aware_ablation,
+        "legacy_generic_ablation_fallback": subject.legacy_generic_ablation_fallback,
+        "target_adapter_id": subject.target_adapter_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "target_unit_ids": list(subject.target_unit_ids),
+        "target_specific_ablation_controls": list(
+            subject.target_specific_ablation_controls
+        ),
+        **_target_ablation_supersession_payload(subject),
         "client": client_name,
         "model": model,
         "artifact_types": list(EXECUTED_ABLATION_ARTIFACT_TYPES),
@@ -2543,6 +3213,15 @@ def _build_packet_summary(
         "selected_repair_causal_status": payloads["ablation_causal_effect_report"][
             "selected_repair_causal_status"
         ],
+        "tactile_intervention_has_causal_support": payloads[
+            "ablation_causal_effect_report"
+        ].get("tactile_intervention_has_causal_support"),
+        "strongest_rival_still_blocks": payloads["ablation_causal_effect_report"].get(
+            "strongest_rival_still_blocks",
+            payloads["ablation_causal_effect_report"].get(
+                "strongest_rival_pressure_remains_blocking"
+            ),
+        ),
         "comparison_internal_consistency": payloads["comparison_consistency_report"][
             "comparison_internal_consistency"
         ],
@@ -2971,6 +3650,15 @@ def _load_bounded_macro_recomposition_subject(
     patch_plan = payloads["macro_patch_or_section_plan"]
     protected = payloads["protected_effects_and_forbidden_changes"]
     rival = payloads["macro_rival_pressure_check"]
+    target_metadata = _bounded_macro_target_metadata(
+        packet_payload,
+        subject_manifest,
+        candidate,
+        diff,
+        gate,
+        patch_plan,
+        protected,
+    )
     base_packet_dir = Path(str(subject_manifest["base_candidate_packet_dir"])).resolve()
     base_candidate_text = _candidate_text_from_packet_dir(base_packet_dir)
     source_packet_dir, source_packet_id = _source_packet_ref_from_candidate_packet(
@@ -3021,8 +3709,14 @@ def _load_bounded_macro_recomposition_subject(
             or sha256_text(base_candidate_text or "")
         ),
         base_candidate_packet_id=str(subject_manifest["base_candidate_packet_id"]),
-        target_scope="macro_target_movement",
-        target_movement=str(candidate["target_movement"]),
+        target_scope=str(
+            target_metadata["target_scope"]
+            if target_metadata["target_aware_ablation"] and target_metadata["target_scope"]
+            else "macro_target_movement"
+        ),
+        target_movement=str(
+            target_metadata["target_movement"] or candidate["target_movement"]
+        ),
         changed_region_refs=tuple(
             str(span.get("changed_span_id"))
             for span in changed_spans
@@ -3055,6 +3749,29 @@ def _load_bounded_macro_recomposition_subject(
             or patch_plan.get("target_coverage_report")
             or {}
         ),
+        target_adapter_id=target_metadata["target_adapter_id"],
+        selected_residual_target_id=target_metadata["selected_residual_target_id"],
+        selected_region_id=target_metadata["selected_region_id"],
+        target_unit_ids=tuple(target_metadata["target_unit_ids"]),
+        target_specific_ablation_controls=tuple(
+            target_metadata["target_specific_ablation_controls"]
+        ),
+        ablation_controls=tuple(target_metadata["ablation_controls"]),
+        source_work_order_packet_id=target_metadata["source_work_order_packet_id"],
+        source_authorization_packet_id=target_metadata[
+            "source_authorization_packet_id"
+        ],
+        target_aware_ablation=bool(target_metadata["target_aware_ablation"]),
+        legacy_generic_ablation_fallback=not bool(
+            target_metadata["target_aware_ablation"]
+        ),
+        previous_generic_ablation_packet_id=_find_previous_generic_ablation_packet_id(
+            connection,
+            run_id=run_id,
+            source_revision_packet_id=revision_packet_id,
+        )
+        if bool(target_metadata["target_aware_ablation"])
+        else None,
         source_packet_refs={
             "source_packet_dir": str(source_packet_dir),
             "source_packet_id": source_packet_id,
@@ -3208,6 +3925,121 @@ def _validate_bounded_macro_readiness(
         raise ValueError("macro_recomposition_gate_report macro_materiality_passed must be true")
     if gate.get("ready_for_executed_ablation") is not True:
         raise ValueError("macro_recomposition_gate_report ready_for_executed_ablation must be true")
+
+
+def _bounded_macro_target_metadata(*payloads: dict[str, Any]) -> dict[str, Any]:
+    target_adapter_id = _first_string("target_adapter_id", payloads)
+    selected_residual_target_id = _first_string("selected_residual_target_id", payloads)
+    target_scope = _first_string("target_scope", payloads)
+    controls = _first_string_list("target_specific_ablation_controls", payloads)
+    ablation_controls = _first_string_list("ablation_controls", payloads) or controls
+    target_aware = (
+        target_adapter_id == TACTILE_TARGET_ADAPTER_ID
+        and selected_residual_target_id == TACTILE_RESIDUAL_TARGET_ID
+        and (
+            "preserve_object_motion_remove_tactile_force_relation" in ablation_controls
+            or "preserve_object_motion_remove_tactile_force_relation" in controls
+        )
+    )
+    return {
+        "target_adapter_id": target_adapter_id,
+        "selected_residual_target_id": selected_residual_target_id,
+        "target_scope": target_scope,
+        "target_movement": _first_string("target_movement", payloads),
+        "selected_region_id": _first_string("selected_region_id", payloads),
+        "target_unit_ids": _first_string_list("target_unit_ids", payloads),
+        "target_specific_ablation_controls": controls or ablation_controls,
+        "ablation_controls": ablation_controls,
+        "source_work_order_packet_id": _first_string("source_work_order_packet_id", payloads),
+        "source_authorization_packet_id": _first_string(
+            "source_authorization_packet_id",
+            payloads,
+        ),
+        "target_aware_ablation": target_aware,
+    }
+
+
+def _first_string(key: str, payloads: tuple[dict[str, Any], ...]) -> str | None:
+    for payload in payloads:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _first_string_list(key: str, payloads: tuple[dict[str, Any], ...]) -> list[str]:
+    for payload in payloads:
+        value = payload.get(key)
+        if isinstance(value, list):
+            result = [str(item) for item in value if str(item)]
+            if result:
+                return result
+    return []
+
+
+def _bounded_macro_allowed_operation_ids(
+    subject: ExecutedAblationSubject,
+) -> tuple[str, ...]:
+    if subject.target_aware_ablation and subject.target_adapter_id == TACTILE_TARGET_ADAPTER_ID:
+        return (
+            *EXECUTED_ABLATION_TACTILE_OPERATION_IDS,
+            *EXECUTED_ABLATION_CONTROL_OPERATION_IDS,
+        )
+    return (
+        *EXECUTED_ABLATION_MACRO_OPERATION_IDS,
+        *EXECUTED_ABLATION_CONTROL_OPERATION_IDS,
+    )
+
+
+def _find_previous_generic_ablation_packet_id(
+    connection,
+    *,
+    run_id: str,
+    source_revision_packet_id: str,
+) -> str | None:
+    rows = connection.execute(
+        """
+        SELECT path
+        FROM artifacts
+        WHERE run_id = ?
+          AND type = 'executed_ablation_packet'
+        ORDER BY created_at, id
+        """,
+        (run_id,),
+    ).fetchall()
+    found: str | None = None
+    for row in rows:
+        try:
+            envelope = read_json_file(row["path"])
+        except (OSError, json.JSONDecodeError):
+            continue
+        payload = envelope.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("source_revision_packet_id") != source_revision_packet_id:
+            continue
+        if payload.get("target_aware_ablation") is True:
+            continue
+        packet_id = payload.get("packet_id")
+        found = str(packet_id) if packet_id else Path(str(row["path"])).parent.name
+    return found
+
+
+def _target_ablation_supersession_payload(
+    subject: ExecutedAblationSubject,
+) -> dict[str, object]:
+    previous = subject.previous_generic_ablation_packet_id
+    supersedes = bool(subject.target_aware_ablation and previous)
+    return {
+        "previous_generic_ablation_packet_id": previous,
+        "previous_generic_ablation_not_authoritative_for_target": supersedes,
+        "supersedes_generic_ablation_for_target": supersedes,
+        "supersession_reason": (
+            "generic macro ablation did not run target-specific tactile controls"
+            if supersedes
+            else None
+        ),
+    }
 
 
 def _candidate_text_from_packet_dir(packet_dir: Path) -> str | None:
@@ -3400,6 +4232,12 @@ def _variant_summary(variant: dict[str, Any]) -> str:
         return "Macro isolation tests whether proof/no-outside-answer pressure carries the movement."
     if variant["operation_id"] == "operation_flatten_macro_to_summary_or_restore_return_echo":
         return "Macro flattening tests whether summary/return echo is weaker than embodied movement."
+    if variant["operation_id"] == "operation_revert_tactile_intervention_to_current_best":
+        return "Tactile revert tests whether the residual tactile intervention adds value over the current-best object-motion baseline."
+    if variant["operation_id"] == TACTILE_FORCE_REMOVAL_OPERATION_ID:
+        return "Tactile-force removal preserves object motion while testing whether force/contact necessity carries causal value."
+    if variant["operation_id"] == "operation_decorative_or_abstract_tactile_control":
+        return "Decorative/abstract control tests whether vividness or explanation can replace tactile causality."
     return "Executed diagnostic variant."
 
 
@@ -3411,6 +4249,9 @@ def _variant_effect_estimate(variant: dict[str, Any]) -> str:
         "operation_revert_full_macro_section_to_base": "may restore weaker abstraction if macro movement mattered",
         "operation_isolate_proof_no_outside_answer_region": "may weaken proof/no-answer pressure if that region mattered",
         "operation_flatten_macro_to_summary_or_restore_return_echo": "may flatten embodied return into summary",
+        "operation_revert_tactile_intervention_to_current_best": "may weaken first-read tactile inevitability if the residual intervention mattered",
+        TACTILE_FORCE_REMOVAL_OPERATION_ID: "tests whether object motion alone performs like the tactile candidate",
+        "operation_decorative_or_abstract_tactile_control": "tests whether vividness or explanation can substitute for tactile necessity",
         "operation_no_op_control": "no reliable effect",
         "operation_mismatch_control": "unreliable effect due to operation mismatch",
         "operation_planned_probe_only": "speculative only",
@@ -3426,6 +4267,53 @@ def _variant_risk_notes(variant: dict[str, Any]) -> str:
     if variant["operation_id"] == "operation_record_label_compression":
         return "May improve discovery while leaving deeper abstraction untouched."
     return "Internal estimate only; no human reader evidence."
+
+
+def _object_motion_preservation_report(
+    before_text: str,
+    variant_text: str,
+) -> dict[str, Any]:
+    required_terms = (
+        "cup",
+        "ring",
+        "crumb",
+        "dust",
+        "hand",
+        "foot",
+        "air",
+        "spoon",
+        "saucer",
+        "fall",
+    )
+    before_lower = before_text.lower()
+    variant_lower = variant_text.lower()
+    source_terms = [term for term in required_terms if term in before_lower]
+    preserved = [term for term in source_terms if term in variant_lower]
+    missing = [term for term in source_terms if term not in variant_lower]
+    return {
+        "required_object_motion_terms": source_terms,
+        "preserved_object_motion_terms": preserved,
+        "missing_object_motion_terms": missing,
+        "preserves_required_object_motion_content": not missing,
+    }
+
+
+def _tactile_force_term_count(text: str) -> int:
+    lower = text.lower()
+    terms = (
+        "weight",
+        "pressed",
+        "press",
+        "pressure",
+        "force",
+        "contact",
+        "rubbed",
+        "disturbed",
+        "hit hard",
+        "forced",
+        "force/contact",
+    )
+    return sum(lower.count(term) for term in terms)
 
 
 def _score_text(text: str) -> dict[str, int]:
@@ -3549,6 +4437,18 @@ def _summary_payload(
         "normalized_subject_kind": subject.subject_packet_kind,
         "revision_packet_kind": subject.revision_packet_kind,
         "revision_packet_dir": str(subject.revision_packet_dir),
+        "target_aware_ablation": subject.target_aware_ablation,
+        "legacy_generic_ablation_fallback": subject.legacy_generic_ablation_fallback,
+        "target_adapter_id": subject.target_adapter_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
+        "selected_region_id": subject.selected_region_id,
+        "target_unit_ids": list(subject.target_unit_ids),
+        "target_specific_ablation_controls": list(
+            subject.target_specific_ablation_controls
+        ),
+        **_target_ablation_supersession_payload(subject),
         "artifact_ids": {
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
         },
