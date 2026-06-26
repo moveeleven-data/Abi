@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import difflib
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,8 @@ from abi.modules.residual_targets import (
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     SELECTED_REGION_ID,
     TACTILE_INEVITABILITY_TARGET_ID,
+    ResidualMaterialityPolicy,
+    materiality_policy_payload,
     replacement_tactile_failures,
     require_residual_target_adapter,
     semantic_preflight_failures_for_work_order,
@@ -259,6 +262,18 @@ class MaterialityValidationError(ModelValidationError):
     def __init__(self, report: MaterialityReport) -> None:
         super().__init__(_materiality_failure_message(report))
         self.report = report
+
+
+class ResidualInterventionValidationError(ModelValidationError):
+    def __init__(self, validation_report: dict[str, object]) -> None:
+        super().__init__(_validation_failure_message(validation_report))
+        self.validation_report = validation_report
+        compatibility = validation_report.get("materiality_report")
+        self.report = (
+            _materiality_report_from_compatibility_dict(compatibility)
+            if isinstance(compatibility, dict)
+            else None
+        )
 
 
 @dataclass(frozen=True)
@@ -503,6 +518,10 @@ def run_residual_candidate_generation(
         )
         model_results.append(result)
         if not result.accepted or result.parsed_payload is None:
+            validation_report = _validation_report_from_model_results(
+                subject,
+                model_results,
+            )
             return _failure_result(
                 subject=subject,
                 packet_dir=packet_dir,
@@ -511,10 +530,10 @@ def run_residual_candidate_generation(
                 artifacts=artifacts,
                 model_results=model_results,
                 message=_model_failure_message(result),
-                materiality_report=_materiality_report_from_model_results(
-                    subject,
-                    model_results,
+                materiality_report=_materiality_report_from_validation_report(
+                    validation_report
                 ),
+                validation_report=validation_report,
             )
         model_payload = result.parsed_payload
         model_call_id = result.model_call.id
@@ -522,9 +541,14 @@ def run_residual_candidate_generation(
     try:
         recomposed = _build_recomposed_candidate(subject, model_payload)
     except ModelValidationError as error:
-        materiality_report = (
-            error.report if isinstance(error, MaterialityValidationError) else None
+        validation_report = (
+            error.validation_report
+            if isinstance(error, ResidualInterventionValidationError)
+            else None
         )
+        materiality_report = _materiality_report_from_validation_report(validation_report)
+        if materiality_report is None and isinstance(error, MaterialityValidationError):
+            materiality_report = error.report
         return _failure_result(
             subject=subject,
             packet_dir=packet_dir,
@@ -534,6 +558,7 @@ def run_residual_candidate_generation(
             model_results=model_results,
             message=f"Residual candidate generation refused; {error}",
             materiality_report=materiality_report,
+            validation_report=validation_report,
         )
 
     with connect(config.db_path) as connection:
@@ -1000,6 +1025,9 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
                 "residual_generation_contract",
                 {},
             ),
+            "materiality_policy": materiality_policy_payload(
+                subject.selected_residual_target_id
+            ),
             "materiality_requirement": _materiality_requirement_payload(subject),
             "target_unit_overlap_feedback": {
                 "overlapping_units_must_be_reconciled": True,
@@ -1026,6 +1054,7 @@ def _materiality_requirement_payload(
     subject: ResidualCandidateSubject,
 ) -> dict[str, object]:
     adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    policy = adapter.materiality_policy
     return {
         "selected_region_materiality_required": True,
         "replacement_must_be_genuinely_reauthored": True,
@@ -1041,6 +1070,15 @@ def _materiality_requirement_payload(
         "stage_object_motion_causing_visible_consequence_before_explanation": True,
         "selected_residual_target_id": subject.selected_residual_target_id,
         "target_mechanism_contract": list(adapter.mechanism_contract),
+        "materiality_policy": policy.to_dict(),
+        "materiality_policy_id": policy.policy_id,
+        "materiality_policy_version": policy.policy_version,
+        "primary_materiality_scope": policy.primary_materiality_scope,
+        "whole_region_guard": dict(policy.whole_region_guard),
+        "target_bearing_scope": dict(policy.target_bearing_scope),
+        "target_unit_scope": dict(policy.target_unit_scope),
+        "overlap_cluster_policy": dict(policy.overlap_cluster_policy),
+        "prompt_feedback": list(policy.prompt_feedback),
         "remain_bounded_to_selected_region": True,
         "do_not_rewrite_whole_artifact": True,
         "do_not_add_decorative_vividness_or_new_object_lists": True,
@@ -1226,28 +1264,99 @@ def _validate_replacement_text(
         raise ModelValidationError("replacement_region_text risks rival mimicry")
     if "object list" in lower or "catalog" in lower or "catalogue" in lower:
         raise ModelValidationError("replacement_region_text adds an object list")
-    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
-        tactile_failures = replacement_tactile_failures(
-            replacement_text=replacement,
-            unit_labels=[label for unit in subject.target_units for label in unit.objects],
-        )
-        if tactile_failures:
-            raise ModelValidationError("; ".join(tactile_failures))
+    validation_report = _collect_residual_intervention_validation(
+        subject=subject,
+        replacement=replacement,
+        target_unit_mapping=target_unit_mapping,
+    )
+    if validation_report["passed"] is not True:
+        raise ResidualInterventionValidationError(validation_report)
+    return validation_report
+
+
+def _collect_residual_intervention_validation(
+    *,
+    subject: ResidualCandidateSubject,
+    replacement: str,
+    target_unit_mapping: list[dict[str, object]],
+) -> dict[str, object]:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    policy = adapter.materiality_policy
+    lower = replacement.lower()
     term_contract = _artifact_driven_term_contract(subject, target_unit_mapping)
+    whole = _measure_text_materiality(
+        scope_id="whole_selected_region",
+        before=subject.selected_region_before_text,
+        after=replacement,
+        selected_region_before=subject.selected_region_before_text,
+    )
+    target_before, target_after, target_indexes = _target_bearing_scope_text(
+        subject,
+        replacement,
+    )
+    target_bearing = _measure_text_materiality(
+        scope_id="target_bearing_scope",
+        before=target_before,
+        after=target_after,
+        selected_region_before=subject.selected_region_before_text,
+    )
+    protected_context = _protected_context_report(
+        subject=subject,
+        replacement=replacement,
+        target_paragraph_indexes=target_indexes,
+    )
+
+    failures = _empty_failure_buckets()
+    whole_failures = _materiality_scope_failures(
+        whole,
+        policy=policy,
+        scope_policy=policy.whole_region_guard,
+        enforce_primary=(
+            policy.whole_region_guard.get("enforce_primary_thresholds") is True
+        ),
+        enforce_ratio=(
+            policy.whole_region_guard.get("do_not_enforce_global_ratio_floor") is not True
+        ),
+    )
+    failures["whole_region_guard_failures"].extend(whole_failures)
+
+    target_bearing_failures: list[str] = []
+    if policy.primary_materiality_scope == "target_bearing_scope":
+        target_bearing_failures = _materiality_scope_failures(
+            target_bearing,
+            policy=policy,
+            scope_policy=policy.target_bearing_scope,
+            enforce_primary=True,
+            enforce_ratio=True,
+        )
+    failures["target_bearing_materiality_failures"].extend(target_bearing_failures)
+
     if _decorative_list_risk(
         replacement,
         motion_terms=term_contract["motion_terms"],
     ):
-        raise ModelValidationError("replacement_region_text is decorative object listing")
-    materiality_report = _materiality_report(subject, replacement)
-    if materiality_report.under_materiality:
-        raise MaterialityValidationError(materiality_report)
+        failures["generic_decorative_vividness_failures"].append(
+            "replacement_region_text is decorative object listing"
+        )
+
+    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        for failure in replacement_tactile_failures(
+            replacement_text=replacement,
+            unit_labels=[label for unit in subject.target_units for label in unit.objects],
+        ):
+            if "decorative" in failure or "generic" in failure:
+                failures["generic_decorative_vividness_failures"].append(failure)
+            elif "abstract" in failure:
+                failures["abstract_inevitability_failures"].append(failure)
+            else:
+                failures["tactile_semantic_failures"].append(failure)
+
     object_terms_present = _terms_present(lower, term_contract["object_terms"])
     motion_terms_present = _terms_present(lower, term_contract["motion_terms"])
     consequence_terms_present = _terms_present(lower, term_contract["consequence_terms"])
     missing_unit_object_terms = _missing_unit_object_terms(subject, lower)
     if missing_unit_object_terms:
-        raise ModelValidationError(
+        failures["object_motion_relabel_failures"].append(
             "replacement_region_text missing artifact-derived object terms for "
             f"target units: {', '.join(missing_unit_object_terms)}"
         )
@@ -1258,13 +1367,42 @@ def _validate_replacement_text(
         consequence_terms=term_contract["consequence_terms"],
     )
     if relation_count < 2:
-        raise ModelValidationError("object motion causal relation missing")
+        failures["object_motion_relabel_failures"].append(
+            "object motion causal relation missing"
+        )
     if len(object_terms_present) < term_contract["required_object_term_count"] or len(
         motion_terms_present
     ) < term_contract["required_motion_term_count"]:
-        raise ModelValidationError("decorative-only replacement lacks object motion")
+        failures["object_motion_relabel_failures"].append(
+            "decorative-only replacement lacks object motion"
+        )
     if len(consequence_terms_present) < term_contract["required_consequence_term_count"]:
-        raise ModelValidationError("visible consequence before explanation is missing")
+        failures["object_motion_relabel_failures"].append(
+            "visible consequence before explanation is missing"
+        )
+
+    unit_reports = _target_unit_materiality_reports(
+        subject=subject,
+        replacement=replacement,
+        target_unit_mapping=target_unit_mapping,
+        policy=policy,
+        failures=failures,
+    )
+    cluster_reports = _overlap_cluster_reports(
+        subject=subject,
+        replacement=replacement,
+        unit_reports=unit_reports,
+        policy=policy,
+        failures=failures,
+    )
+    if (
+        subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID
+        and protected_context["scope_failure"]
+    ):
+        failures["protected_context_scope_failures"].append(
+            str(protected_context["scope_failure"])
+        )
+
     target_specific_mapping_report: dict[str, object] = {
         "selected_residual_target_id": subject.selected_residual_target_id,
         "target_unit_ids": [unit.unit_id for unit in subject.target_units],
@@ -1274,15 +1412,74 @@ def _validate_replacement_text(
         target_specific_mapping_report.update(
             {
                 "tactile_inevitability_mapping_exists": True,
-                "contact_force_material_necessity_encoded": True,
-                "distinct_from_object_motion_causality": True,
+                "contact_force_material_necessity_encoded": (
+                    not failures["tactile_semantic_failures"]
+                ),
+                "distinct_from_object_motion_causality": (
+                    not failures["object_motion_relabel_failures"]
+                ),
             }
         )
+
+    all_failures = [
+        failure
+        for bucket in failures.values()
+        for failure in bucket
+    ]
+    passed = not all_failures
+    compatibility = _compatibility_materiality_report(
+        subject=subject,
+        whole=whole,
+        failures=whole_failures,
+    )
     return {
-        "selected_region_materiality_passed": True,
-        "changed_word_count": materiality_report.changed_unique_word_count,
-        "changed_word_ratio": round(materiality_report.changed_unique_word_ratio, 3),
-        "materiality_report": materiality_report.to_dict(),
+        "passed": passed,
+        "selected_region_materiality_passed": passed,
+        "changed_word_count": compatibility["changed_unique_word_count"],
+        "changed_word_ratio": round(float(compatibility["changed_unique_word_ratio"]), 3),
+        "materiality_report": compatibility,
+        "materiality_policy": policy.to_dict(),
+        "materiality_policy_id": policy.policy_id,
+        "materiality_policy_version": policy.policy_version,
+        "primary_materiality_scope": policy.primary_materiality_scope,
+        "residual_materiality_report": {
+            "whole_region_guard": {
+                **whole,
+                "passed": not whole_failures,
+                "failures": whole_failures,
+            },
+            "target_bearing_scope": {
+                **target_bearing,
+                "target_paragraph_indexes": list(target_indexes),
+                "passed": not target_bearing_failures,
+                "failures": target_bearing_failures,
+            },
+            "protected_context": protected_context,
+        },
+        "target_unit_materiality_report": {
+            "required_unit_count": len(subject.target_units),
+            "all_required_units_materially_engaged": all(
+                item["materiality_passed"] and item["semantic_passed"]
+                for item in unit_reports
+            ),
+            "units": unit_reports,
+        },
+        "overlap_cluster_report": {
+            "clusters": cluster_reports,
+            "overlap_cluster_count": len(cluster_reports),
+            "all_overlap_clusters_passed": all(
+                item["cluster_materiality_passed"] for item in cluster_reports
+            ),
+        },
+        "residual_intervention_validation_report": {
+            "passed": passed,
+            "failure_count": len(all_failures),
+            "failure_categories": {
+                key: list(value) for key, value in failures.items() if value
+            },
+            "failures": all_failures,
+            "controller_final_validation_result": "passed" if passed else "refused",
+        },
         "object_motion_relation_count": relation_count,
         "object_terms_present": object_terms_present,
         "motion_terms_present": motion_terms_present,
@@ -1300,6 +1497,576 @@ def _validate_replacement_text(
         "object_list_rejected": True,
         "decorative_vividness_only_rejected": True,
         "full_rewrite_rejected": True,
+    }
+
+
+def _empty_failure_buckets() -> dict[str, list[str]]:
+    return {
+        "whole_region_guard_failures": [],
+        "target_bearing_materiality_failures": [],
+        "target_unit_materiality_failures": [],
+        "overlap_cluster_failures": [],
+        "tactile_semantic_failures": [],
+        "object_motion_relabel_failures": [],
+        "generic_decorative_vividness_failures": [],
+        "abstract_inevitability_failures": [],
+        "protected_context_scope_failures": [],
+    }
+
+
+def _materiality_scope_failures(
+    measurement: dict[str, object],
+    *,
+    policy: ResidualMaterialityPolicy,
+    scope_policy: dict[str, object],
+    enforce_primary: bool,
+    enforce_ratio: bool,
+) -> list[str]:
+    failures: list[str] = []
+    scope_id = str(measurement["scope_id"])
+    if measurement["exact_copy"] is True and scope_policy.get("exact_copy_fails", True):
+        failures.append(f"{scope_id}: exact normalized copy")
+    if (
+        measurement["selected_region_copied_inside_replacement"] is True
+        and scope_policy.get("selected_region_copy_fails", True)
+    ):
+        failures.append(f"{scope_id}: selected region copied inside replacement")
+    token_floor = int(
+        scope_policy.get("token_edit_distance_floor", policy.token_edit_distance_floor)
+    )
+    if token_floor and int(measurement["token_edit_distance"]) < token_floor:
+        failures.append(
+            f"{scope_id}: token edit distance below floor "
+            f"{measurement['token_edit_distance']} < {token_floor}"
+        )
+    similarity_ceiling = float(
+        scope_policy.get(
+            "sequence_similarity_ceiling",
+            policy.sequence_similarity_ceiling,
+        )
+    )
+    if (
+        similarity_ceiling
+        and float(measurement["sequence_similarity"]) > similarity_ceiling
+    ):
+        failures.append(
+            f"{scope_id}: sequence similarity above ceiling "
+            f"{measurement['sequence_similarity']} > {similarity_ceiling}"
+        )
+    if not enforce_primary:
+        return failures
+    absolute_floor = int(
+        scope_policy.get("absolute_change_floor", policy.absolute_change_floor)
+    )
+    if int(measurement["changed_unique_word_count"]) < absolute_floor:
+        failures.append(
+            f"{scope_id}: changed_unique_word_count below floor "
+            f"{measurement['changed_unique_word_count']} < {absolute_floor}"
+        )
+    if enforce_ratio:
+        ratio_floor = float(scope_policy.get("ratio_floor", policy.ratio_floor))
+        if float(measurement["changed_unique_word_ratio"]) < ratio_floor:
+            failures.append(
+                f"{scope_id}: changed_unique_word_ratio below floor "
+                f"{measurement['changed_unique_word_ratio']} < {ratio_floor}"
+            )
+    sentence_floor = int(
+        scope_policy.get("changed_sentence_floor", policy.changed_sentence_floor)
+    )
+    if int(measurement["changed_sentence_count"]) < sentence_floor:
+        failures.append(
+            f"{scope_id}: changed sentence count below floor "
+            f"{measurement['changed_sentence_count']} < {sentence_floor}"
+        )
+    return failures
+
+
+def _measure_text_materiality(
+    *,
+    scope_id: str,
+    before: str,
+    after: str,
+    selected_region_before: str,
+) -> dict[str, object]:
+    before_words = _words(before)
+    after_words = _words(after)
+    before_set = set(before_words)
+    after_set = set(after_words)
+    changed = after_set - before_set
+    token_edit_distance = _token_edit_distance(before_words, after_words)
+    before_sentences = _sentences(before)
+    after_sentences = _sentences(after)
+    changed_sentence_count = _changed_sentence_count(before_sentences, after_sentences)
+    return {
+        "scope_id": scope_id,
+        "before_word_count": len(before_words),
+        "replacement_word_count": len(after_words),
+        "before_unique_word_count": len(before_set),
+        "replacement_unique_word_count": len(after_set),
+        "changed_unique_word_count": len(changed),
+        "changed_unique_word_ratio": round(
+            len(changed) / max(1, len(after_set)),
+            6,
+        ),
+        "symmetric_unique_word_difference": len(before_set ^ after_set),
+        "token_edit_distance": token_edit_distance,
+        "token_edit_distance_ratio": round(
+            token_edit_distance / max(1, len(before_words), len(after_words)),
+            6,
+        ),
+        "sequence_similarity": round(
+            difflib.SequenceMatcher(a=before_words, b=after_words).ratio(),
+            6,
+        ),
+        "before_sentence_count": len(before_sentences),
+        "replacement_sentence_count": len(after_sentences),
+        "changed_sentence_count": changed_sentence_count,
+        "exact_copy": _canonical_space(after) == _canonical_space(before),
+        "selected_region_copied_inside_replacement": (
+            bool(selected_region_before.strip())
+            and _canonical_space(selected_region_before) in _canonical_space(after)
+        ),
+        "new_unique_words": sorted(changed),
+    }
+
+
+def _target_bearing_scope_text(
+    subject: ResidualCandidateSubject,
+    replacement: str,
+) -> tuple[str, str, tuple[int, ...]]:
+    before_paragraphs = _paragraphs(subject.selected_region_before_text)
+    after_paragraphs = _paragraphs(replacement)
+    indexes = _target_bearing_paragraph_indexes(subject, before_paragraphs)
+    before = "\n\n".join(before_paragraphs[index] for index in indexes)
+    after = "\n\n".join(
+        after_paragraphs[index]
+        for index in indexes
+        if index < len(after_paragraphs)
+    )
+    if not before or not after:
+        return subject.selected_region_before_text, replacement, (0,)
+    return before, after, indexes
+
+
+def _target_bearing_paragraph_indexes(
+    subject: ResidualCandidateSubject,
+    paragraphs: list[str],
+) -> tuple[int, ...]:
+    indexes: list[int] = []
+    for index, paragraph in enumerate(paragraphs):
+        paragraph_key = _canonical_space(paragraph)
+        if any(_canonical_space(unit.before_text) in paragraph_key for unit in subject.target_units):
+            indexes.append(index)
+    if indexes:
+        return tuple(indexes)
+    target_terms = {
+        term
+        for unit in subject.target_units
+        for label in unit.objects
+        for term in _significant_terms(label)
+    }
+    for index, paragraph in enumerate(paragraphs):
+        if len(_terms_present(paragraph.lower(), tuple(sorted(target_terms)))) >= 2:
+            indexes.append(index)
+    return tuple(indexes or [0])
+
+
+def _protected_context_report(
+    *,
+    subject: ResidualCandidateSubject,
+    replacement: str,
+    target_paragraph_indexes: tuple[int, ...],
+) -> dict[str, object]:
+    before_paragraphs = _paragraphs(subject.selected_region_before_text)
+    after_paragraphs = _paragraphs(replacement)
+    protected_indexes = [
+        index for index in range(len(before_paragraphs)) if index not in target_paragraph_indexes
+    ]
+    before = "\n\n".join(before_paragraphs[index] for index in protected_indexes)
+    after = "\n\n".join(
+        after_paragraphs[index]
+        for index in protected_indexes
+        if index < len(after_paragraphs)
+    )
+    if not before:
+        return {
+            "protected_context_present": False,
+            "protected_context_preserved": True,
+            "scope_failure": None,
+        }
+    measurement = _measure_text_materiality(
+        scope_id="protected_context",
+        before=before,
+        after=after,
+        selected_region_before=subject.selected_region_before_text,
+    )
+    return {
+        **measurement,
+        "protected_context_present": True,
+        "protected_context_preserved": (
+            measurement["exact_copy"] is True
+            or float(measurement["sequence_similarity"]) >= 0.70
+        ),
+        "scope_failure": (
+            None
+            if after
+            else "protected context disappeared from replacement"
+        ),
+    }
+
+
+def _target_unit_materiality_reports(
+    *,
+    subject: ResidualCandidateSubject,
+    replacement: str,
+    target_unit_mapping: list[dict[str, object]],
+    policy: ResidualMaterialityPolicy,
+    failures: dict[str, list[str]],
+) -> list[dict[str, object]]:
+    reports: list[dict[str, object]] = []
+    mapping_by_unit = {
+        str(item.get("target_unit_id") or item.get("unit_id") or ""): item
+        for item in target_unit_mapping
+    }
+    for unit in subject.target_units:
+        excerpt = _unit_replacement_excerpt(unit, replacement)
+        measurement = _measure_text_materiality(
+            scope_id=f"target_unit:{unit.unit_id}",
+            before=unit.before_text,
+            after=excerpt,
+            selected_region_before=subject.selected_region_before_text,
+        )
+        materiality_failures: list[str] = []
+        if policy.primary_materiality_scope == "target_bearing_scope":
+            materiality_failures = _materiality_scope_failures(
+                measurement,
+                policy=policy,
+                scope_policy=policy.target_unit_scope,
+                enforce_primary=True,
+                enforce_ratio=True,
+            )
+            failures["target_unit_materiality_failures"].extend(
+                f"{unit.unit_id}: {failure}" for failure in materiality_failures
+            )
+        semantic = _target_unit_semantic_report(
+            unit=unit,
+            replacement_excerpt=excerpt,
+            mapping=mapping_by_unit.get(unit.unit_id, {}),
+            selected_residual_target_id=subject.selected_residual_target_id,
+        )
+        for failure in semantic["failures"]:
+            bucket = "tactile_semantic_failures"
+            if "object-motion relabel" in failure:
+                bucket = "object_motion_relabel_failures"
+            failures[bucket].append(f"{unit.unit_id}: {failure}")
+        reports.append(
+            {
+                "target_unit_id": unit.unit_id,
+                "source_unit_role": unit.source_unit_role,
+                "before_text_sha256": unit.before_text_sha256,
+                "replacement_excerpt": excerpt,
+                "materiality": measurement,
+                "materiality_passed": not materiality_failures,
+                "materiality_failures": materiality_failures,
+                "semantic_passed": semantic["passed"],
+                "semantic_failures": semantic["failures"],
+                "classification": _target_unit_classification(
+                    materiality_failures,
+                    semantic["failures"],
+                ),
+            }
+        )
+    return reports
+
+
+def _overlap_cluster_reports(
+    *,
+    subject: ResidualCandidateSubject,
+    replacement: str,
+    unit_reports: list[dict[str, object]],
+    policy: ResidualMaterialityPolicy,
+    failures: dict[str, list[str]],
+) -> list[dict[str, object]]:
+    by_hash: dict[str, list[TargetUnit]] = {}
+    for unit in subject.target_units:
+        by_hash.setdefault(unit.before_text_sha256, []).append(unit)
+    reports: list[dict[str, object]] = []
+    report_by_unit = {
+        str(report["target_unit_id"]): report for report in unit_reports
+    }
+    for before_hash, units in by_hash.items():
+        if len(units) < 2:
+            continue
+        before = units[0].before_text
+        after = _cluster_replacement_excerpt(units, replacement)
+        measurement = _measure_text_materiality(
+            scope_id=f"overlap_cluster:{before_hash[:12]}",
+            before=before,
+            after=after,
+            selected_region_before=subject.selected_region_before_text,
+        )
+        cluster_failures = _materiality_scope_failures(
+            measurement,
+            policy=policy,
+            scope_policy=policy.target_unit_scope,
+            enforce_primary=False,
+            enforce_ratio=False,
+        )
+        integrated = bool(after.strip())
+        if not integrated:
+            cluster_failures.append("overlap cluster has no integrated replacement")
+        failures["overlap_cluster_failures"].extend(cluster_failures)
+        member_results = [
+            {
+                "target_unit_id": unit.unit_id,
+                "semantic_passed": report_by_unit[unit.unit_id]["semantic_passed"],
+                "semantic_failures": report_by_unit[unit.unit_id]["semantic_failures"],
+            }
+            for unit in units
+        ]
+        reports.append(
+            {
+                "overlap_cluster_id": f"overlap_{before_hash[:12]}",
+                "member_unit_ids": [unit.unit_id for unit in units],
+                "shared_before_hash": before_hash,
+                "integrated_replacement_found": integrated,
+                "materiality": measurement,
+                "cluster_materiality_passed": not cluster_failures,
+                "cluster_failures": cluster_failures,
+                "member_semantic_results": member_results,
+            }
+        )
+    return reports
+
+
+def _target_unit_semantic_report(
+    *,
+    unit: TargetUnit,
+    replacement_excerpt: str,
+    mapping: dict[str, object],
+    selected_residual_target_id: str,
+) -> dict[str, object]:
+    if selected_residual_target_id != TACTILE_INEVITABILITY_TARGET_ID:
+        return {"passed": True, "failures": []}
+    replacement_lower = replacement_excerpt.lower()
+    failures: list[str] = []
+    role_terms = _tactile_terms_for_unit_role(unit.source_unit_role)
+    if not _terms_present(replacement_lower, role_terms):
+        failures.append("missing tactile necessity for source-unit role")
+    if _object_motion_only_tactile_unit(unit, replacement_lower):
+        failures.append("object-motion relabel without tactile necessity")
+    if any(term in replacement_lower for term in ("inevitability", "inevitable", "non-optional")):
+        failures.append("abstract inevitability explanation")
+    return {"passed": not failures, "failures": failures}
+
+
+def _target_unit_classification(
+    materiality_failures: list[str],
+    semantic_failures: list[str],
+) -> str:
+    if semantic_failures:
+        if any("object-motion relabel" in failure for failure in semantic_failures):
+            return "object_motion_relabel"
+        if any("abstract" in failure for failure in semantic_failures):
+            return "abstract_explanation"
+        return "semantic_failure"
+    if materiality_failures:
+        return "valid_direction_but_under_material"
+    return "strong_tactile_intervention"
+
+
+def _unit_replacement_excerpt(unit: TargetUnit, replacement: str) -> str:
+    sentences = _sentences(replacement)
+    if not sentences:
+        return replacement
+    label_terms = _unit_label_terms(unit)
+    scored = [
+        (len(_terms_present(sentence.lower(), label_terms)), index, sentence)
+        for index, sentence in enumerate(sentences)
+    ]
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    best_score = scored[0][0]
+    if best_score <= 0:
+        return sentences[0]
+    # Keep the excerpt bounded and deterministic; one strong sentence is enough
+    # unless the unit has another adjacent sentence with several labels.
+    primary_index = scored[0][1]
+    adjacent = [
+        sentences[index]
+        for index in (primary_index - 1, primary_index + 1)
+        if 0 <= index < len(sentences)
+        and len(_terms_present(sentences[index].lower(), label_terms)) >= 2
+    ]
+    excerpt_parts = _unique([scored[0][2], *adjacent])
+    return " ".join(excerpt_parts)
+
+
+def _cluster_replacement_excerpt(units: list[TargetUnit], replacement: str) -> str:
+    sentences = _sentences(replacement)
+    terms = tuple(sorted({term for unit in units for term in _unit_label_terms(unit)}))
+    selected = [
+        sentence
+        for sentence in sentences
+        if len(_terms_present(sentence.lower(), terms)) >= 2
+    ]
+    return " ".join(_unique(selected)) or replacement
+
+
+def _unit_label_terms(unit: TargetUnit) -> tuple[str, ...]:
+    terms: set[str] = set()
+    for label in unit.objects:
+        terms.update(_significant_terms(label))
+    return tuple(sorted(terms))
+
+
+def _tactile_terms_for_unit_role(role: str) -> tuple[str, ...]:
+    general = {
+        "contact",
+        "touch",
+        "touched",
+        "pressure",
+        "pressed",
+        "weight",
+        "resistance",
+        "friction",
+        "compression",
+        "residue",
+        "settling",
+        "settled",
+        "absorption",
+        "absorbed",
+        "impact",
+        "breakage",
+        "displacement",
+        "surface",
+        "against",
+        "into",
+    }
+    by_role = {
+        "contact_residue_displacement": {
+            "contact",
+            "pressure",
+            "residue",
+            "displacement",
+            "taken",
+            "tightens",
+            "meets",
+            "grain",
+            "into",
+        },
+        "surface_residue_disturbance": {
+            "contact",
+            "pressed",
+            "pressure",
+            "residue",
+            "settling",
+            "settled",
+            "gathers",
+            "surface",
+        },
+        "impact_breakage": {
+            "impact",
+            "weight",
+            "pressure",
+            "force",
+            "against",
+            "struck",
+            "compression",
+            "fracture",
+            "split",
+            "breakage",
+        },
+    }
+    return tuple(sorted(general | by_role.get(role, set())))
+
+
+def _object_motion_only_tactile_unit(unit: TargetUnit, replacement_lower: str) -> bool:
+    if unit.source_unit_role != "impact_breakage":
+        return False
+    motion_terms = ("fall", "released", "release", "dropped", "drop", "visible")
+    tactile_terms = (
+        "impact",
+        "weight",
+        "pressure",
+        "force",
+        "against",
+        "struck",
+        "compression",
+        "fracture",
+        "split",
+        "breakage",
+    )
+    return bool(_terms_present(replacement_lower, motion_terms)) and not bool(
+        _terms_present(replacement_lower, tactile_terms)
+    )
+
+
+def _paragraphs(text: str) -> list[str]:
+    paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n", text)]
+    return [paragraph for paragraph in paragraphs if paragraph]
+
+
+def _sentences(text: str) -> list[str]:
+    normalized = " ".join(text.split())
+    return [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", normalized)
+        if sentence.strip()
+    ]
+
+
+def _changed_sentence_count(before: list[str], after: list[str]) -> int:
+    count = 0
+    for index in range(max(len(before), len(after))):
+        before_sentence = _canonical_space(before[index]) if index < len(before) else ""
+        after_sentence = _canonical_space(after[index]) if index < len(after) else ""
+        if before_sentence != after_sentence:
+            count += 1
+    return count
+
+
+def _token_edit_distance(before: list[str], after: list[str]) -> int:
+    if len(before) < len(after):
+        before, after = after, before
+    previous = list(range(len(after) + 1))
+    for row_index, before_token in enumerate(before, 1):
+        current = [row_index] + [0] * len(after)
+        for column_index, after_token in enumerate(after, 1):
+            current[column_index] = min(
+                previous[column_index] + 1,
+                current[column_index - 1] + 1,
+                previous[column_index - 1] + (before_token != after_token),
+            )
+        previous = current
+    return previous[-1]
+
+
+def _compatibility_materiality_report(
+    *,
+    subject: ResidualCandidateSubject,
+    whole: dict[str, object],
+    failures: list[str],
+) -> dict[str, object]:
+    failed_reason = "; ".join(failures) if failures else None
+    return {
+        "before_word_count": whole["before_word_count"],
+        "replacement_word_count": whole["replacement_word_count"],
+        "before_unique_word_count": whole["before_unique_word_count"],
+        "replacement_unique_word_count": whole["replacement_unique_word_count"],
+        "changed_unique_word_count": whole["changed_unique_word_count"],
+        "changed_unique_word_ratio": whole["changed_unique_word_ratio"],
+        "required_changed_unique_word_count": REQUIRED_CHANGED_UNIQUE_WORD_COUNT,
+        "required_changed_ratio": REQUIRED_CHANGED_RATIO,
+        "exact_copy": whole["exact_copy"],
+        "selected_region_copied_inside_replacement": (
+            whole["selected_region_copied_inside_replacement"]
+        ),
+        "near_copy_or_under_materiality": bool(failures),
+        "failed_materiality_reason": failed_reason,
+        "target_unit_ids": [unit.unit_id for unit in subject.target_units],
+        "token_edit_distance": whole["token_edit_distance"],
+        "sequence_similarity": whole["sequence_similarity"],
+        "changed_sentence_count": whole["changed_sentence_count"],
     }
 
 
@@ -1710,6 +2477,18 @@ def _build_candidate_text(
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": [unit.unit_id for unit in subject.target_units],
+        "residual_materiality_report": recomposed.validation_report.get(
+            "residual_materiality_report"
+        ),
+        "target_unit_materiality_report": recomposed.validation_report.get(
+            "target_unit_materiality_report"
+        ),
+        "overlap_cluster_report": recomposed.validation_report.get(
+            "overlap_cluster_report"
+        ),
+        "residual_intervention_validation_report": recomposed.validation_report.get(
+            "residual_intervention_validation_report"
+        ),
         "text": recomposed.text,
         "text_sha256": sha256_text(recomposed.text),
         "word_count": _word_count(recomposed.text),
@@ -2023,6 +2802,18 @@ def _build_packet_summary(
         "target_coverage_report": payloads["macro_recomposition_diff_report"][
             "target_coverage_report"
         ],
+        "residual_materiality_report": payloads["macro_recomposition_diff_report"][
+            "materiality_report"
+        ].get("residual_materiality_report"),
+        "target_unit_materiality_report": payloads["macro_recomposition_diff_report"][
+            "materiality_report"
+        ].get("target_unit_materiality_report"),
+        "overlap_cluster_report": payloads["macro_recomposition_diff_report"][
+            "materiality_report"
+        ].get("overlap_cluster_report"),
+        "residual_intervention_validation_report": payloads[
+            "macro_recomposition_diff_report"
+        ]["materiality_report"].get("residual_intervention_validation_report"),
         "bounded_macro_recomposition": True,
         "object_motion_causality_generation": (
             subject.selected_residual_target_id == OBJECT_MOTION_CAUSALITY_TARGET_ID
@@ -2103,11 +2894,18 @@ def _failure_result(
     artifacts: dict[str, ArtifactRecord],
     model_results: list[ModelDriverResult],
     message: str,
-    materiality_report: MaterialityReport | None = None,
+    materiality_report: MaterialityReport | dict[str, object] | None = None,
+    validation_report: dict[str, object] | None = None,
 ) -> ResidualCandidateGenerationResult:
-    materiality_payload = (
-        materiality_report.to_dict() if materiality_report is not None else None
-    )
+    if isinstance(materiality_report, MaterialityReport):
+        materiality_payload = materiality_report.to_dict()
+    else:
+        materiality_payload = materiality_report
+    validation_payload = validation_report or {}
+    failure_categories = {}
+    residual_validation = validation_payload.get("residual_intervention_validation_report")
+    if isinstance(residual_validation, dict):
+        failure_categories = residual_validation.get("failure_categories") or {}
     return ResidualCandidateGenerationResult(
         exit_code=1,
         payload={
@@ -2143,6 +2941,15 @@ def _failure_result(
             "model_call_ids": [result.model_call.id for result in model_results],
             "model_calls": [result.model_call_to_dict() for result in model_results],
             "materiality_report": materiality_payload,
+            "residual_materiality_report": validation_payload.get(
+                "residual_materiality_report"
+            ),
+            "target_unit_materiality_report": validation_payload.get(
+                "target_unit_materiality_report"
+            ),
+            "overlap_cluster_report": validation_payload.get("overlap_cluster_report"),
+            "residual_intervention_validation_report": residual_validation,
+            "validation_failure_categories": failure_categories,
             "failed_materiality_reason": (
                 materiality_payload["failed_materiality_reason"]
                 if materiality_payload
@@ -2450,13 +3257,31 @@ def _materiality_failure_message(report: MaterialityReport) -> str:
     )
 
 
-def _materiality_report_from_model_results(
+def _validation_failure_message(validation_report: dict[str, object]) -> str:
+    residual = validation_report.get("residual_intervention_validation_report")
+    failures: list[str] = []
+    categories: dict[str, object] = {}
+    if isinstance(residual, dict):
+        failures = [str(item) for item in residual.get("failures", [])]
+        raw_categories = residual.get("failure_categories")
+        categories = raw_categories if isinstance(raw_categories, dict) else {}
+    if not failures:
+        return "residual intervention validation failed"
+    prefix = (
+        "selected region materiality failed"
+        if categories.get("whole_region_guard_failures")
+        else "residual intervention validation failed"
+    )
+    return f"{prefix}: " + "; ".join(failures)
+
+
+def _validation_report_from_model_results(
     subject: ResidualCandidateSubject,
     model_results: list[ModelDriverResult],
-) -> MaterialityReport | None:
+) -> dict[str, object] | None:
     for result in reversed(model_results):
         error_message = result.model_call.error_message or ""
-        if "materiality" not in error_message:
+        if "materiality" not in error_message and "validation" not in error_message:
             continue
         raw_output_path = result.model_call.raw_output_path
         if not raw_output_path:
@@ -2469,9 +3294,76 @@ def _materiality_report_from_model_results(
         if not isinstance(payload, dict):
             continue
         replacement = payload.get("replacement_region_text")
-        if isinstance(replacement, str) and replacement.strip():
-            return _materiality_report(subject, replacement)
+        if not isinstance(replacement, str) or not replacement.strip():
+            continue
+        try:
+            mapping = _mapping_from_model_payload(subject, payload)
+            validated_mapping = _validate_target_unit_mapping(subject, mapping)
+            return _collect_residual_intervention_validation(
+                subject=subject,
+                replacement=replacement.strip(),
+                target_unit_mapping=validated_mapping,
+            )
+        except ModelValidationError:
+            return {
+                "materiality_report": _materiality_report(subject, replacement).to_dict(),
+                "residual_intervention_validation_report": {
+                    "passed": False,
+                    "failure_count": 1,
+                    "failure_categories": {
+                        "schema_or_mapping_failures": [error_message],
+                    },
+                    "failures": [error_message],
+                    "controller_final_validation_result": "refused",
+                },
+            }
     return None
+
+
+def _materiality_report_from_validation_report(
+    validation_report: dict[str, object] | None,
+) -> dict[str, object] | None:
+    if not validation_report:
+        return None
+    value = validation_report.get("materiality_report")
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _materiality_report_from_compatibility_dict(
+    payload: object,
+) -> MaterialityReport | None:
+    if not isinstance(payload, dict):
+        return None
+    return MaterialityReport(
+        before_word_count=int(payload.get("before_word_count") or 0),
+        replacement_word_count=int(payload.get("replacement_word_count") or 0),
+        before_unique_word_count=int(payload.get("before_unique_word_count") or 0),
+        replacement_unique_word_count=int(
+            payload.get("replacement_unique_word_count") or 0
+        ),
+        changed_unique_word_count=int(payload.get("changed_unique_word_count") or 0),
+        changed_unique_word_ratio=float(payload.get("changed_unique_word_ratio") or 0),
+        required_changed_unique_word_count=int(
+            payload.get("required_changed_unique_word_count")
+            or REQUIRED_CHANGED_UNIQUE_WORD_COUNT
+        ),
+        required_changed_ratio=float(
+            payload.get("required_changed_ratio") or REQUIRED_CHANGED_RATIO
+        ),
+        exact_copy=payload.get("exact_copy") is True,
+        selected_region_copied_inside_replacement=(
+            payload.get("selected_region_copied_inside_replacement") is True
+        ),
+        under_materiality=payload.get("near_copy_or_under_materiality") is True,
+        failed_materiality_reason=(
+            str(payload.get("failed_materiality_reason"))
+            if payload.get("failed_materiality_reason")
+            else None
+        ),
+        target_unit_ids=tuple(
+            str(value) for value in payload.get("target_unit_ids", [])
+        ),
+    )
 
 
 def _default_openai_client_factory(model: str) -> ModelClient:

@@ -47,6 +47,44 @@ class ResidualTargetSpec:
 
 
 @dataclass(frozen=True)
+class ResidualMaterialityPolicy:
+    policy_id: str
+    policy_version: str
+    primary_materiality_scope: str
+    whole_region_guard: dict[str, object]
+    target_bearing_scope: dict[str, object]
+    target_unit_scope: dict[str, object]
+    overlap_cluster_policy: dict[str, object]
+    absolute_change_floor: int
+    ratio_floor: float
+    token_edit_distance_floor: int
+    sequence_similarity_ceiling: float
+    changed_sentence_floor: int
+    protected_context_exemptions: tuple[str, ...]
+    prompt_feedback: tuple[str, ...]
+    failure_report_fields: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "primary_materiality_scope": self.primary_materiality_scope,
+            "whole_region_guard": dict(self.whole_region_guard),
+            "target_bearing_scope": dict(self.target_bearing_scope),
+            "target_unit_scope": dict(self.target_unit_scope),
+            "overlap_cluster_policy": dict(self.overlap_cluster_policy),
+            "absolute_change_floor": self.absolute_change_floor,
+            "ratio_floor": self.ratio_floor,
+            "token_edit_distance_floor": self.token_edit_distance_floor,
+            "sequence_similarity_ceiling": self.sequence_similarity_ceiling,
+            "changed_sentence_floor": self.changed_sentence_floor,
+            "protected_context_exemptions": list(self.protected_context_exemptions),
+            "prompt_feedback": list(self.prompt_feedback),
+            "failure_report_fields": list(self.failure_report_fields),
+        }
+
+
+@dataclass(frozen=True)
 class ResidualTargetAdapter:
     target_id: str
     target_spec_version: str
@@ -63,6 +101,7 @@ class ResidualTargetAdapter:
     ablation_controls: tuple[str, ...]
     reader_state_evaluation_focus: tuple[str, ...]
     stop_test_policy: dict[str, object]
+    materiality_policy: ResidualMaterialityPolicy
 
     @property
     def adapter_id(self) -> str:
@@ -249,6 +288,113 @@ RESIDUAL_TARGET_SPECS = {
     TACTILE_INEVITABILITY_SPEC.target_id: TACTILE_INEVITABILITY_SPEC,
 }
 
+MATERIALITY_FAILURE_REPORT_FIELDS = (
+    "whole_region_guard_failures",
+    "target_bearing_materiality_failures",
+    "target_unit_materiality_failures",
+    "overlap_cluster_failures",
+    "tactile_semantic_failures",
+    "object_motion_relabel_failures",
+    "generic_decorative_vividness_failures",
+    "abstract_inevitability_failures",
+    "protected_context_scope_failures",
+)
+
+OBJECT_MOTION_MATERIALITY_POLICY = ResidualMaterialityPolicy(
+    policy_id="object_motion_selected_region_materiality_v1",
+    policy_version="1",
+    primary_materiality_scope="whole_selected_region",
+    whole_region_guard={
+        "scope": "whole_selected_region",
+        "enforce_primary_thresholds": True,
+        "exact_copy_fails": True,
+        "selected_region_copy_fails": True,
+    },
+    target_bearing_scope={
+        "scope": "selected_region",
+        "diagnostic_only": True,
+    },
+    target_unit_scope={
+        "scope": "target_unit",
+        "diagnostic_only": True,
+    },
+    overlap_cluster_policy={
+        "detect_shared_before_text_hash": True,
+        "diagnostic_only": True,
+    },
+    absolute_change_floor=10,
+    ratio_floor=0.12,
+    token_edit_distance_floor=1,
+    sequence_similarity_ceiling=0.98,
+    changed_sentence_floor=1,
+    protected_context_exemptions=(
+        "none; legacy object-motion generation uses whole selected region as primary denominator",
+    ),
+    prompt_feedback=(
+        "selected-region materiality is required",
+        "lexical substitutions are insufficient",
+        "target-unit mappings are necessary but insufficient",
+        "preserve protected effects rather than exact sentence architecture",
+    ),
+    failure_report_fields=MATERIALITY_FAILURE_REPORT_FIELDS,
+)
+
+TACTILE_MATERIALITY_POLICY = ResidualMaterialityPolicy(
+    policy_id="tactile_inevitability_target_bearing_materiality_v1",
+    policy_version="1",
+    primary_materiality_scope="target_bearing_scope",
+    whole_region_guard={
+        "scope": "whole_selected_region",
+        "near_copy_guard_only": True,
+        "exact_copy_fails": True,
+        "selected_region_copy_fails": True,
+        "do_not_enforce_global_ratio_floor": True,
+        "token_edit_distance_floor": 12,
+        "sequence_similarity_ceiling": 0.97,
+    },
+    target_bearing_scope={
+        "scope": "paragraph_or_sentence_cluster_containing_target_units",
+        "absolute_change_floor": 8,
+        "ratio_floor": 0.12,
+        "token_edit_distance_floor": 12,
+        "sequence_similarity_ceiling": 0.90,
+        "changed_sentence_floor": 2,
+    },
+    target_unit_scope={
+        "scope": "each_required_target_unit",
+        "absolute_change_floor": 4,
+        "ratio_floor": 0.18,
+        "token_edit_distance_floor": 5,
+        "sequence_similarity_ceiling": 0.86,
+        "changed_sentence_floor": 1,
+    },
+    overlap_cluster_policy={
+        "detect_shared_before_text_hash": True,
+        "evaluate_integrated_replacement_once": True,
+        "validate_member_semantics_separately": True,
+        "require_coherent_replacement_not_duplicate_rewrites": True,
+    },
+    absolute_change_floor=8,
+    ratio_floor=0.12,
+    token_edit_distance_floor=12,
+    sequence_similarity_ceiling=0.90,
+    changed_sentence_floor=2,
+    protected_context_exemptions=(
+        "untargeted protected context may remain stable",
+        "do not rewrite healthy context merely to increase a whole-region ratio",
+        "preserve effect and function rather than exact target sentence architecture",
+    ),
+    prompt_feedback=(
+        "lexical tightening is insufficient",
+        "preserving exact target sentence architecture is insufficient",
+        "materially re-author every required tactile unit",
+        "surrounding untargeted context may remain stable",
+        "do not rewrite protected context merely to raise a global ratio",
+        "tactile necessity is distinct from object motion",
+    ),
+    failure_report_fields=MATERIALITY_FAILURE_REPORT_FIELDS,
+)
+
 OBJECT_MOTION_ADAPTER = ResidualTargetAdapter(
     target_id=OBJECT_MOTION_CAUSALITY_TARGET_ID,
     target_spec_version=OBJECT_MOTION_TARGET_SPEC_VERSION,
@@ -279,6 +425,7 @@ OBJECT_MOTION_ADAPTER = ResidualTargetAdapter(
             "another merely partial adjacent gain appears",
         ],
     },
+    materiality_policy=OBJECT_MOTION_MATERIALITY_POLICY,
 )
 
 TACTILE_INEVITABILITY_ADAPTER = ResidualTargetAdapter(
@@ -314,6 +461,7 @@ TACTILE_INEVITABILITY_ADAPTER = ResidualTargetAdapter(
             "another merely partial adjacent gain appears",
         ],
     },
+    materiality_policy=TACTILE_MATERIALITY_POLICY,
 )
 
 RESIDUAL_TARGET_ADAPTERS = {
@@ -431,7 +579,13 @@ def target_adapter_metadata(target_id: str) -> dict[str, object]:
         "ablation_controls": list(adapter.ablation_controls),
         "reader_state_evaluation_focus": list(adapter.reader_state_evaluation_focus),
         "stop_test_policy": dict(adapter.stop_test_policy),
+        "materiality_policy_id": adapter.materiality_policy.policy_id,
+        "materiality_policy_version": adapter.materiality_policy.policy_version,
     }
+
+
+def materiality_policy_payload(target_id: str) -> dict[str, object]:
+    return require_residual_target_adapter(target_id).materiality_policy.to_dict()
 
 
 def compile_tactile_target_units(

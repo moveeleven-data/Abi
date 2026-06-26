@@ -2167,6 +2167,16 @@ class StubResidualInterventionClient:
                 "non-optional."
             )
             return dump_json(payload)
+        if self.mode == "packet_0062_like":
+            return dump_json(_packet_0062_like_residual_payload(units))
+        if self.mode == "protected_context_stable":
+            prompt = json.loads(request.input_text)
+            return dump_json(
+                _protected_context_stable_residual_payload(
+                    units,
+                    str(prompt["selected_region_before_text"]),
+                )
+            )
         return dump_json(_valid_residual_intervention_payload(units))
 
 
@@ -2224,6 +2234,103 @@ def _valid_residual_intervention_payload(units):
         ],
         "uncertainty": "stub output for tests only",
     }
+
+
+def _packet_0062_like_residual_payload(units):
+    mapping = _residual_intervention_mapping(units)
+    if len(mapping) >= 3:
+        mapping[0].update(
+            {
+                "mechanism_operation": (
+                    "Pressure and contact are made to produce the trace before any "
+                    "explanation follows."
+                ),
+                "material_relation_or_action": (
+                    "The ring tightens at the cup's lip, and the crumb is taken "
+                    "into the table's grain."
+                ),
+                "visible_consequence": (
+                    "The surface change appears immediately, as a tightened ring "
+                    "and a displaced crumb."
+                ),
+            }
+        )
+        mapping[1].update(
+            {
+                "mechanism_operation": (
+                    "Contact and passage are tied to the residue they leave on the "
+                    "surface."
+                ),
+                "material_relation_or_action": (
+                    "Dust gathers where hand, foot, and air have pressed the same "
+                    "surface."
+                ),
+                "visible_consequence": (
+                    "The settled dust reads as the result of prior contact and "
+                    "crossing."
+                ),
+            }
+        )
+        mapping[2].update(
+            {
+                "mechanism_operation": (
+                    "Release, weight, and fall are linked to the visible break "
+                    "they leave behind."
+                ),
+                "material_relation_or_action": (
+                    "The spoon lies where a hand released it too quickly, and the "
+                    "saucer shows the break the fall made visible."
+                ),
+                "visible_consequence": (
+                    "The cracked saucer reads as the unavoidable result of impact."
+                ),
+            }
+        )
+    return {
+        "replacement_region_text": (
+            "A room like this teaches by repetition. When a cup is set down and "
+            "lifted again, the ring tightens where the lip meets the wood, and "
+            "the crumb is taken into the table's grain; the change is there "
+            "before anyone names it. Morning does not wipe that away. Dust gathers "
+            "where hand, foot, and air have pressed the same surface, and "
+            "the spoon lies where a hand released it beside the saucer whose "
+            "break the fall made visible. The world holds "
+            "these crossings in place and makes them matter.\n\n"
+            "At first, the table seems only ordinary. But ordinary things are "
+            "strict about what reaches them. The ring keeps the trace of the "
+            "glass because the pressure stays in the wood, the dust marks a "
+            "passage through the window crack because the air and touch have "
+            "already crossed it, the spoon lies where a hand released it too "
+            "quickly, and the saucer shows the break that the fall made visible. "
+            "Each object stays itself by carrying the force that brought it "
+            "there. The kitchen is small, but it makes one rule plain: one thing "
+            "enters another, leaves a mark, and that mark changes how the next "
+            "thing is read."
+        ),
+        "target_unit_mappings": mapping,
+        "intervention_plan": ["packet 0062 regression shape"],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "bounded",
+                "risk_note": "conservative rewrite",
+            }
+        ],
+        "protected_effects_notes": ["protected context mostly stable"],
+        "forbidden_change_self_check": ["no finality claim", "no phase-shift claim"],
+        "uncertainty": "packet 0062-like regression fixture",
+    }
+
+
+def _protected_context_stable_residual_payload(units, selected_region):
+    paragraphs = selected_region.split("\n\n")
+    protected = paragraphs[1] if len(paragraphs) > 1 else ""
+    first = _tactile_stub_replacement_from_units(units).split("\n\n")[0]
+    payload = _valid_residual_intervention_payload(units)
+    payload["replacement_region_text"] = (
+        first + ("\n\n" + protected if protected else "")
+    )
+    return payload
 
 
 def _tactile_stub_replacement_from_units(units):
@@ -7739,6 +7846,20 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     assert tactile_adapter.generation_schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA
     assert tactile_adapter.generation_contract_version == TACTILE_GENERATION_CONTRACT_VERSION
     assert tactile_adapter.work_order_contract_version == TACTILE_WORK_ORDER_CONTRACT_VERSION
+    assert object_adapter.materiality_policy.policy_id
+    assert tactile_adapter.materiality_policy.policy_id
+    assert object_adapter.materiality_policy.primary_materiality_scope == (
+        "whole_selected_region"
+    )
+    assert tactile_adapter.materiality_policy.primary_materiality_scope == (
+        "target_bearing_scope"
+    )
+    assert tactile_adapter.materiality_policy.whole_region_guard[
+        "near_copy_guard_only"
+    ] is True
+    assert tactile_adapter.materiality_policy.overlap_cluster_policy[
+        "validate_member_semantics_separately"
+    ] is True
     with pytest.raises(ValueError, match="unsupported selected residual target"):
         require_residual_target_adapter("unsupported_target")
 
@@ -9037,6 +9158,18 @@ def test_tactile_residual_candidate_generation_fake_fixture_success(tmp_path):
     assert "full_tactile_intervention" in diff["target_coverage_report"][
         "target_specific_ablation_controls"
     ]
+    materiality = diff["materiality_report"]
+    assert materiality["materiality_policy_id"].startswith("tactile_inevitability")
+    assert materiality["primary_materiality_scope"] == "target_bearing_scope"
+    assert materiality["residual_materiality_report"]["whole_region_guard"]["passed"] is True
+    assert materiality["residual_materiality_report"]["target_bearing_scope"][
+        "passed"
+    ] is True
+    assert materiality["target_unit_materiality_report"][
+        "all_required_units_materially_engaged"
+    ] is True
+    assert "overlap_cluster_count" in materiality["overlap_cluster_report"]
+    assert materiality["residual_intervention_validation_report"]["passed"] is True
 
 
 def test_tactile_residual_candidate_generation_stubbed_openai_success(
@@ -9063,6 +9196,14 @@ def test_tactile_residual_candidate_generation_stubbed_openai_success(
     assert result.payload["accepted"] is True
     assert result.payload["counts"]["model_calls"] == 1
     assert clients[0].requests[0].schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA
+    prompt = json.loads(clients[0].requests[0].input_text)
+    assert prompt["materiality_policy"]["primary_materiality_scope"] == (
+        "target_bearing_scope"
+    )
+    assert prompt["materiality_policy"]["target_unit_scope"]["absolute_change_floor"] > 0
+    assert "tactile necessity is distinct from object motion" in (
+        " ".join(prompt["materiality_policy"]["prompt_feedback"])
+    )
     model_call = result.payload["model_calls"][0]
     assert model_call["provider"] == "openai"
     assert model_call["model"] == "stub-tactile-model"
@@ -9078,12 +9219,16 @@ def test_tactile_residual_candidate_generation_stubbed_openai_success(
     assert candidate["fixture_only"] is False
     assert candidate["non_final"] is True
     assert candidate["not_human_validated"] is True
+    assert candidate["residual_intervention_validation_report"]["passed"] is True
+    assert candidate["target_unit_materiality_report"][
+        "all_required_units_materially_engaged"
+    ] is True
 
 
 @pytest.mark.parametrize(
     ("mode", "expected_message"),
     [
-        ("object_motion_relabel", "contact/force/material necessity"),
+        ("object_motion_relabel", "missing tactile necessity"),
         ("decorative", "decorative/generic vividness"),
         ("abstract", "abstractly"),
     ],
@@ -9118,6 +9263,228 @@ def test_tactile_residual_candidate_generation_validation_failures(
     assert result.payload["counts"]["model_calls"] == 1
     assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
     assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+
+
+def test_tactile_materiality_policy_allows_stable_protected_context(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_tactile_residual_candidate_authorization_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-tactile-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="protected_context_stable",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    report = diff["materiality_report"]
+    protected = report["residual_materiality_report"]["protected_context"]
+    if protected["protected_context_present"]:
+        assert protected["protected_context_preserved"] is True
+        assert protected["scope_failure"] is None
+    assert report["residual_materiality_report"]["target_bearing_scope"][
+        "passed"
+    ] is True
+    assert report["residual_intervention_validation_report"]["passed"] is True
+    assert "token_edit_distance" in report["residual_materiality_report"][
+        "target_bearing_scope"
+    ]
+    assert "sequence_similarity" in report["residual_materiality_report"][
+        "target_bearing_scope"
+    ]
+
+
+def test_tactile_packet_0062_like_output_remains_rejected_with_unit_diagnostics(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_tactile_residual_candidate_authorization_chain(tmp_path)
+    work_order_packet = Path(str(chain["residual_work_order"]["packet_dir"]))
+
+    shared_under_material_text = (
+        "Dust gathers where hand, foot, and air have pressed the same surface, "
+        "and the spoon lies where a hand released it beside the saucer whose "
+        "break the fall made visible."
+    )
+
+    def _force_packet_0062_unit_shape(payload):
+        specs = [
+            {
+                "objects": ["cup", "ring", "crumb", "grain"],
+                "source_unit_role": "contact_residue_displacement",
+                "before_text": (
+                    "When a cup is set down and lifted again, the ring tightens "
+                    "where the lip meets the wood, and the crumb is taken into "
+                    "the table's grain; the change is there before anyone names it."
+                ),
+                "current_physical_relation": (
+                    "contact, pressure, residue, and displacement alter the surface trace"
+                ),
+            },
+            {
+                "objects": ["dust", "hand", "foot", "air", "surface"],
+                "source_unit_role": "surface_residue_disturbance",
+                "before_text": shared_under_material_text,
+                "current_physical_relation": (
+                    "contact, passage, and settling leave residue on the surface"
+                ),
+            },
+            {
+                "objects": ["spoon", "saucer", "hand", "fall", "break"],
+                "source_unit_role": "impact_breakage",
+                "before_text": shared_under_material_text,
+                "current_physical_relation": (
+                    "release, weight, impact, or breakage leaves a visible material change"
+                ),
+            },
+        ]
+        for unit, spec in zip(payload["target_units"], specs, strict=True):
+            unit["objects"] = spec["objects"]
+            unit["involved_object_labels"] = spec["objects"]
+            unit["source_unit_role"] = spec["source_unit_role"]
+            unit["before_text"] = spec["before_text"]
+            unit["before_text_sha256"] = sha256_text(spec["before_text"])
+            unit["current_physical_relation"] = spec["current_physical_relation"]
+            unit["current_motion_action_state"] = spec["current_physical_relation"]
+
+    rewrite_payload(
+        work_order_packet / "object_motion_target_unit_map.json",
+        _force_packet_0062_unit_shape,
+    )
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-tactile-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="packet_0062_like",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_artifact_id"] is None
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+    validation = result.payload["residual_intervention_validation_report"]
+    assert validation["passed"] is False
+    categories = result.payload["validation_failure_categories"]
+    assert "target_unit_materiality_failures" in categories
+    assert "object_motion_relabel_failures" in categories
+    unit_report = result.payload["target_unit_materiality_report"]
+    by_unit = {
+        unit["target_unit_id"]: unit
+        for unit in unit_report["units"]
+    }
+    assert by_unit["tactile_unit_002"]["materiality_passed"] is False
+    assert by_unit["tactile_unit_002"]["classification"] == (
+        "valid_direction_but_under_material"
+    )
+    assert by_unit["tactile_unit_003"]["semantic_passed"] is False
+    assert by_unit["tactile_unit_003"]["classification"] == "object_motion_relabel"
+    cluster_report = result.payload["overlap_cluster_report"]
+    assert cluster_report["overlap_cluster_count"] >= 1
+    cluster = cluster_report["clusters"][0]
+    assert cluster["member_unit_ids"] == ["tactile_unit_002", "tactile_unit_003"]
+    assert cluster["integrated_replacement_found"] is True
+    assert any(
+        member["target_unit_id"] == "tactile_unit_003"
+        and member["semantic_passed"] is False
+        for member in cluster["member_semantic_results"]
+    )
+
+    retry = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-tactile-model",
+        client_factory=residual_intervention_stub_factory([], mode="valid"),
+    )
+    assert retry.exit_code == 0
+    assert retry.payload["accepted"] is True
+
+
+def test_tactile_materiality_uses_artifact_derived_objects_not_current_nouns(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_tactile_residual_candidate_authorization_chain(tmp_path)
+    work_order_packet = Path(str(chain["residual_work_order"]["packet_dir"]))
+
+    def _replace_objects(payload):
+        replacements = [
+            (
+                ["cup", "thread", "stain"],
+                "contact, pressure, residue, and displacement alter the surface trace",
+            ),
+            (
+                ["ash", "sleeve", "surface", "draft"],
+                "contact, passage, and settling leave residue on the surface",
+            ),
+            (
+                ["key", "bowl", "wrist", "handle"],
+                "contact, pressure, friction, and displacement leave visible material change",
+            ),
+        ]
+        for unit, replacement in zip(payload["target_units"], replacements, strict=True):
+            objects, relation = replacement
+            unit["objects"] = objects
+            unit["current_physical_relation"] = relation
+            unit["current_motion_action_state"] = relation
+
+    rewrite_payload(work_order_packet / "object_motion_target_unit_map.json", _replace_objects)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-tactile-model",
+        client_factory=residual_intervention_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    report = diff["materiality_report"]
+    assert report["residual_intervention_validation_report"]["passed"] is True
+    assert "thread" in report["object_terms_present"]
+    assert "ash" in report["object_terms_present"]
+    assert "key" in report["object_terms_present"]
 
 
 def test_residual_candidate_generation_near_copy_records_materiality_feedback(

@@ -328,6 +328,7 @@ def _build_object_motion_causality_generation_prompt(input_text: str) -> str:
 
 
 def _build_residual_intervention_generation_prompt(input_text: str) -> str:
+    policy_summary = _residual_materiality_policy_summary(input_text)
     return (
         "Return strict JSON matching the schema for one bounded residual "
         "intervention worker. Produce only replacement_region_text for the "
@@ -336,12 +337,51 @@ def _build_residual_intervention_generation_prompt(input_text: str) -> str:
         "in the prompt. The controller owns target identity, source IDs, selected "
         "region, final assembly, diffing, gates, finalization, and claims. Obey "
         "the target_adapter prompt instructions and mechanism contract exactly. "
-        "Stay bounded to the selected region. Do not add decorative vividness, "
-        "new object inventory, rival mimicry, abstract thesis language, "
+        "Lexical tightening is insufficient. Preserving exact target sentence "
+        "architecture is insufficient. Preserve effect/function rather than exact "
+        "syntax. Materially re-author every required target unit. Surrounding "
+        "untargeted context may remain stable; do not rewrite protected context "
+        "merely to raise a global ratio. For tactile targets, tactile necessity is "
+        "distinct from object motion: contact, pressure, resistance, weight, "
+        "friction, compression, settling, absorption, impact, breakage mechanics, "
+        "or displacement against a surface must make consequence feel physically "
+        "necessary. Stay bounded to the selected region. Do not add decorative "
+        "vividness, new object inventory, rival mimicry, abstract thesis language, "
         "nonselected-region edits, finality claims, phase-shift claims, "
         "human-validation claims, or JSON/procedural leakage inside the "
-        "replacement text. Prompt packet:\n"
+        f"replacement text. Active materiality policy: {policy_summary}. "
+        "Prompt packet:\n"
         f"{input_text}"
+    )
+
+
+def _residual_materiality_policy_summary(input_text: str) -> str:
+    try:
+        prompt = json.loads(input_text)
+    except json.JSONDecodeError:
+        return "unavailable; follow materiality_policy in prompt packet"
+    policy = prompt.get("materiality_policy")
+    if not isinstance(policy, dict):
+        materiality = prompt.get("materiality_requirement")
+        if isinstance(materiality, dict):
+            policy = materiality.get("materiality_policy")
+    if not isinstance(policy, dict):
+        return "unavailable; follow materiality_policy in prompt packet"
+    target_bearing = policy.get("target_bearing_scope")
+    target_unit = policy.get("target_unit_scope")
+    whole = policy.get("whole_region_guard")
+    return json.dumps(
+        {
+            "policy_id": policy.get("policy_id"),
+            "policy_version": policy.get("policy_version"),
+            "primary_materiality_scope": policy.get("primary_materiality_scope"),
+            "whole_region_guard": whole if isinstance(whole, dict) else {},
+            "target_bearing_scope": target_bearing if isinstance(target_bearing, dict) else {},
+            "target_unit_scope": target_unit if isinstance(target_unit, dict) else {},
+            "prompt_feedback": policy.get("prompt_feedback"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 
