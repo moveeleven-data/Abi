@@ -565,7 +565,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     autonomous_plan_residual_work_order_parser = autonomous_subparsers.add_parser(
         "plan-residual-work-order",
-        help="Plan an object-motion residual work order without generation",
+        help="Plan a target-aware residual work order without generation",
     )
     autonomous_plan_residual_work_order_parser.add_argument(
         "--selection-packet",

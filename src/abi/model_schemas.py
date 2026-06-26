@@ -67,6 +67,7 @@ class WorkerRole(str, Enum):
     ABLATION_INFORMED_PATCH_PROPOSER = "ablation_informed_patch_proposer"
     BOUNDED_MACRO_RECOMPOSER = "bounded_macro_recomposer"
     OBJECT_MOTION_CAUSALITY_GENERATOR = "object_motion_causality_generator"
+    RESIDUAL_INTERVENTION_GENERATOR = "residual_intervention_generator"
 
 
 @dataclass(frozen=True)
@@ -475,9 +476,16 @@ OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA = WorkerSchema(
     artifact_type="model_object_motion_causality_generation",
 )
 
+RESIDUAL_INTERVENTION_GENERATION_SCHEMA = WorkerSchema(
+    name="ResidualInterventionGenerationOutput",
+    version="1",
+    artifact_type="model_residual_intervention_generation",
+)
+
 BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS = (
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
+    RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
 )
 
 LIVE_MODEL_WORKER_SCHEMAS = (
@@ -2327,6 +2335,65 @@ def object_motion_causality_generation_json_schema() -> dict[str, Any]:
     )
 
 
+def residual_intervention_generation_json_schema() -> dict[str, Any]:
+    target_unit_mapping_item = _object_schema(
+        {
+            "target_unit_id": {"type": "string"},
+            "before_text_sha256": {"type": "string"},
+            "mechanism_operation": {"type": "string"},
+            "material_relation_or_action": {"type": "string"},
+            "visible_consequence": {"type": "string"},
+            "intended_first_read_effect": {"type": "string"},
+            "protected_effects_preserved": _string_array_schema(),
+            "covered_target_ids": _string_array_schema(),
+        },
+        [
+            "target_unit_id",
+            "before_text_sha256",
+            "mechanism_operation",
+            "material_relation_or_action",
+            "visible_consequence",
+            "intended_first_read_effect",
+            "protected_effects_preserved",
+            "covered_target_ids",
+        ],
+    )
+    constraint_mapping_item = _object_schema(
+        {
+            "constraint_id": {"type": "string"},
+            "how_satisfied": {"type": "string"},
+            "risk_note": {"type": "string"},
+        },
+        ["constraint_id", "how_satisfied", "risk_note"],
+    )
+    return _schema_with_properties(
+        {
+            "replacement_region_text": {"type": "string"},
+            "target_unit_mappings": {
+                "type": "array",
+                "items": target_unit_mapping_item,
+            },
+            "intervention_plan": _string_array_schema(),
+            "constraint_mapping": {
+                "type": "array",
+                "items": constraint_mapping_item,
+            },
+            "protected_effects_notes": _string_array_schema(),
+            "forbidden_change_self_check": _string_array_schema(),
+            "uncertainty": {"type": "string"},
+        },
+        [
+            "replacement_region_text",
+            "target_unit_mappings",
+            "intervention_plan",
+            "constraint_mapping",
+            "protected_effects_notes",
+            "forbidden_change_self_check",
+            "uncertainty",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -2424,6 +2491,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return bounded_macro_recomposition_json_schema()
     if schema == OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA:
         return object_motion_causality_generation_json_schema()
+    if schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
+        return residual_intervention_generation_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -2531,6 +2600,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_bounded_macro_recomposition(payload)
     if schema == OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA:
         return _validate_object_motion_causality_generation(payload)
+    if schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
+        return _validate_residual_intervention_generation(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -4028,6 +4099,83 @@ def _validate_object_motion_causality_generation(
         "uncertainty": payload["uncertainty"],
         "predicted_reader_effect": payload["predicted_reader_effect"],
         "forbidden_change_self_check": list(payload["forbidden_change_self_check"]),
+    }
+
+
+def _validate_residual_intervention_generation(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    for key in ("replacement_region_text", "uncertainty"):
+        _require_type(payload, key, str)
+        if not payload[key].strip():
+            raise ModelValidationError(f"{key} must not be empty")
+    _require_object_list(payload, "target_unit_mappings")
+    target_unit_mappings = []
+    for index, item in enumerate(payload["target_unit_mappings"]):
+        validated = _validate_object(
+            item,
+            f"target_unit_mappings[{index}]",
+            (
+                "target_unit_id",
+                "before_text_sha256",
+                "mechanism_operation",
+                "material_relation_or_action",
+                "visible_consequence",
+                "intended_first_read_effect",
+            ),
+        )
+        _require_string_list(
+            item,
+            "protected_effects_preserved",
+            field_prefix=f"target_unit_mappings[{index}].",
+        )
+        _require_string_list(
+            item,
+            "covered_target_ids",
+            field_prefix=f"target_unit_mappings[{index}].",
+        )
+        if not item["protected_effects_preserved"]:
+            raise ModelValidationError(
+                f"target_unit_mappings[{index}].protected_effects_preserved must not be empty"
+            )
+        if not item["covered_target_ids"]:
+            raise ModelValidationError(
+                f"target_unit_mappings[{index}].covered_target_ids must not be empty"
+            )
+        validated["protected_effects_preserved"] = list(
+            item["protected_effects_preserved"]
+        )
+        validated["covered_target_ids"] = list(item["covered_target_ids"])
+        target_unit_mappings.append(validated)
+    _require_string_list(payload, "intervention_plan")
+    if not payload["intervention_plan"]:
+        raise ModelValidationError("intervention_plan must not be empty")
+    _require_object_list(payload, "constraint_mapping")
+    constraint_mapping = []
+    for index, item in enumerate(payload["constraint_mapping"]):
+        constraint_mapping.append(
+            _validate_object(
+                item,
+                f"constraint_mapping[{index}]",
+                ("constraint_id", "how_satisfied", "risk_note"),
+            )
+        )
+    if not constraint_mapping:
+        raise ModelValidationError("constraint_mapping must not be empty")
+    _require_string_list(payload, "protected_effects_notes")
+    if not payload["protected_effects_notes"]:
+        raise ModelValidationError("protected_effects_notes must not be empty")
+    _require_string_list(payload, "forbidden_change_self_check")
+    if not payload["forbidden_change_self_check"]:
+        raise ModelValidationError("forbidden_change_self_check must not be empty")
+    return {
+        "replacement_region_text": payload["replacement_region_text"],
+        "target_unit_mappings": target_unit_mappings,
+        "intervention_plan": list(payload["intervention_plan"]),
+        "constraint_mapping": constraint_mapping,
+        "protected_effects_notes": list(payload["protected_effects_notes"]),
+        "forbidden_change_self_check": list(payload["forbidden_change_self_check"]),
+        "uncertainty": payload["uncertainty"],
     }
 
 

@@ -22,6 +22,12 @@ from abi.packets import (
     packet_artifact_count_summary,
     read_json_file,
 )
+from abi.modules.residual_targets import (
+    OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    REPEATED_BROAD_TARGET_ID,
+    ResidualTargetSpec,
+    get_residual_target_spec,
+)
 
 
 RESIDUAL_TARGET_SELECTION_LINEAGE_ID = "residual_target_selection_v1"
@@ -55,8 +61,6 @@ REQUIRED_STRATEGY_ARTIFACTS = (
     "next_target_strategy_packet",
 )
 
-OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
-REPEATED_BROAD_TARGET_ID = "first_read_object_event_pressure_gap"
 NEXT_ALLOWED_ACTION = "prepare_object_motion_causality_specificity_work_order"
 
 
@@ -78,6 +82,7 @@ class ResidualTargetSelectionSubject:
     payloads: dict[str, dict[str, Any]]
     selected_target_id: str
     selected_option: dict[str, Any]
+    target_spec: ResidualTargetSpec
     source_parent_ids: tuple[str, ...]
 
 
@@ -302,6 +307,12 @@ def _load_subject(
             "Residual target selection refused; selected target is not an "
             f"available residual option: {target}"
         )
+    target_spec = get_residual_target_spec(target)
+    if target_spec is None:
+        raise ValueError(
+            "Residual target selection refused; selected target is unsupported "
+            f"by the residual target registry: {target}"
+        )
     if selected_option.get("status") != "available_for_operator_selection":
         raise ValueError(
             "Residual target selection refused; selected target is not "
@@ -327,6 +338,7 @@ def _load_subject(
         payloads=payloads,
         selected_target_id=target,
         selected_option=selected_option,
+        target_spec=target_spec,
         source_parent_ids=tuple(parent_ids),
     )
 
@@ -482,12 +494,7 @@ def _build_operator_residual_target_choice(
     return {
         "operator_reviewed": True,
         "selected_residual_target_id": subject.selected_target_id,
-        "operator_selection_reason": (
-            "object motion causality specificity is narrower than the repeated "
-            "broad first-read object-event pressure target, evidence-aligned "
-            "with the rival gap, and less likely to drift into generic vividness, "
-            "rival mimicry, proof/no-answer compression, or final-return overwork."
-        ),
+        "operator_selection_reason": _operator_selection_reason(subject),
         "broad_blocker_class": _broad_blocker_class(subject),
         "repeated_broad_target_detected": _repeated_broad_target_detected(subject),
         "same_broad_target_allowed": _same_broad_target_allowed(subject),
@@ -514,31 +521,17 @@ def _build_selected_residual_target_contract(
     )
     return {
         "selected_residual_target_id": subject.selected_target_id,
-        "target_definition": {
-            "object_movement_should_produce_visible_consequence_before_explanation": True,
-            "object_relation_should_sharpen_causal_pressure": True,
-            "tactile_or_object_detail_must_change_expectation_not_decorate": True,
-            "reader_should_infer_pressure_locally": True,
-            "must_preserve_current_best_macro_and_reader_state_gains": True,
-        },
+        "target_definition": subject.target_spec.target_definition,
         "operational_definition": [
-            "object movement should produce visible consequence before explanation",
-            "object relation should sharpen causal pressure",
-            "tactile/object detail must change expectation, not merely decorate",
-            "the intervention should make the reader infer pressure locally",
-            f"the intervention must preserve {current_best_id}'s macro and reader-state gains",
+            item.replace("current-best", str(current_best_id))
+            for item in subject.target_spec.operational_definition
         ],
-        "forbidden_under_this_target": [
-            "generic vividness",
-            "object lists",
-            "decorative sensory detail",
-            "rival mimicry",
-            "proof/no-answer compression by inertia",
-            "final-return overwork",
-            "summary compression",
-            "abstract explanation of causality",
-            "direct candidate generation in this command",
-        ],
+        "target_mechanism_description": subject.target_spec.mechanism_description,
+        "work_order_adapter": subject.target_spec.work_order_adapter,
+        "required_evidence_inputs": list(subject.target_spec.required_evidence_inputs),
+        "forbidden_under_this_target": list(
+            subject.target_spec.forbidden_under_this_target
+        ),
         "candidate_generation_authorized": False,
         "next_strategy_or_work_order_authorized": True,
         "candidate_generated": False,
@@ -558,27 +551,9 @@ def _build_protected_effects_and_forbidden_changes(
             f"{packet.get('current_best_candidate_packet_id')} as current best candidate",
             f"executed ablation support from {packet.get('proof_packet_id')}",
             f"reader-state support from {packet.get('reader_state_packet_id')}",
-            "partial reread transformation",
-            "table/dust/spoon/saucer/ring causal field",
-            "proof/no-answer gains",
-            "final-return gains",
-            "reduced overexplanation",
-            "strongest-rival pressure preservation",
-            "no finality claim",
+            *subject.target_spec.protected_effects,
         ],
-        "forbidden_changes": [
-            "generic vividness",
-            "object lists",
-            "decorative sensory detail",
-            "rival mimicry",
-            "proof/no-answer compression by inertia",
-            "final-return overwork",
-            "summary compression",
-            "abstract explanation of causality",
-            "direct candidate generation in this command",
-            "finalization eligibility claim",
-            "phase-shift claim",
-        ],
+        "forbidden_changes": list(subject.target_spec.forbidden_changes),
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -592,12 +567,18 @@ def _build_next_work_order_scope(
 ) -> dict[str, object]:
     return {
         "selected_residual_target_id": subject.selected_target_id,
-        "next_allowed_action": NEXT_ALLOWED_ACTION,
+        "next_allowed_action": subject.target_spec.canonical_next_action,
+        "work_order_review_action": subject.target_spec.review_action,
+        "work_order_adapter": subject.target_spec.work_order_adapter,
+        "target_mechanism_description": subject.target_spec.mechanism_description,
         "candidate_generation_authorized": False,
         "live_model_call_authorized": False,
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
         "requires_separate_generation_authorization": True,
+        "future_generation_requires_separate_authorization": (
+            subject.target_spec.generation_requires_separate_authorization
+        ),
         "next_strategy_or_work_order_authorized": True,
         "candidate_generated": False,
         "model_calls": 0,
@@ -694,7 +675,7 @@ def _build_gate_report(
         "no_phase_shift_claim": True,
         "no_final_claim": True,
         "selected_residual_target_id": subject.selected_target_id,
-        "next_allowed_action": NEXT_ALLOWED_ACTION,
+        "next_allowed_action": subject.target_spec.canonical_next_action,
         "candidate_generated": False,
         "candidate_generation_authorized": False,
         "next_strategy_or_work_order_authorized": True,
@@ -753,8 +734,9 @@ def _build_packet_summary(
         "selected_target_is_narrower_than_repeated_broad_target": (
             _selected_target_is_narrower_than_repeated_broad_target(subject)
         ),
-        "next_allowed_action": NEXT_ALLOWED_ACTION,
-        "next_recommended_action": NEXT_ALLOWED_ACTION,
+        "next_allowed_action": subject.target_spec.canonical_next_action,
+        "next_recommended_action": subject.target_spec.canonical_next_action,
+        "work_order_adapter": subject.target_spec.work_order_adapter,
         "candidate_generated": False,
         "candidate_generation_authorized": False,
         "live_model_call_authorized": False,
@@ -795,15 +777,30 @@ def _result_payload(
         "current_best_candidate_packet_id": packet["current_best_candidate_packet_id"],
         "selected_residual_target_id": subject.selected_target_id,
         "broad_blocker_class": packet["broad_blocker_class"],
-        "next_allowed_action": NEXT_ALLOWED_ACTION,
+        "next_allowed_action": subject.target_spec.canonical_next_action,
         "candidate_generated": False,
         "candidate_generation_authorized": False,
         "next_strategy_or_work_order_authorized": True,
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
-        "next_recommended_action": NEXT_ALLOWED_ACTION,
+        "next_recommended_action": subject.target_spec.canonical_next_action,
         "model_calls": 0,
     }
+
+
+def _operator_selection_reason(subject: ResidualTargetSelectionSubject) -> str:
+    if subject.selected_target_id == OBJECT_MOTION_CAUSALITY_TARGET_ID:
+        return (
+            "object motion causality specificity is narrower than the repeated "
+            "broad first-read object-event pressure target, evidence-aligned "
+            "with the rival gap, and less likely to drift into generic vividness, "
+            "rival mimicry, proof/no-answer compression, or final-return overwork."
+        )
+    return (
+        "tactile inevitability is a narrower residual target than the repeated "
+        "broad first-read object-event pressure target; it asks for material "
+        "force/contact necessity rather than another object-motion pass."
+    )
 
 
 def _find_option(options: list[object], target: str) -> dict[str, Any] | None:

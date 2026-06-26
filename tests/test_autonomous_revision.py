@@ -31,6 +31,7 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
+    RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
     ModelValidationError,
     WorkerRole,
     json_schema_for_worker_schema,
@@ -112,6 +113,15 @@ from abi.modules.residual_target_selection import (
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     RESIDUAL_TARGET_SELECTION_ARTIFACT_TYPES,
     run_residual_target_selection,
+)
+from abi.modules.residual_targets import (
+    OBJECT_MOTION_GENERATION_CONTRACT_VERSION,
+    OBJECT_MOTION_WORK_ORDER_CONTRACT_VERSION,
+    TACTILE_GENERATION_CONTRACT_VERSION,
+    TACTILE_INEVITABILITY_TARGET_ID,
+    TACTILE_WORK_ORDER_CONTRACT_VERSION,
+    require_residual_target_adapter,
+    semantic_preflight_failures_for_work_order,
 )
 from abi.modules.residual_generation_authorization import (
     AUTHORIZATION_DECISION_AUTHORIZE_ONE,
@@ -713,6 +723,46 @@ def build_residual_candidate_authorization_chain(
     fixture_only: bool = False,
 ):
     chain = build_residual_generation_authorization_ready_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    assert authorization.payload["accepted"] is True
+    packet_dir = Path(str(authorization.payload["packet_dir"]))
+    if fixture_only:
+        mark_packet_fixture_only(packet_dir)
+    chain["residual_generation_authorization"] = authorization.payload
+    return chain
+
+
+def build_tactile_residual_work_order_chain(tmp_path: Path):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=TACTILE_INEVITABILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert selection.exit_code == 0
+    work_order = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+    assert work_order.exit_code == 0
+    chain["residual_target_selection"] = selection.payload
+    chain["residual_work_order"] = work_order.payload
+    return chain
+
+
+def build_tactile_residual_candidate_authorization_chain(
+    tmp_path: Path,
+    *,
+    fixture_only: bool = False,
+):
+    chain = build_tactile_residual_work_order_chain(tmp_path)
     authorization = run_residual_generation_authorization(
         chain["config"],
         work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
@@ -2057,6 +2107,154 @@ class StubObjectMotionCausalityClient(FakeObjectMotionCausalityModelClient):
 def object_motion_causality_stub_factory(clients, *, mode: str = "valid"):
     def _factory(model: str) -> StubObjectMotionCausalityClient:
         client = StubObjectMotionCausalityClient(model=model, mode=mode)
+        clients.append(client)
+        return client
+
+    return _factory
+
+
+class StubResidualInterventionClient:
+    provider = "openai"
+
+    def __init__(self, *, model: str, mode: str = "valid") -> None:
+        self.model = model
+        self.mode = mode
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        if request.schema != RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
+            raise AssertionError(f"unexpected schema: {request.schema.name}")
+        prompt = json.loads(request.input_text)
+        units = prompt["target_units"]
+        if self.mode == "object_motion_relabel":
+            relabel_sentences = []
+            for unit in units:
+                labels = [str(value) for value in unit.get("objects", []) if str(value)]
+                label_phrase = " ".join(labels[:5] or ["object", "mark"])
+                relabel_sentences.append(
+                    f"The {label_phrase} moves and changes, so the visible consequence is named by motion."
+                )
+            return dump_json(
+                {
+                    "replacement_region_text": " ".join(relabel_sentences),
+                    "target_unit_mappings": _residual_intervention_mapping(units),
+                    "intervention_plan": ["repeat object motion"],
+                    "constraint_mapping": [
+                        {
+                            "constraint_id": "bounded_selected_region",
+                            "how_satisfied": "bounded",
+                            "risk_note": "weak",
+                        }
+                    ],
+                    "protected_effects_notes": ["weak fixture note"],
+                    "forbidden_change_self_check": ["no finality claim"],
+                    "uncertainty": "invalid stub",
+                }
+            )
+        if self.mode == "decorative":
+            payload = _valid_residual_intervention_payload(units)
+            payload["replacement_region_text"] = (
+                "The luminous porcelain, beautiful dust, velvet air, silver spoon, "
+                "and shimmering saucer make the room vivid and atmospheric."
+            )
+            return dump_json(payload)
+        if self.mode == "abstract":
+            payload = _valid_residual_intervention_payload(units)
+            payload["replacement_region_text"] = (
+                "The room explains inevitability as a metaphysical proof. Each "
+                "object becomes inevitable because the thesis says the relation is "
+                "non-optional."
+            )
+            return dump_json(payload)
+        return dump_json(_valid_residual_intervention_payload(units))
+
+
+def _residual_intervention_mapping(units):
+    return [
+        {
+            "target_unit_id": str(unit["unit_id"]),
+            "before_text_sha256": str(unit.get("before_text_sha256") or ""),
+            "mechanism_operation": "make contact pressure residue and breakage materially causal",
+            "material_relation_or_action": str(
+                unit.get("current_physical_relation")
+                or unit.get("current_motion_action_state")
+                or "contact leaves a mark"
+            ),
+            "visible_consequence": str(
+                unit.get("target_effect") or "the surface keeps the material mark"
+            ),
+            "intended_first_read_effect": (
+                "reader feels the material consequence before explanation names it"
+            ),
+            "protected_effects_preserved": [
+                "current-best partial reread transformation",
+                "proof/no-answer gains",
+            ],
+            "covered_target_ids": [str(unit["unit_id"]), TACTILE_INEVITABILITY_TARGET_ID],
+        }
+        for unit in units
+    ]
+
+
+def _valid_residual_intervention_payload(units):
+    return {
+        "replacement_region_text": _tactile_stub_replacement_from_units(units),
+        "target_unit_mappings": _residual_intervention_mapping(units),
+        "intervention_plan": [
+            "replace only the selected region",
+            "preserve object-motion gains",
+            "add force/contact necessity",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "only replacement_region_text is supplied",
+                "risk_note": "controller owns final assembly",
+            }
+        ],
+        "protected_effects_notes": [
+            "opening, proof, and final return remain outside the replacement"
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no rival mimicry",
+            "no abstract inevitability explanation",
+        ],
+        "uncertainty": "stub output for tests only",
+    }
+
+
+def _tactile_stub_replacement_from_units(units):
+    sentences = []
+    for unit in units:
+        labels = [str(value) for value in unit.get("objects", []) if str(value)]
+        if not labels:
+            labels = ["object", "surface", "mark"]
+        label_phrase = " ".join(labels[:5])
+        relation = str(
+            unit.get("current_physical_relation")
+            or unit.get("current_motion_action_state")
+            or "contact pressure leaves a mark"
+        )
+        sentences.append(
+            f"The {label_phrase} relation works through contact and pressure: "
+            f"{relation}, so a visible mark remains as material consequence before "
+            "any explanation names it."
+        )
+    return (
+        " ".join(sentences)
+        + "\n\nAt first, the room seems only ordinary. But ordinary things are "
+        "strict about what reaches them. Pressure crosses a surface and the mark "
+        "changes what the next object can be; residue, displacement, and breakage "
+        "hold the force locally before thought turns it into a rule."
+    )
+
+
+def residual_intervention_stub_factory(clients, *, mode: str = "valid"):
+    def _factory(model: str) -> StubResidualInterventionClient:
+        client = StubResidualInterventionClient(model=model, mode=mode)
         clients.append(client)
         return client
 
@@ -7484,6 +7682,82 @@ def test_residual_target_selection_accepts_object_motion_causality_specificity(
     assert final_report.refused is True
 
 
+def test_residual_target_selection_accepts_tactile_inevitability_gap(tmp_path):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    config = chain["config"]
+
+    result = run_residual_target_selection(
+        config,
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=TACTILE_INEVITABILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["next_allowed_action"] == "prepare_tactile_inevitability_work_order"
+    assert result.payload["next_recommended_action"] == (
+        "prepare_tactile_inevitability_work_order"
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["next_strategy_or_work_order_authorized"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    contract = read_payload(packet_dir / "selected_residual_target_contract.json")
+    assert contract["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert contract["target_definition"][
+        "material_force_or_contact_relation_must_drive_visible_consequence"
+    ] is True
+    assert "object_movement_should_produce_visible_consequence_before_explanation" not in (
+        contract["target_definition"]
+    )
+    assert "new object inventory" in contract["forbidden_under_this_target"]
+
+    scope = read_payload(packet_dir / "next_work_order_scope.json")
+    assert scope["next_allowed_action"] == "prepare_tactile_inevitability_work_order"
+    assert scope["work_order_adapter"] == "tactile_inevitability"
+    assert scope["candidate_generation_authorized"] is False
+
+    packet = read_payload(packet_dir / "residual_target_selection_packet.json")
+    assert packet["next_allowed_action"] == "prepare_tactile_inevitability_work_order"
+    assert packet["work_order_adapter"] == "tactile_inevitability"
+
+
+def test_residual_target_adapter_registry_and_generic_schema_are_strict():
+    object_adapter = require_residual_target_adapter(OBJECT_MOTION_CAUSALITY_TARGET_ID)
+    tactile_adapter = require_residual_target_adapter(TACTILE_INEVITABILITY_TARGET_ID)
+
+    assert object_adapter.generation_contract_version == (
+        OBJECT_MOTION_GENERATION_CONTRACT_VERSION
+    )
+    assert object_adapter.work_order_contract_version == (
+        OBJECT_MOTION_WORK_ORDER_CONTRACT_VERSION
+    )
+    assert tactile_adapter.generation_schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA
+    assert tactile_adapter.generation_contract_version == TACTILE_GENERATION_CONTRACT_VERSION
+    assert tactile_adapter.work_order_contract_version == TACTILE_WORK_ORDER_CONTRACT_VERSION
+    with pytest.raises(ValueError, match="unsupported selected residual target"):
+        require_residual_target_adapter("unsupported_target")
+
+    schema = json_schema_for_worker_schema(RESIDUAL_INTERVENTION_GENERATION_SCHEMA)
+    assert schema["properties"]["target_unit_mappings"]["items"][
+        "additionalProperties"
+    ] is False
+    request = WorkerRequest(
+        run_id="run_schema_test",
+        worker_role=tactile_adapter.worker_role,
+        prompt_contract_id=tactile_adapter.prompt_contract_id,
+        schema=RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
+        input_text="{}",
+    )
+    response_format = openai_response_format_for_request(request)
+    assert response_format["strict"] is True
+    assert_strict_object_schema(response_format["schema"], path="ResidualIntervention")
+
+
 def test_residual_work_order_refuses_invalid_target_selection(tmp_path):
     chain = build_residual_work_order_ready_chain(tmp_path)
     invalid_packet = tmp_path / "invalid_residual_selection_target"
@@ -7537,6 +7811,278 @@ def test_residual_work_order_refuses_missing_current_best_candidate(tmp_path):
     assert result.payload["refused"] is True
     assert "current best candidate is missing" in result.payload["message"]
     assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+
+
+def test_residual_work_order_normalizes_stale_tactile_selection_routing(tmp_path):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=TACTILE_INEVITABILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert selection.exit_code == 0
+    stale_packet = tmp_path / "stale_tactile_selection"
+    shutil.copytree(Path(str(selection.payload["packet_dir"])), stale_packet)
+
+    def _stale_action(payload):
+        payload["next_allowed_action"] = NEXT_ALLOWED_ACTION
+        payload["next_recommended_action"] = NEXT_ALLOWED_ACTION
+
+    rewrite_payload(stale_packet / "residual_target_selection_packet.json", _stale_action)
+    rewrite_payload(stale_packet / "next_work_order_scope.json", _stale_action)
+    rewrite_payload(stale_packet / "residual_target_selection_gate_report.json", _stale_action)
+
+    result = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=stale_packet,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["selected_residual_target_id"] != OBJECT_MOTION_CAUSALITY_TARGET_ID
+    assert result.payload["stale_selection_routing_detected"] is True
+    assert result.payload["stale_next_action_ignored"] == NEXT_ALLOWED_ACTION
+    assert result.payload["canonical_next_action"] == "prepare_tactile_inevitability_work_order"
+    assert result.payload["routing_normalized_from_selected_target"] is True
+    assert result.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["target_unit_count"] > 0
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["next_recommended_action"] == (
+        "review_tactile_inevitability_work_order_before_generation_authorization"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    unit_map = read_payload(packet_dir / "object_motion_target_unit_map.json")
+    assert unit_map["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert unit_map["unit_map_kind"] == "tactile_inevitability"
+    assert unit_map["target_unit_count"] > 0
+    for unit in unit_map["target_units"]:
+        assert unit["target_unit_id"].startswith("tactile_unit_")
+        assert "source_target_unit_id" in unit
+        assert unit["before_text_sha256"]
+        assert "distinct_from_object_motion_basis" in unit
+
+    novelty = read_payload(packet_dir / "target_novelty_distinctness_report.json")
+    assert novelty["selected_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert "first_read_object_event_pressure_gap" in novelty["attempted_target_ids"]
+    assert novelty["merely_relabels_object_motion"] is False
+    assert novelty["proceed_with_work_order"] is True
+
+    gate = read_payload(packet_dir / "residual_work_order_gate_report.json")
+    gates = {item["gate_name"]: item for item in gate["gate_results"]}
+    for gate_name in (
+        "selection_packet_consumed",
+        "selected_target_supported",
+        "operator_choice_matches_selected_target",
+        "stale_selection_routing_detected",
+        "stale_selection_routing_safely_normalized",
+        "target_adapter_resolved",
+        "current_best_candidate_resolved",
+        "evidence_chain_resolved",
+        "bounded_region_selected",
+        "target_units_created",
+        "target_mechanism_distinct",
+        "no_candidate_generated",
+        "no_openai_calls",
+        "no_final_claim",
+        "no_phase_shift_claim",
+    ):
+        assert gates[gate_name]["passed"] is True
+    for gate_name in (
+        "candidate_generated",
+        "candidate_generation_authorized",
+        "ablation_completed",
+        "reader_state_eval_completed",
+        "strongest_rival_defeated",
+        "finalization_eligible",
+        "human_validation_present",
+    ):
+        assert gates[gate_name]["passed"] is False
+
+
+def test_tactile_stale_work_order_fails_preflight_and_successor_supersedes(tmp_path):
+    chain = build_tactile_residual_work_order_chain(tmp_path)
+    config = chain["config"]
+    stale_packet_dir = Path(str(chain["residual_work_order"]["packet_dir"]))
+
+    def _stale_unit_two(payload):
+        payload["target_adapter_version"] = "1"
+        payload["work_order_contract_version"] = "1"
+        for unit in payload["target_units"]:
+            if unit["unit_id"] == "tactile_unit_002":
+                unit["current_physical_relation"] = (
+                    "release, fall, or impact leaves a visible break"
+                )
+                unit.pop("source_unit_role", None)
+
+    def _stale_packet(payload):
+        payload["target_adapter_version"] = "1"
+        payload["work_order_contract_version"] = "1"
+
+    rewrite_payload(stale_packet_dir / "object_motion_target_unit_map.json", _stale_unit_two)
+    rewrite_payload(stale_packet_dir / "future_generation_contract.json", _stale_packet)
+    rewrite_payload(stale_packet_dir / "residual_work_order_packet.json", _stale_packet)
+
+    payloads = {
+        artifact_type: read_payload(stale_packet_dir / f"{artifact_type}.json")
+        for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    }
+    failures = semantic_preflight_failures_for_work_order(payloads)
+    assert any("fall/break/impact relation" in failure for failure in failures)
+
+    refused = run_residual_generation_authorization(
+        config,
+        work_order_packet=stale_packet_dir,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert refused.exit_code == 1
+    assert refused.payload["accepted"] is False
+    assert "semantic preflight failed" in refused.payload["message"]
+
+    successor = run_residual_work_order_planning(
+        config,
+        selection_packet=Path(str(chain["residual_target_selection"]["packet_dir"])),
+    )
+    assert successor.exit_code == 0
+    assert successor.payload["accepted"] is True
+    assert successor.payload["superseded_work_order_packet_id"] == stale_packet_dir.name
+    assert successor.payload["new_canonical_work_order_packet_id"] == successor.payload[
+        "packet_id"
+    ]
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    unit_map = read_payload(successor_dir / "object_motion_target_unit_map.json")
+    unit_two = next(unit for unit in unit_map["target_units"] if unit["unit_id"] == "tactile_unit_002")
+    assert unit_two["source_unit_role"] == "surface_residue_disturbance"
+    assert "surface" in unit_two["current_physical_relation"]
+    assert "fall" not in unit_two["current_physical_relation"]
+
+
+def test_residual_work_order_tactile_units_derive_from_synthetic_artifacts(tmp_path):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    candidate_dir = Path(str(chain["object_event"]["packet_dir"]))
+    synthetic_text = "\n\n".join(
+        [
+            "Opening record remains protected.",
+            "The first return stays quiet.",
+            "The proof pressure waits elsewhere.",
+            "A lamp leans against the hinge. When the key presses under its brass edge, the paper buckles and keeps the dent before anyone names the cause.",
+            "The bowl rests on the cord; the cord resists, and the wax line drags across the tile as a visible consequence.",
+            "Proof region remains untouched.",
+            "No outside answer enters.",
+            "The room keeps its answer local.",
+            "The final return remains protected.",
+            "The table returns without explanation.",
+            "The ending is unchanged.",
+        ]
+    )
+
+    def _replace_text(payload):
+        payload["text"] = synthetic_text
+        payload["text_sha256"] = sha256_text(synthetic_text)
+        payload["word_count"] = len(synthetic_text.split())
+
+    rewrite_payload(candidate_dir / "macro_recomposed_candidate_text.json", _replace_text)
+
+    work_order_path = candidate_dir / "macro_recomposition_work_order.json"
+    if work_order_path.exists():
+
+        def _replace_units(payload):
+            payload["target_units"] = [
+                {
+                    "unit_id": "synthetic_source_unit_001",
+                    "before_text": "When the key presses under its brass edge, the paper buckles.",
+                    "objects": ["lamp", "hinge", "key", "paper"],
+                },
+                {
+                    "unit_id": "synthetic_source_unit_002",
+                    "before_text": "The bowl rests on the cord; the cord resists.",
+                    "objects": ["bowl", "cord", "wax", "tile"],
+                },
+            ]
+
+        rewrite_payload(work_order_path, _replace_units)
+
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=TACTILE_INEVITABILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    result = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    unit_map = read_payload(packet_dir / "object_motion_target_unit_map.json")
+    labels = {
+        label
+        for unit in unit_map["target_units"]
+        for label in unit["involved_object_labels"]
+    }
+    assert {"lamp", "key", "paper"} & labels
+    assert {"cup", "ring", "crumb"}.isdisjoint(labels)
+    assert unit_map["target_unit_count"] > 0
+
+
+def test_residual_work_order_tactile_refuses_missing_material_relation(tmp_path):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    candidate_dir = Path(str(chain["object_event"]["packet_dir"]))
+    generic_text = "\n\n".join(
+        [
+            "Opening remains.",
+            "Return remains.",
+            "Proof remains.",
+            "The room is vivid and beautiful. The scene has many colors and feelings.",
+            "The paragraph explains that everything matters without a material relation.",
+            "Proof remains protected.",
+            "No answer enters.",
+            "The room keeps still.",
+            "Final return remains.",
+            "The end remains.",
+            "Done.",
+        ]
+    )
+
+    def _replace_text(payload):
+        payload["text"] = generic_text
+        payload["text_sha256"] = sha256_text(generic_text)
+        payload["word_count"] = len(generic_text.split())
+
+    rewrite_payload(candidate_dir / "macro_recomposed_candidate_text.json", _replace_text)
+    work_order_path = candidate_dir / "macro_recomposition_work_order.json"
+    if work_order_path.exists():
+
+        def _remove_units(payload):
+            payload["target_units"] = []
+
+        rewrite_payload(work_order_path, _remove_units)
+
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=TACTILE_INEVITABILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    result = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "tactile inevitability adapter failed stop-test" in result.payload["message"]
+    assert "no concrete tactile relation identified" in result.payload["message"]
     assert result.payload["candidate_generated"] is False
     assert result.payload["candidate_generation_authorized"] is False
 
@@ -8047,6 +8593,51 @@ def test_residual_generation_authorization_accepts_one_bounded_attempt(
     assert final_report.refused is True
 
 
+def test_tactile_generation_authorization_records_target_contract(tmp_path):
+    chain = build_tactile_residual_work_order_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_generation_authorization(
+        config,
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["target_adapter_id"] == "tactile_inevitability"
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["generation_authorized"] is True
+    assert result.payload["generation_attempt_budget"] == 1
+    assert result.payload["candidate_generated"] is False
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    contract = read_payload(packet_dir / "residual_generation_contract.json")
+    assert contract["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert contract["generation_schema_name"] == RESIDUAL_INTERVENTION_GENERATION_SCHEMA.name
+    assert contract["one_attempt_budget"] == 1
+    assert contract["generation_authorized"] is True
+    assert contract["model_calls"] == 0
+    assert "full_tactile_intervention" in contract["target_specific_ablation_controls"]
+    assert "first-read physical inevitability" in contract[
+        "target_specific_reader_state_focus"
+    ]
+    assert all(unit["unit_id"].startswith("tactile_unit_") for unit in contract["authoritative_target_units"])
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
 def test_residual_candidate_generation_openai_refuses_without_allow_live(tmp_path):
     config = config_for(tmp_path)
     clients = []
@@ -8413,6 +9004,120 @@ def test_residual_candidate_generation_stubbed_openai_success(
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
     assert final_report.refused is True
+
+
+def test_tactile_residual_candidate_generation_fake_fixture_success(tmp_path):
+    chain = build_tactile_residual_candidate_authorization_chain(
+        tmp_path,
+        fixture_only=True,
+    )
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="fake",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["target_adapter_id"] == "tactile_inevitability"
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["residual_intervention_generation"] is True
+    assert candidate["object_motion_causality_generation"] is False
+    assert candidate["candidate_only"] is True
+    assert candidate["non_final"] is True
+    assert candidate["finalization_eligible"] is False
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    assert diff["target_coverage_report"]["target_specific_mapping_exists"] is True
+    assert "full_tactile_intervention" in diff["target_coverage_report"][
+        "target_specific_ablation_controls"
+    ]
+
+
+def test_tactile_residual_candidate_generation_stubbed_openai_success(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_tactile_residual_candidate_authorization_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-tactile-model",
+        client_factory=residual_intervention_stub_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+    assert clients[0].requests[0].schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA
+    model_call = result.payload["model_calls"][0]
+    assert model_call["provider"] == "openai"
+    assert model_call["model"] == "stub-tactile-model"
+    assert model_call["worker_role"] == WorkerRole.RESIDUAL_INTERVENTION_GENERATOR.value
+    assert model_call["schema_name"] == RESIDUAL_INTERVENTION_GENERATION_SCHEMA.name
+    assert model_call["status"] == MODEL_CALL_SUCCESS
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    patch = read_payload(packet_dir / "macro_patch_or_section_plan.json")
+    assert patch["target_unit_mappings"]
+    assert patch["target_adapter_id"] == "tactile_inevitability"
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["source_model_call_id"] == result.payload["model_call_ids"][0]
+    assert candidate["fixture_only"] is False
+    assert candidate["non_final"] is True
+    assert candidate["not_human_validated"] is True
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_message"),
+    [
+        ("object_motion_relabel", "contact/force/material necessity"),
+        ("decorative", "decorative/generic vividness"),
+        ("abstract", "abstractly"),
+    ],
+)
+def test_tactile_residual_candidate_generation_validation_failures(
+    tmp_path,
+    monkeypatch,
+    mode,
+    expected_message,
+):
+    chain = build_tactile_residual_candidate_authorization_chain(tmp_path)
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-tactile-model",
+        client_factory=residual_intervention_stub_factory(clients, mode=mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
 
 
 def test_residual_candidate_generation_near_copy_records_materiality_feedback(

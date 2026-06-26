@@ -23,6 +23,12 @@ from abi.packets import (
     packet_artifact_count_summary,
     read_json_file,
 )
+from abi.modules.residual_targets import (
+    SELECTED_REGION_ID,
+    require_residual_target_adapter,
+    semantic_preflight_failures_for_work_order,
+    target_adapter_metadata,
+)
 
 
 RESIDUAL_GENERATION_AUTHORIZATION_LINEAGE_ID = (
@@ -32,10 +38,8 @@ RESIDUAL_GENERATION_AUTHORIZATION_CREATED_BY = (
     "residual_generation_authorization_v1_controller"
 )
 
-OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
-SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
 AUTHORIZATION_DECISION_AUTHORIZE_ONE = "authorize_one_bounded_generation"
-NEXT_RECOMMENDED_ACTION = "run_one_bounded_object_motion_causality_generation"
+NEXT_RECOMMENDED_ACTION = "run_one_bounded_residual_intervention_generation"
 
 RESIDUAL_GENERATION_AUTHORIZATION_DECISIONS = (
     AUTHORIZATION_DECISION_AUTHORIZE_ONE,
@@ -71,6 +75,7 @@ RESIDUAL_GENERATION_AUTHORIZATION_ARTIFACT_TYPES = (
     "generation_attempt_budget",
     "target_unit_integration_policy",
     "protected_effects_and_forbidden_changes",
+    "residual_generation_contract",
     "future_generator_contract_ref",
     "authorization_gate_report",
     "residual_generation_authorization_packet",
@@ -281,6 +286,20 @@ def run_residual_generation_authorization(
             ],
         )
 
+        payloads["residual_generation_contract"] = _build_residual_generation_contract(
+            subject=subject,
+            decision=str(decision),
+        )
+        artifacts["residual_generation_contract"] = writer.write_artifact(
+            "residual_generation_contract",
+            payloads["residual_generation_contract"],
+            parent_ids=[
+                artifacts["generation_scope_authorization"].id,
+                artifacts["target_unit_integration_policy"].id,
+                artifacts["protected_effects_and_forbidden_changes"].id,
+            ],
+        )
+
         payloads["future_generator_contract_ref"] = (
             _build_future_generator_contract_ref(
                 subject=subject,
@@ -295,6 +314,7 @@ def run_residual_generation_authorization(
                 artifacts["generation_scope_authorization"].id,
                 artifacts["generation_attempt_budget"].id,
                 artifacts["protected_effects_and_forbidden_changes"].id,
+                artifacts["residual_generation_contract"].id,
             ],
         )
 
@@ -309,6 +329,7 @@ def run_residual_generation_authorization(
             parent_ids=[
                 artifacts["operator_work_order_review_record"].id,
                 artifacts["future_generator_contract_ref"].id,
+                artifacts["residual_generation_contract"].id,
                 artifacts["target_unit_integration_policy"].id,
             ],
         )
@@ -461,10 +482,17 @@ def _validate_work_order_payloads(payloads: dict[str, dict[str, Any]]) -> None:
     gate = payloads["residual_work_order_gate_report"]
 
     selected_target = packet.get("selected_residual_target_id")
-    if selected_target != OBJECT_MOTION_CAUSALITY_TARGET_ID:
+    if not isinstance(selected_target, str) or not selected_target:
         raise ValueError(
             "Residual generation authorization refused; selected residual target "
-            f"is not {OBJECT_MOTION_CAUSALITY_TARGET_ID}: {selected_target}"
+            "is missing."
+        )
+    adapter = require_residual_target_adapter(selected_target)
+    semantic_failures = semantic_preflight_failures_for_work_order(payloads)
+    if semantic_failures:
+        raise ValueError(
+            "Residual generation authorization refused; work-order semantic "
+            f"preflight failed: {'; '.join(semantic_failures)}"
         )
     selected_region_id = selected_region.get("selected_region_id")
     if selected_region_id != SELECTED_REGION_ID or packet.get("selected_region_id") != SELECTED_REGION_ID:
@@ -481,18 +509,24 @@ def _validate_work_order_payloads(payloads: dict[str, dict[str, Any]]) -> None:
         raise ValueError(
             "Residual generation authorization refused; target unit count is missing."
         )
-    target_unit_ids = {
+    target_unit_ids = [
         str(unit.get("unit_id"))
         for unit in target_units
         if isinstance(unit, dict) and isinstance(unit.get("unit_id"), str)
-    }
-    missing_unit_ids = [
-        unit_id for unit_id in EXPECTED_TARGET_UNIT_IDS if unit_id not in target_unit_ids
     ]
-    if missing_unit_ids:
+    if len(set(target_unit_ids)) != len(target_unit_ids):
         raise ValueError(
-            "Residual generation authorization refused; expected target units "
-            f"are missing: {', '.join(missing_unit_ids)}"
+            "Residual generation authorization refused; target unit IDs are duplicated."
+        )
+    if contract.get("selected_residual_target_id") != selected_target:
+        raise ValueError(
+            "Residual generation authorization refused; future generation contract "
+            "target does not match work-order packet."
+        )
+    if contract.get("target_adapter_id") and contract.get("target_adapter_id") != adapter.adapter_id:
+        raise ValueError(
+            "Residual generation authorization refused; target adapter metadata "
+            "does not match selected target."
         )
     if contract.get("future_generation_contract_created") is not True:
         raise ValueError(
@@ -549,6 +583,7 @@ def _build_subject_manifest(
         "proof_packet_id": subject.proof_packet_id,
         "reader_state_packet_id": subject.reader_state_packet_id,
         "selected_residual_target_id": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": list(subject.target_unit_ids),
@@ -576,6 +611,7 @@ def _build_work_order_intake_summary(
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "candidate_text_sha256": subject.candidate_text_sha256,
         "selected_residual_target_id": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": list(subject.target_unit_ids),
@@ -624,6 +660,7 @@ def _build_generation_scope_authorization(
     decision: str,
 ) -> dict[str, object]:
     generation_authorized = decision == AUTHORIZATION_DECISION_AUTHORIZE_ONE
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     return {
         "generation_authorized": generation_authorized,
         "authorization_consumed": False,
@@ -633,6 +670,7 @@ def _build_generation_scope_authorization(
         "authorized_selected_region_sha256": subject.selected_region_sha256,
         "authorized_candidate_text_sha256": subject.candidate_text_sha256,
         "authorized_residual_target_id": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "authorized_target_unit_ids": list(subject.target_unit_ids),
         "may_replace_only": [
             "selected region",
@@ -640,23 +678,20 @@ def _build_generation_scope_authorization(
         ],
         "must_use_base_candidate_packet_id": subject.current_best_candidate_packet_id,
         "must_preserve": [
-            "opening table/dust/spoon/saucer/ring field",
+            "opening/object field outside the selected region",
             "final return / opening transformation region",
             "proof/no-answer region",
             f"{subject.current_best_candidate_packet_id} macro and reader-state gains",
             "strongest-rival pressure as blocking evidence",
         ],
-        "must_materially_improve": [
-            "object-motion causality specificity",
-            "visible consequence before explanation",
-            "object movement producing pressure on the next perception",
-        ],
-        "must_not": [
-            "add decorative vividness",
-            "add new object list",
-            "mimic rival",
-            "explain abstract causality",
-            "perform full rewrite",
+        "must_materially_improve": list(adapter.mechanism_contract),
+        "must_not": list(
+            subject.payloads["protected_effects_and_forbidden_changes"].get(
+                "forbidden_changes",
+                [],
+            )
+        )
+        + [
             "alter nonselected regions",
             "claim finality",
             "claim phase shift",
@@ -700,8 +735,10 @@ def _build_generation_attempt_budget(
 def _build_target_unit_integration_policy(
     subject: ResidualGenerationAuthorizationSubject,
 ) -> dict[str, object]:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     return {
         "selected_region_id": subject.selected_region_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "target_unit_ids": list(subject.target_unit_ids),
         "target_unit_count": subject.target_unit_count,
         "future_generator_must_produce_one_bounded_replacement": True,
@@ -713,12 +750,15 @@ def _build_target_unit_integration_policy(
         "overlapping_units_must_be_reconciled": True,
         "overlap_notes": [
             "unit_002_dust_hand_foot_air and unit_003_spoon_saucer_fall may share sentence context",
+            "target units may share sentence context",
             "shared sentence context must not be duplicated",
             "unit repairs must combine into one coherent region replacement",
         ],
+        "prompt_instructions": list(adapter.prompt_instructions),
+        "mechanism_contract": list(adapter.mechanism_contract),
         "must_not": [
             "add a new object list",
-            "add decorative motion",
+            "add decorative motion or vividness",
             "turn the passage into rival mimicry",
             "alter nonselected regions",
         ],
@@ -736,6 +776,7 @@ def _build_protected_effects_and_forbidden_changes(
     source = subject.payloads["protected_effects_and_forbidden_changes"]
     return {
         "source_work_order_packet_id": subject.work_order_packet_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "protected_effects": list(source.get("protected_effects", [])),
         "forbidden_changes": list(source.get("forbidden_changes", [])),
         "additional_authorization_forbidden_changes": [
@@ -755,6 +796,74 @@ def _build_protected_effects_and_forbidden_changes(
     }
 
 
+def _build_residual_generation_contract(
+    *,
+    subject: ResidualGenerationAuthorizationSubject,
+    decision: str,
+) -> dict[str, object]:
+    generation_authorized = decision == AUTHORIZATION_DECISION_AUTHORIZE_ONE
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    unit_map = subject.payloads["object_motion_target_unit_map"]
+    target_units = [
+        dict(unit)
+        for unit in unit_map.get("target_units", [])
+        if isinstance(unit, dict)
+    ]
+    return {
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
+        "work_order_packet_id": subject.work_order_packet_id,
+        "base_candidate_packet_id": subject.current_best_candidate_packet_id,
+        "current_best_candidate": subject.current_best_candidate_packet_id,
+        "selected_region_id": subject.selected_region_id,
+        "selected_region_sha256": subject.selected_region_sha256,
+        "authoritative_target_units": target_units,
+        "target_unit_ids": list(subject.target_unit_ids),
+        "target_unit_hashes": {
+            str(unit.get("unit_id")): str(unit.get("before_text_sha256") or "")
+            for unit in target_units
+        },
+        "mechanism_contract": list(adapter.mechanism_contract),
+        "prompt_contract_id": adapter.prompt_contract_id,
+        "prompt_instructions": list(adapter.prompt_instructions),
+        "generation_schema_name": adapter.generation_schema.name,
+        "generation_schema_version": adapter.generation_schema.version,
+        "protected_effects": list(
+            subject.payloads["protected_effects_and_forbidden_changes"].get(
+                "protected_effects",
+                [],
+            )
+        ),
+        "forbidden_operations": list(
+            subject.payloads["protected_effects_and_forbidden_changes"].get(
+                "forbidden_changes",
+                [],
+            )
+        ),
+        "materiality_requirements": [
+            "selected-region material change required",
+            "target-unit mapping is necessary but insufficient",
+            "controller assembles final candidate text",
+            "no nonselected-region edits",
+            "no finality or phase-shift claim",
+        ],
+        "target_specific_ablation_controls": list(adapter.ablation_controls),
+        "target_specific_reader_state_focus": list(
+            adapter.reader_state_evaluation_focus
+        ),
+        "stop_test_policy": dict(adapter.stop_test_policy),
+        "one_attempt_budget": 1 if generation_authorized else 0,
+        "generation_authorized": generation_authorized,
+        "authorization_consumed": False,
+        "candidate_generated": False,
+        "model_calls": 0,
+        "finalization_eligible": False,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+        "worker": "residual_generation_contract_v1_controller",
+    }
+
+
 def _build_future_generator_contract_ref(
     *,
     subject: ResidualGenerationAuthorizationSubject,
@@ -769,6 +878,7 @@ def _build_future_generator_contract_ref(
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "selected_residual_target_id": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "target_unit_ids": list(subject.target_unit_ids),
         "generation_attempt_budget": 1 if generation_authorized else 0,
         "authorization_consumed": False,
@@ -883,6 +993,7 @@ def _build_authorization_gate_report(
     return {
         "accepted": generation_authorized,
         "decision": decision,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "passed": False,
         "eligible": False,
         "finalization_eligible": False,
@@ -909,7 +1020,7 @@ def _build_authorization_gate_report(
         "final_gates_marked_passed": [],
         "unresolved_blockers": blockers,
         "summary_verdict": (
-            "One bounded object-motion causality generation attempt is authorized, "
+            "One bounded residual intervention generation attempt is authorized, "
             "but no candidate has been generated and finalization remains fail-closed."
         )
         if generation_authorized
@@ -954,6 +1065,7 @@ def _build_packet_summary(
         "source_selection_packet_id": subject.source_selection_packet_id,
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "selected_residual_target_id": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "candidate_text_sha256": subject.candidate_text_sha256,
@@ -1008,9 +1120,13 @@ def _result_payload(
         "counts": packet["counts"],
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "selected_residual_target_id": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_count": subject.target_unit_count,
+        "generation_contract_artifact_id": artifacts[
+            "residual_generation_contract"
+        ].id,
         "generation_authorized": packet["generation_authorized"],
         "generation_attempt_budget": packet["generation_attempt_budget"],
         "authorization_consumed": False,

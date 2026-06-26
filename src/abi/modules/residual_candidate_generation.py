@@ -26,8 +26,16 @@ from abi.model_calls import link_model_call_parsed_artifact
 from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
 from abi.model_schemas import (
     ModelValidationError,
-    OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
-    WorkerRole,
+)
+from abi.modules.residual_targets import (
+    OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    SELECTED_REGION_ID,
+    TACTILE_INEVITABILITY_TARGET_ID,
+    replacement_tactile_failures,
+    require_residual_target_adapter,
+    semantic_preflight_failures_for_work_order,
+    tactile_mapping_failures,
+    target_adapter_metadata,
 )
 from abi.packets import (
     PacketWriter,
@@ -50,8 +58,6 @@ RESIDUAL_CANDIDATE_GENERATION_PROMPT_CONTRACT_ID = (
 REQUIRED_CHANGED_UNIQUE_WORD_COUNT = 10
 REQUIRED_CHANGED_RATIO = 0.12
 
-OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
-SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
 NEXT_RECOMMENDED_ACTION = "review_object_motion_causality_candidate_before_ablation"
 
 BOUNDED_MACRO_COMPATIBLE_ARTIFACT_TYPES = (
@@ -72,6 +78,7 @@ REQUIRED_AUTHORIZATION_ARTIFACTS = (
     "generation_scope_authorization",
     "generation_attempt_budget",
     "target_unit_integration_policy",
+    "residual_generation_contract",
     "future_generator_contract_ref",
     "protected_effects_and_forbidden_changes",
     "authorization_gate_report",
@@ -206,6 +213,8 @@ class TargetUnit:
     target_effect: str
     current_motion_action_state: str
     current_consequence: str
+    current_physical_relation: str = ""
+    source_unit_role: str = ""
 
 
 @dataclass(frozen=True)
@@ -478,9 +487,7 @@ def run_residual_candidate_generation(
         connection.commit()
 
     if client_name == "fake":
-        model_payload = _valid_fake_payload(
-            [unit_payload(unit) for unit in subject.target_units]
-        )
+        model_payload = _valid_fake_payload_for_subject(subject)
         model_call_id = None
     else:
         factory = client_factory or _default_openai_client_factory
@@ -736,6 +743,12 @@ def _load_subject(
         REQUIRED_WORK_ORDER_ARTIFACTS,
         "work-order packet",
     )
+    semantic_failures = semantic_preflight_failures_for_work_order(work_payloads)
+    if semantic_failures:
+        raise ValueError(
+            "source work-order semantic preflight failed: "
+            + "; ".join(semantic_failures)
+        )
 
     work_packet = work_payloads["residual_work_order_packet"]
     selected_region = work_payloads["selected_intervention_region"]
@@ -855,10 +868,7 @@ def _validate_subject_before_model_call(
         raise ValueError("authorization is already consumed")
     if auth_packet.get("candidate_generated") is True:
         raise ValueError("authorization packet already records generated candidate")
-    if subject.selected_residual_target_id != OBJECT_MOTION_CAUSALITY_TARGET_ID:
-        raise ValueError(
-            "selected residual target is not object_motion_causality_specificity"
-        )
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     if subject.selected_region_id != SELECTED_REGION_ID:
         raise ValueError("selected region is missing or invalid")
     if not subject.selected_region_sha256:
@@ -872,7 +882,7 @@ def _validate_subject_before_model_call(
             raise ValueError(f"target unit {unit.unit_id} object labels are missing")
         if not unit.current_motion_action_state.strip():
             raise ValueError(
-                f"target unit {unit.unit_id} current_motion_action_state is missing"
+                f"target unit {unit.unit_id} current motion or physical relation is missing"
             )
         if not unit.current_consequence.strip():
             raise ValueError(f"target unit {unit.unit_id} current_consequence is missing")
@@ -884,6 +894,13 @@ def _validate_subject_before_model_call(
         raise ValueError("selected region text cannot be found in base candidate")
     if scope.get("authorized_selected_region_sha256") != subject.selected_region_sha256:
         raise ValueError("scope selected region hash does not match authorization")
+    contract = subject.authorization_payloads.get("residual_generation_contract", {})
+    if contract.get("selected_residual_target_id") not in {None, subject.selected_residual_target_id}:
+        raise ValueError("generation contract target does not match authorization")
+    if contract.get("target_adapter_version") and contract.get(
+        "target_adapter_version"
+    ) != adapter.target_spec_version:
+        raise ValueError("generation contract target adapter version is stale")
     if gate.get("no_phase_shift_claim") is not True or gate.get("finalization_eligible") is True:
         raise ValueError("authorization packet carries a finality or phase-shift claim")
     linked = _linked_candidate_for_authorization(connection, subject)
@@ -902,13 +919,14 @@ def _run_live_generation_model(
     model_client: ModelClient,
     parent_ids: list[str],
 ) -> ModelDriverResult:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     driver = ModelDriver(config=config, client=model_client)
     return driver.run(
         WorkerRequest(
             run_id=subject.run_id,
-            worker_role=WorkerRole.OBJECT_MOTION_CAUSALITY_GENERATOR,
-            prompt_contract_id=RESIDUAL_CANDIDATE_GENERATION_PROMPT_CONTRACT_ID,
-            schema=OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
+            worker_role=adapter.worker_role,
+            prompt_contract_id=adapter.prompt_contract_id,
+            schema=adapter.generation_schema,
             input_text=_prompt_for_generation(subject),
             input_artifact_ids=parent_ids,
             input_packet_path=str(subject.authorization_packet_dir),
@@ -926,6 +944,7 @@ def _run_live_generation_model(
 
 
 def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     return _canonical_json(
         {
             "task": "generate one bounded replacement for the selected region only",
@@ -961,6 +980,9 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
             "base_candidate_packet_id": subject.base_candidate_packet_id,
             "base_candidate_text_sha256": subject.base_text_sha256,
             "selected_residual_target_id": subject.selected_residual_target_id,
+            "target_adapter": target_adapter_metadata(subject.selected_residual_target_id),
+            "target_prompt_instructions": list(adapter.prompt_instructions),
+            "target_mechanism_contract": list(adapter.mechanism_contract),
             "selected_region_id": subject.selected_region_id,
             "selected_region_sha256": subject.selected_region_sha256,
             "selected_region_before_text": subject.selected_region_before_text,
@@ -974,6 +996,10 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
             "protected_effects_and_forbidden_changes": subject.authorization_payloads[
                 "protected_effects_and_forbidden_changes"
             ],
+            "residual_generation_contract": subject.authorization_payloads.get(
+                "residual_generation_contract",
+                {},
+            ),
             "materiality_requirement": _materiality_requirement_payload(subject),
             "target_unit_overlap_feedback": {
                 "overlapping_units_must_be_reconciled": True,
@@ -987,10 +1013,10 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
             },
             "output_rule": (
                 "Return one replacement_region_text for the selected region. Do not "
-                "return the full artifact. Include exactly one target_unit_mapping "
-                "entry for each provided unit_id. Make object motion or state change "
-                "produce visible consequence before explanation. The replacement "
-                "must be materially re-authored, not a local tightening pass."
+                "return the full artifact. Include exactly one target-unit mapping "
+                "entry for each provided unit_id using the schema requested by the "
+                "target adapter. The replacement must be materially re-authored, "
+                "not a local tightening pass."
             ),
         }
     )
@@ -999,6 +1025,7 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
 def _materiality_requirement_payload(
     subject: ResidualCandidateSubject,
 ) -> dict[str, object]:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     return {
         "selected_region_materiality_required": True,
         "replacement_must_be_genuinely_reauthored": True,
@@ -1012,6 +1039,8 @@ def _materiality_requirement_payload(
         "before_unique_word_count": len(_word_set(subject.selected_region_before_text)),
         "do_not_merely_tighten_local_phrases": True,
         "stage_object_motion_causing_visible_consequence_before_explanation": True,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_mechanism_contract": list(adapter.mechanism_contract),
         "remain_bounded_to_selected_region": True,
         "do_not_rewrite_whole_artifact": True,
         "do_not_add_decorative_vividness_or_new_object_lists": True,
@@ -1023,11 +1052,49 @@ def _validate_model_payload(
     payload: dict[str, object],
 ) -> None:
     replacement = str(payload.get("replacement_region_text") or "")
+    mapping = _mapping_from_model_payload(subject, payload)
+    validated_mapping = _validate_target_unit_mapping(subject, mapping)
+    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        failures = tactile_mapping_failures(
+            payload,
+            {unit.unit_id for unit in subject.target_units},
+        )
+        if failures:
+            raise ModelValidationError("; ".join(failures))
+    _validate_replacement_text(subject, replacement, validated_mapping)
+
+
+def _mapping_from_model_payload(
+    subject: ResidualCandidateSubject,
+    payload: dict[str, object],
+) -> list[object]:
+    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        mapping = payload.get("target_unit_mappings")
+        if not isinstance(mapping, list):
+            raise ModelValidationError("target_unit_mappings must be a list")
+        return [
+            {
+                "unit_id": item.get("target_unit_id"),
+                "before_text_excerpt": item.get("before_text_sha256"),
+                "replacement_text_excerpt": item.get("visible_consequence"),
+                "object_motion_or_action": item.get("material_relation_or_action"),
+                "visible_consequence": item.get("visible_consequence"),
+                "how_reader_infers_pressure_before_explanation": item.get(
+                    "intended_first_read_effect"
+                ),
+                "forbidden_change_avoided": "; ".join(
+                    str(value)
+                    for value in payload.get("forbidden_change_self_check", [])
+                    if isinstance(value, str)
+                ),
+            }
+            for item in mapping
+            if isinstance(item, dict)
+        ]
     mapping = payload.get("target_unit_mapping")
     if not isinstance(mapping, list):
         raise ModelValidationError("target_unit_mapping must be a list")
-    validated_mapping = _validate_target_unit_mapping(subject, mapping)
-    _validate_replacement_text(subject, replacement, validated_mapping)
+    return mapping
 
 
 def _validate_target_unit_mapping(
@@ -1159,6 +1226,13 @@ def _validate_replacement_text(
         raise ModelValidationError("replacement_region_text risks rival mimicry")
     if "object list" in lower or "catalog" in lower or "catalogue" in lower:
         raise ModelValidationError("replacement_region_text adds an object list")
+    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        tactile_failures = replacement_tactile_failures(
+            replacement_text=replacement,
+            unit_labels=[label for unit in subject.target_units for label in unit.objects],
+        )
+        if tactile_failures:
+            raise ModelValidationError("; ".join(tactile_failures))
     term_contract = _artifact_driven_term_contract(subject, target_unit_mapping)
     if _decorative_list_risk(
         replacement,
@@ -1191,6 +1265,19 @@ def _validate_replacement_text(
         raise ModelValidationError("decorative-only replacement lacks object motion")
     if len(consequence_terms_present) < term_contract["required_consequence_term_count"]:
         raise ModelValidationError("visible consequence before explanation is missing")
+    target_specific_mapping_report: dict[str, object] = {
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_unit_ids": [unit.unit_id for unit in subject.target_units],
+        "target_unit_mapping_count": len(target_unit_mapping),
+    }
+    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        target_specific_mapping_report.update(
+            {
+                "tactile_inevitability_mapping_exists": True,
+                "contact_force_material_necessity_encoded": True,
+                "distinct_from_object_motion_causality": True,
+            }
+        )
     return {
         "selected_region_materiality_passed": True,
         "changed_word_count": materiality_report.changed_unique_word_count,
@@ -1201,6 +1288,7 @@ def _validate_replacement_text(
         "motion_terms_present": motion_terms_present,
         "consequence_terms_present": consequence_terms_present,
         "object_terms_source": "target_units_from_work_order",
+        "target_specific_mapping_report": target_specific_mapping_report,
         "required_object_term_count": term_contract["required_object_term_count"],
         "required_motion_term_count": term_contract["required_motion_term_count"],
         "required_consequence_term_count": term_contract[
@@ -1316,7 +1404,7 @@ def _build_recomposed_candidate(
     validation_report = _validate_replacement_text(
         subject,
         replacement,
-        list(model_payload["target_unit_mapping"]),
+        _mapping_from_model_payload(subject, model_payload),
     )
     text = subject.base_text.replace(subject.selected_region_before_text, replacement, 1)
     if text == subject.base_text:
@@ -1355,8 +1443,9 @@ def _build_subject_manifest(
         "base_candidate_text_sha256": subject.base_text_sha256,
         "proof_packet_id": subject.proof_packet_id,
         "reader_state_packet_id": subject.reader_state_packet_id,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_residual_target_id": subject.selected_residual_target_id,
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
@@ -1378,14 +1467,16 @@ def _build_subject_manifest(
 
 
 def _build_work_order(subject: ResidualCandidateSubject) -> dict[str, object]:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     return {
-        "work_order_id": f"object_motion_generation_{subject.authorization_packet_id}",
+        "work_order_id": f"residual_intervention_{subject.authorization_packet_id}",
         "source_authorization_packet_id": subject.authorization_packet_id,
         "source_work_order_packet_id": subject.work_order_packet_id,
         "base_candidate_packet_id": subject.base_candidate_packet_id,
         "base_candidate_text_sha256": subject.base_text_sha256,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "before_section_text": subject.selected_region_before_text,
@@ -1423,6 +1514,9 @@ def _build_work_order(subject: ResidualCandidateSubject) -> dict[str, object]:
             "phase-shift claim",
         ],
         "materiality_requirement": _materiality_requirement_payload(subject),
+        "prompt_contract_id": adapter.prompt_contract_id,
+        "prompt_instructions": list(adapter.prompt_instructions),
+        "mechanism_contract": list(adapter.mechanism_contract),
         "target_unit_overlap_feedback": {
             "overlapping_units_must_be_reconciled": True,
             "produce_one_integrated_replacement": True,
@@ -1441,7 +1535,8 @@ def _build_protected_effects(subject: ResidualCandidateSubject) -> dict[str, obj
         "source_authorization_packet_id": subject.authorization_packet_id,
         "source_work_order_packet_id": subject.work_order_packet_id,
         "base_candidate_packet_id": subject.base_candidate_packet_id,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "protected_effects": list(source.get("protected_effects", [])),
         "forbidden_changes": list(source.get("forbidden_changes", [])),
         "must_preserve": [
@@ -1470,6 +1565,44 @@ def _build_protected_effects(subject: ResidualCandidateSubject) -> dict[str, obj
     }
 
 
+def _model_plan_steps(model_payload: dict[str, object]) -> list[object]:
+    value = model_payload.get("object_motion_generation_plan")
+    if isinstance(value, list):
+        return list(value)
+    value = model_payload.get("intervention_plan")
+    return list(value) if isinstance(value, list) else []
+
+
+def _model_protected_notes(model_payload: dict[str, object]) -> list[object]:
+    value = model_payload.get("protected_effects_preservation_notes")
+    if isinstance(value, list):
+        return list(value)
+    value = model_payload.get("protected_effects_notes")
+    return list(value) if isinstance(value, list) else []
+
+
+def _model_predicted_reader_effect(
+    subject: ResidualCandidateSubject,
+    model_payload: dict[str, object],
+) -> object:
+    if "predicted_reader_effect" in model_payload:
+        return model_payload["predicted_reader_effect"]
+    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        return "reader feels material consequence before interpretation explains it"
+    return ""
+
+
+def _model_target_unit_mapping(
+    subject: ResidualCandidateSubject,
+    model_payload: dict[str, object],
+) -> list[object]:
+    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        value = model_payload.get("target_unit_mappings")
+        return list(value) if isinstance(value, list) else []
+    value = model_payload.get("target_unit_mapping")
+    return list(value) if isinstance(value, list) else []
+
+
 def _build_recomposition_plan(
     *,
     subject: ResidualCandidateSubject,
@@ -1477,21 +1610,19 @@ def _build_recomposition_plan(
     model_call_id: str | None,
 ) -> dict[str, object]:
     return {
-        "plan_id": f"object_motion_plan_{sha256_text(subject.authorization_packet_id)[:12]}",
+        "plan_id": f"residual_intervention_plan_{sha256_text(subject.authorization_packet_id)[:12]}",
         "source_authorization_packet_id": subject.authorization_packet_id,
         "source_work_order_packet_id": subject.work_order_packet_id,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": [unit.unit_id for unit in subject.target_units],
-        "object_motion_generation_plan": list(
-            model_payload["object_motion_generation_plan"]
-        ),
-        "protected_effects_preservation_notes": list(
-            model_payload["protected_effects_preservation_notes"]
-        ),
-        "predicted_reader_effect": model_payload["predicted_reader_effect"],
+        "intervention_plan": _model_plan_steps(model_payload),
+        "object_motion_generation_plan": _model_plan_steps(model_payload),
+        "protected_effects_preservation_notes": _model_protected_notes(model_payload),
+        "predicted_reader_effect": _model_predicted_reader_effect(subject, model_payload),
         "uncertainty": model_payload["uncertainty"],
         "source_model_call_id": model_call_id,
         "one_shot_generation": True,
@@ -1516,18 +1647,20 @@ def _build_patch_or_section_plan(
     model_call_id: str | None,
 ) -> dict[str, object]:
     return {
-        "patch_or_section_plan_id": f"object_motion_patch_{sha256_text(recomposed.text)[:12]}",
+        "patch_or_section_plan_id": f"residual_intervention_patch_{sha256_text(recomposed.text)[:12]}",
         "source_authorization_packet_id": subject.authorization_packet_id,
         "source_work_order_packet_id": subject.work_order_packet_id,
         "base_candidate_packet_id": subject.base_candidate_packet_id,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "before_section_text": subject.selected_region_before_text,
         "replacement_section_text": recomposed.replacement_region_text,
         "replacement_section_text_sha256": sha256_text(recomposed.replacement_region_text),
-        "target_unit_mapping": list(model_payload["target_unit_mapping"]),
+        "target_unit_mapping": _mapping_from_model_payload(subject, model_payload),
+        "target_unit_mappings": _model_target_unit_mapping(subject, model_payload),
         "target_unit_ids": [unit.unit_id for unit in subject.target_units],
         "forbidden_change_self_check": list(model_payload["forbidden_change_self_check"]),
         "target_coverage_report": _target_coverage_report(subject, recomposed),
@@ -1535,8 +1668,9 @@ def _build_patch_or_section_plan(
         "model_owned_fields": [
             "replacement_region_text",
             "target_unit_mapping",
-            "object_motion_generation_plan",
-            "protected_effects_preservation_notes",
+            "target_unit_mappings",
+            "object_motion_generation_plan/intervention_plan",
+            "protected_effects_preservation_notes/protected_effects_notes",
             "uncertainty",
             "predicted_reader_effect",
             "forbidden_change_self_check",
@@ -1570,8 +1704,9 @@ def _build_candidate_text(
         "base_candidate_packet_id": subject.base_candidate_packet_id,
         "base_candidate_packet_dir": str(subject.base_candidate_packet_dir),
         "base_candidate_text_sha256": subject.base_text_sha256,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": [unit.unit_id for unit in subject.target_units],
@@ -1579,7 +1714,10 @@ def _build_candidate_text(
         "text_sha256": sha256_text(recomposed.text),
         "word_count": _word_count(recomposed.text),
         "bounded_macro_recomposition": True,
-        "object_motion_causality_generation": True,
+        "object_motion_causality_generation": (
+            subject.selected_residual_target_id == OBJECT_MOTION_CAUSALITY_TARGET_ID
+        ),
+        "residual_intervention_generation": True,
         "full_rewrite": False,
         "assembled_by_controller": True,
         "source_model_call_id": model_call_id,
@@ -1607,33 +1745,37 @@ def _build_diff_report(
 ) -> dict[str, object]:
     changed_spans = [
         {
-            "changed_span_id": "object_motion_region_001",
-            "patch_span_id": "object_motion_region_001",
+            "changed_span_id": f"{subject.selected_residual_target_id}_region_001",
+            "patch_span_id": f"{subject.selected_residual_target_id}_region_001",
             "before": subject.selected_region_before_text,
             "after": recomposed.replacement_region_text,
             "before_text": subject.selected_region_before_text,
             "after_text": recomposed.replacement_region_text,
             "region": subject.selected_region_id,
             "target_expansion_reason": "",
-            "reason": "bounded object-motion causality specificity generation",
+            "reason": f"bounded {subject.selected_residual_target_id} generation",
             "inside_target": True,
             "within_selected_target": True,
             "requires_target_expansion": False,
-            "source_patch_span_ids": ["object_motion_region_001"],
+            "source_patch_span_ids": [f"{subject.selected_residual_target_id}_region_001"],
         }
     ]
     return {
-        "diff_report_id": f"object_motion_diff_{sha256_text(str(candidate['text']))[:12]}",
+        "diff_report_id": f"residual_intervention_diff_{sha256_text(str(candidate['text']))[:12]}",
         "source_authorization_packet_id": subject.authorization_packet_id,
         "source_work_order_packet_id": subject.work_order_packet_id,
         "base_candidate_packet_id": subject.base_candidate_packet_id,
         "candidate_text_sha256": candidate["text_sha256"],
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "bounded_macro_recomposition": True,
-        "object_motion_causality_generation": True,
+        "object_motion_causality_generation": (
+            subject.selected_residual_target_id == OBJECT_MOTION_CAUSALITY_TARGET_ID
+        ),
+        "residual_intervention_generation": True,
         "full_rewrite": False,
         "authorization_consumed": True,
         "generation_attempt_index": 1,
@@ -1658,7 +1800,8 @@ def _build_rival_pressure_check(
     return {
         "source_authorization_packet_id": subject.authorization_packet_id,
         "base_candidate_packet_id": subject.base_candidate_packet_id,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "strongest_rival_pressure_preserved": True,
         "strongest_rival_still_blocks": True,
@@ -1668,6 +1811,10 @@ def _build_rival_pressure_check(
         "object_motion_relation_count": recomposed.validation_report[
             "object_motion_relation_count"
         ],
+        "target_specific_mapping_report": recomposed.validation_report.get(
+            "target_specific_mapping_report",
+            {},
+        ),
         "current_candidate_closes_gap": False,
         "requires_executed_ablation_before_improvement_claim": True,
         "not_human_data": True,
@@ -1694,6 +1841,7 @@ def _build_gate_report(
         _gate_result("one_bounded_replacement_generated", True),
         _gate_result("selected_region_materiality_passed", True),
         _gate_result("object_motion_causality_mapping_exists", True),
+        _gate_result("target_specific_mapping_exists", True),
         _gate_result("protected_effects_recorded", True),
         _gate_result("no_nonselected_region_edits", True),
         _gate_result("no_final_claim", True),
@@ -1758,11 +1906,25 @@ def _build_gate_report(
         "not_human_data": True,
         "no_phase_shift_claim": True,
         "phase_shift_claim": False,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "bounded_macro_recomposition": True,
-        "object_motion_causality_generation": True,
+        "object_motion_causality_generation": (
+            subject.selected_residual_target_id == OBJECT_MOTION_CAUSALITY_TARGET_ID
+        ),
+        "residual_intervention_generation": True,
+        "target_specific_ablation_controls": list(
+            require_residual_target_adapter(
+                subject.selected_residual_target_id
+            ).ablation_controls
+        ),
+        "target_specific_reader_state_focus": list(
+            require_residual_target_adapter(
+                subject.selected_residual_target_id
+            ).reader_state_evaluation_focus
+        ),
         "macro_target_coverage_passed": coverage["macro_target_coverage_passed"],
         "macro_materiality_passed": coverage["macro_materiality_passed"],
         "ready_for_executed_ablation": coverage["ready_for_executed_ablation"],
@@ -1830,8 +1992,9 @@ def _build_packet_summary(
         },
         "current_best_candidate_packet_id": subject.base_candidate_packet_id,
         "selected_residual_target_id": subject.selected_residual_target_id,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_count": len(subject.target_units),
@@ -1861,12 +2024,17 @@ def _build_packet_summary(
             "target_coverage_report"
         ],
         "bounded_macro_recomposition": True,
-        "object_motion_causality_generation": True,
+        "object_motion_causality_generation": (
+            subject.selected_residual_target_id == OBJECT_MOTION_CAUSALITY_TARGET_ID
+        ),
+        "residual_intervention_generation": True,
         "one_shot_generation": True,
         "full_rewrite": False,
         "requires_executed_ablation_before_improvement_claim": True,
         "requires_reader_state_eval_before_reader_state_claim": True,
-        "next_recommended_action": NEXT_RECOMMENDED_ACTION,
+        "next_recommended_action": require_residual_target_adapter(
+            subject.selected_residual_target_id
+        ).review_action,
         "finalization_eligible": False,
         "not_finalization_eligible": True,
         "not_human_validated": True,
@@ -1911,14 +2079,17 @@ def _result_payload(
         "generation_attempt_index": 1,
         "candidate_generated": True,
         "candidate_artifact_id": artifacts["macro_recomposed_candidate_text"].id,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "model": model,
         "model_call_ids": [result.model_call.id for result in model_results],
         "model_calls": [result.model_call_to_dict() for result in model_results],
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
-        "next_recommended_action": NEXT_RECOMMENDED_ACTION,
+        "next_recommended_action": require_residual_target_adapter(
+            subject.selected_residual_target_id
+        ).review_action,
         "gate_report": payloads["macro_recomposition_gate_report"],
     }
 
@@ -1966,8 +2137,9 @@ def _failure_result(
             "generation_attempt_index": None,
             "candidate_generated": False,
             "candidate_artifact_id": None,
-            "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-            "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+            "target_scope": subject.selected_residual_target_id,
+            "target_movement": subject.selected_residual_target_id,
+            **target_adapter_metadata(subject.selected_residual_target_id),
             "model_call_ids": [result.model_call.id for result in model_results],
             "model_calls": [result.model_call_to_dict() for result in model_results],
             "materiality_report": materiality_payload,
@@ -2004,7 +2176,7 @@ def _failure_result(
             ),
             "finalization_eligible": False,
             "no_phase_shift_claim": True,
-            "next_recommended_action": "review_failed_object_motion_generation",
+            "next_recommended_action": "review_failed_residual_intervention_generation",
         },
         artifacts=tuple(artifacts.values()),
         model_results=tuple(model_results),
@@ -2058,9 +2230,18 @@ def _target_units_from_map(unit_map: dict[str, Any]) -> list[TargetUnit]:
                 objects=tuple(str(value) for value in item.get("objects", [])),
                 target_effect=str(item.get("target_effect") or ""),
                 current_motion_action_state=str(
-                    item.get("current_motion_action_state") or ""
+                    item.get("current_motion_action_state")
+                    or item.get("current_physical_relation")
+                    or ""
                 ),
-                current_consequence=str(item.get("current_consequence") or ""),
+                current_consequence=str(
+                    item.get("current_consequence")
+                    or item.get("target_effect")
+                    or item.get("intended_first_read_effect")
+                    or ""
+                ),
+                current_physical_relation=str(item.get("current_physical_relation") or ""),
+                source_unit_role=str(item.get("source_unit_role") or ""),
             )
         )
     return [unit for unit in units if unit.unit_id]
@@ -2137,8 +2318,9 @@ def _target_coverage_report(
         "paragraph_level_coverage_passed": True,
         "span_level_coverage_passed": True,
         "ready_for_executed_ablation": True,
-        "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-        "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "target_scope": subject.selected_residual_target_id,
+        "target_movement": subject.selected_residual_target_id,
+        **target_adapter_metadata(subject.selected_residual_target_id),
         "selected_region_id": subject.selected_region_id,
         "target_unit_ids": [unit.unit_id for unit in subject.target_units],
         "active_targets_covered": [unit.unit_id for unit in subject.target_units],
@@ -2147,6 +2329,21 @@ def _target_coverage_report(
             "selected_region_materiality_passed"
         ],
         "object_motion_causality_mapping_exists": True,
+        "target_specific_mapping_exists": True,
+        "target_specific_ablation_controls": list(
+            require_residual_target_adapter(
+                subject.selected_residual_target_id
+            ).ablation_controls
+        ),
+        "target_specific_reader_state_focus": list(
+            require_residual_target_adapter(
+                subject.selected_residual_target_id
+            ).reader_state_evaluation_focus
+        ),
+        "target_specific_mapping_report": recomposed.validation_report.get(
+            "target_specific_mapping_report",
+            {},
+        ),
         "no_nonselected_region_edits": True,
         "decorative_vividness_only_rejected": True,
         "object_list_rejected": True,
@@ -2355,6 +2552,99 @@ def _valid_fake_payload(units: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def _valid_fake_payload_for_subject(subject: ResidualCandidateSubject) -> dict[str, object]:
+    units = [unit_payload(unit) for unit in subject.target_units]
+    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        return _valid_tactile_fake_payload(units)
+    return _valid_fake_payload(units)
+
+
+def _valid_tactile_fake_payload(units: list[dict[str, object]]) -> dict[str, object]:
+    replacement = _tactile_replacement_from_units(units)
+    mappings = []
+    for unit in units:
+        unit_id = str(unit["unit_id"])
+        relation = str(unit.get("current_physical_relation") or unit.get("current_motion_action_state") or "")
+        mappings.append(
+            {
+                "target_unit_id": unit_id,
+                "before_text_sha256": str(unit.get("before_text_sha256") or ""),
+                "mechanism_operation": "make contact, pressure, residue, displacement, or breakage materially causal",
+                "material_relation_or_action": relation
+                or "material contact leaves a visible consequence",
+                "visible_consequence": str(unit.get("target_effect") or "the surface keeps the mark"),
+                "intended_first_read_effect": (
+                    "the reader feels the material consequence before explanation names it"
+                ),
+                "protected_effects_preserved": [
+                    "current-best partial reread transformation",
+                    "proof/no-answer gains",
+                    "return structure preservation",
+                ],
+                "covered_target_ids": [unit_id, TACTILE_INEVITABILITY_TARGET_ID],
+            }
+        )
+    return {
+        "replacement_region_text": replacement,
+        "target_unit_mappings": mappings,
+        "intervention_plan": [
+            "replace only the selected middle recurrence region",
+            "preserve object-motion gains while adding tactile necessity",
+            "keep interpretation after material consequence",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "replacement_region_text covers only the selected region",
+                "risk_note": "controller assembles the final candidate",
+            },
+            {
+                "constraint_id": "avoid_generic_vividness",
+                "how_satisfied": "force and contact relations carry the change",
+                "risk_note": "no new object inventory is introduced",
+            },
+        ],
+        "protected_effects_notes": [
+            "opening, proof, and final return remain outside the replacement",
+            "strongest-rival pressure remains blocking",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no nonselected region edits",
+            "no rival mimicry",
+            "no abstract inevitability explanation",
+        ],
+        "uncertainty": "fixture output for deterministic tests only",
+    }
+
+
+def _tactile_replacement_from_units(units: list[dict[str, object]]) -> str:
+    sentences = []
+    for unit in units:
+        labels = [str(value) for value in unit.get("objects", []) if str(value)]
+        if not labels:
+            labels = ["object", "surface", "mark"]
+        label_phrase = " ".join(labels[:5])
+        relation = str(
+            unit.get("current_physical_relation")
+            or unit.get("current_motion_action_state")
+            or "contact pressure leaves a mark"
+        )
+        sentences.append(
+            f"The {label_phrase} relation works through contact and pressure: "
+            f"{relation}, so a visible mark remains as material consequence before "
+            "any explanation names it."
+        )
+    return (
+        " ".join(sentences)
+        + "\n\nAt first, the room seems only ordinary. But ordinary things are "
+        "strict about what reaches them. Pressure crosses a surface and the mark "
+        "changes what the next object can be; residue, displacement, and breakage "
+        "hold the force locally before thought turns it into a rule."
+    )
+
+
 def _near_copy_payload(
     units: list[dict[str, object]],
     selected_region: str,
@@ -2388,6 +2678,8 @@ def unit_payload(unit: TargetUnit | dict[str, object]) -> dict[str, object]:
         "target_effect": unit.target_effect,
         "current_motion_action_state": unit.current_motion_action_state,
         "current_consequence": unit.current_consequence,
+        "current_physical_relation": unit.current_physical_relation,
+        "source_unit_role": unit.source_unit_role,
     }
 
 
@@ -2484,8 +2776,8 @@ def _refusal(
             "generation_attempt_index": None,
             "candidate_generated": False,
             "candidate_artifact_id": None,
-            "target_scope": OBJECT_MOTION_CAUSALITY_TARGET_ID,
-            "target_movement": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+            "target_scope": None,
+            "target_movement": None,
             "finalization_eligible": False,
             "no_phase_shift_claim": True,
             "next_recommended_action": "review_refusal_before_generation",

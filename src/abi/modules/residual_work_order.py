@@ -1,4 +1,4 @@
-"""Controller-owned object-motion causality work-order planning."""
+"""Controller-owned residual work-order planning."""
 
 from __future__ import annotations
 
@@ -24,14 +24,21 @@ from abi.packets import (
     packet_artifact_count_summary,
     read_json_file,
 )
+from abi.modules.residual_targets import (
+    OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    SELECTED_REGION_ID,
+    TACTILE_INEVITABILITY_TARGET_ID,
+    ResidualTargetSpec,
+    compile_tactile_target_units,
+    get_residual_target_spec,
+    semantic_preflight_failures_for_work_order,
+    target_adapter_metadata,
+)
 
 
 RESIDUAL_WORK_ORDER_LINEAGE_ID = "residual_work_order_v1"
 RESIDUAL_WORK_ORDER_CREATED_BY = "residual_work_order_v1_controller"
 
-OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
-REPEATED_BROAD_TARGET_ID = "first_read_object_event_pressure_gap"
-SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
 NEXT_RECOMMENDED_ACTION = (
     "review_object_motion_causality_work_order_before_generation_authorization"
 )
@@ -43,6 +50,7 @@ RESIDUAL_WORK_ORDER_ARTIFACT_TYPES = (
     "object_motion_causality_diagnostic",
     "selected_intervention_region",
     "object_motion_target_unit_map",
+    "target_novelty_distinctness_report",
     "protected_effects_and_forbidden_changes",
     "future_generation_contract",
     "ablation_and_reader_eval_plan",
@@ -52,6 +60,8 @@ RESIDUAL_WORK_ORDER_ARTIFACT_TYPES = (
 
 REQUIRED_SELECTION_ARTIFACTS = (
     "residual_target_selection_packet",
+    "operator_residual_target_choice",
+    "available_residual_options_report",
     "strategy_packet_intake_summary",
     "selected_residual_target_contract",
     "protected_effects_and_forbidden_changes",
@@ -86,8 +96,14 @@ class ResidualWorkOrderSubject:
     selection_packet_artifact_id: str | None
     selection_artifact_ids: dict[str, str]
     payloads: dict[str, dict[str, Any]]
+    strategy_payloads: dict[str, dict[str, Any]]
+    selected_target_id: str
+    target_spec: ResidualTargetSpec
+    selected_option: dict[str, Any]
+    routing: dict[str, object]
     candidate: CandidateText
     source_parent_ids: tuple[str, ...]
+    supersession: dict[str, object]
 
 
 def run_residual_work_order_planning(
@@ -206,6 +222,22 @@ def run_residual_work_order_planning(
             parent_ids=[artifacts["selected_intervention_region"].id],
         )
 
+        payloads["target_novelty_distinctness_report"] = (
+            _build_target_novelty_distinctness_report(
+                subject,
+                payloads["selected_intervention_region"],
+                payloads["object_motion_target_unit_map"],
+            )
+        )
+        artifacts["target_novelty_distinctness_report"] = writer.write_artifact(
+            "target_novelty_distinctness_report",
+            payloads["target_novelty_distinctness_report"],
+            parent_ids=[
+                artifacts["selected_intervention_region"].id,
+                artifacts["object_motion_target_unit_map"].id,
+            ],
+        )
+
         payloads["protected_effects_and_forbidden_changes"] = (
             _build_protected_effects_and_forbidden_changes(subject)
         )
@@ -215,6 +247,7 @@ def run_residual_work_order_planning(
             parent_ids=[
                 artifacts["residual_target_selection_intake"].id,
                 artifacts["object_motion_target_unit_map"].id,
+                artifacts["target_novelty_distinctness_report"].id,
             ],
         )
 
@@ -229,6 +262,7 @@ def run_residual_work_order_planning(
             parent_ids=[
                 artifacts["selected_intervention_region"].id,
                 artifacts["object_motion_target_unit_map"].id,
+                artifacts["target_novelty_distinctness_report"].id,
                 artifacts["protected_effects_and_forbidden_changes"].id,
             ],
         )
@@ -242,10 +276,12 @@ def run_residual_work_order_planning(
             parent_ids=[
                 artifacts["future_generation_contract"].id,
                 artifacts["object_motion_target_unit_map"].id,
+                artifacts["target_novelty_distinctness_report"].id,
             ],
         )
 
         payloads["residual_work_order_gate_report"] = _build_gate_report(
+            subject=subject,
             payloads=payloads,
         )
         artifacts["residual_work_order_gate_report"] = writer.write_artifact(
@@ -256,6 +292,7 @@ def run_residual_work_order_planning(
                 artifacts["selected_intervention_region"].id,
                 artifacts["future_generation_contract"].id,
                 artifacts["ablation_and_reader_eval_plan"].id,
+                artifacts["target_novelty_distinctness_report"].id,
             ],
         )
 
@@ -304,7 +341,17 @@ def _load_subject(config: AbiConfig, selection_packet_dir: Path) -> ResidualWork
     run_id = selection_packet.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("Residual work-order planning refused; selection packet missing run_id.")
-    _validate_selection_payloads(payloads)
+    target_spec, routing = _validate_selection_payloads(config, payloads)
+    strategy_payloads = _load_strategy_payloads(config, payloads)
+    selected_option = _selected_strategy_option(
+        strategy_payloads,
+        str(selection_packet.get("selected_residual_target_id") or ""),
+    )
+    if selected_option is None:
+        raise ValueError(
+            "Residual work-order planning refused; selected target is absent "
+            "from the source strategy residual options."
+        )
     candidate = _load_candidate_text(config, run_id, payloads)
 
     packet_path = selection_packet_dir / "residual_target_selection_packet.json"
@@ -322,7 +369,20 @@ def _load_subject(config: AbiConfig, selection_packet_dir: Path) -> ResidualWork
             *selection_artifact_ids.values(),
         ]
     )
-    return ResidualWorkOrderSubject(
+    supersession = _work_order_supersession_context(
+        config=config,
+        run_id=run_id,
+        source_selection_packet_id=str(
+            selection_packet.get("packet_id") or selection_packet_dir.name
+        ),
+        target_id=target_spec.target_id,
+    )
+    if supersession.get("supersession_reason") == "prior current-valid work order already exists":
+        raise ValueError(
+            "Residual work-order planning refused; a current-valid work order "
+            "already exists for this selection packet."
+        )
+    subject = ResidualWorkOrderSubject(
         run_id=run_id,
         selection_packet_dir=selection_packet_dir,
         selection_packet_id=str(
@@ -333,9 +393,17 @@ def _load_subject(config: AbiConfig, selection_packet_dir: Path) -> ResidualWork
         else None,
         selection_artifact_ids=selection_artifact_ids,
         payloads=payloads,
+        strategy_payloads=strategy_payloads,
+        selected_target_id=target_spec.target_id,
+        target_spec=target_spec,
+        selected_option=selected_option,
+        routing=routing,
         candidate=candidate,
         source_parent_ids=tuple(parent_ids),
+        supersession=supersession,
     )
+    _prevalidate_target_adapter(subject)
+    return subject
 
 
 def _load_required_payloads(packet_dir: Path) -> dict[str, dict[str, Any]]:
@@ -357,16 +425,25 @@ def _load_required_payloads(packet_dir: Path) -> dict[str, dict[str, Any]]:
     return payloads
 
 
-def _validate_selection_payloads(payloads: dict[str, dict[str, Any]]) -> None:
+def _validate_selection_payloads(
+    config: AbiConfig,
+    payloads: dict[str, dict[str, Any]],
+) -> tuple[ResidualTargetSpec, dict[str, object]]:
     selection_packet = payloads["residual_target_selection_packet"]
     scope = payloads["next_work_order_scope"]
     contract = payloads["selected_residual_target_contract"]
     gate = payloads["residual_target_selection_gate_report"]
+    choice = payloads["operator_residual_target_choice"]
     selected_target = selection_packet.get("selected_residual_target_id")
-    if selected_target != OBJECT_MOTION_CAUSALITY_TARGET_ID:
+    if not isinstance(selected_target, str) or not selected_target:
         raise ValueError(
-            "Residual work-order planning refused; selected residual target is "
-            f"not {OBJECT_MOTION_CAUSALITY_TARGET_ID}: {selected_target}"
+            "Residual work-order planning refused; selected residual target is missing."
+        )
+    target_spec = get_residual_target_spec(selected_target)
+    if target_spec is None:
+        raise ValueError(
+            "Residual work-order planning refused; unsupported selected "
+            f"residual target: {selected_target}"
         )
     if selection_packet.get("candidate_generation_authorized") is True:
         raise ValueError(
@@ -388,16 +465,121 @@ def _validate_selection_payloads(payloads: dict[str, dict[str, Any]]) -> None:
             "Residual work-order planning refused; next work-order scope does not "
             "authorize work-order planning."
         )
-    if contract.get("selected_residual_target_id") != OBJECT_MOTION_CAUSALITY_TARGET_ID:
+    if contract.get("selected_residual_target_id") != selected_target:
         raise ValueError(
             "Residual work-order planning refused; selected target contract does "
             "not match the selection packet."
+        )
+    if choice.get("selected_residual_target_id") != selected_target:
+        raise ValueError(
+            "Residual work-order planning refused; operator choice does not "
+            "match the selection packet."
         )
     if _has_final_or_phase_shift_claim(selection_packet) or _has_final_or_phase_shift_claim(gate):
         raise ValueError(
             "Residual work-order planning refused; selection packet carries a "
             "finality or phase-shift claim."
         )
+    routing = _selection_routing_report(config, payloads, target_spec)
+    if (
+        routing["stale_selection_routing_detected"] is True
+        and routing["stale_selection_routing_safely_normalized"] is not True
+    ):
+        raise ValueError(
+            "Residual work-order planning refused; stale selection routing "
+            "could not be safely normalized."
+        )
+    return target_spec, routing
+
+
+def _load_strategy_payloads(
+    config: AbiConfig,
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    intake = payloads["strategy_packet_intake_summary"]
+    strategy_dir_value = intake.get("strategy_packet_dir")
+    if not isinstance(strategy_dir_value, str) or not strategy_dir_value:
+        raise ValueError(
+            "Residual work-order planning refused; source strategy packet dir "
+            "is missing."
+        )
+    strategy_dir = _resolve_path(config, strategy_dir_value)
+    required = (
+        "next_target_strategy_packet",
+        "residual_target_option_map",
+        "candidate_region_pressure_map",
+    )
+    result: dict[str, dict[str, Any]] = {}
+    for artifact_type in required:
+        path = strategy_dir / f"{artifact_type}.json"
+        if not path.exists():
+            raise ValueError(
+                "Residual work-order planning refused; source strategy packet "
+                f"missing {path.name}."
+            )
+        envelope = read_json_file(path)
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "Residual work-order planning refused; malformed strategy "
+                f"artifact: {path.name}."
+            )
+        result[artifact_type] = payload
+    return result
+
+
+def _selected_strategy_option(
+    strategy_payloads: dict[str, dict[str, Any]],
+    selected_target_id: str,
+) -> dict[str, Any] | None:
+    residual_map = strategy_payloads["residual_target_option_map"]
+    options = residual_map.get("specific_residual_options")
+    if not isinstance(options, list):
+        return None
+    for option in options:
+        if isinstance(option, dict) and option.get("option_id") == selected_target_id:
+            return option
+    return None
+
+
+def _selection_routing_report(
+    config: AbiConfig,
+    payloads: dict[str, dict[str, Any]],
+    target_spec: ResidualTargetSpec,
+) -> dict[str, object]:
+    del config
+    selection_packet = payloads["residual_target_selection_packet"]
+    scope = payloads["next_work_order_scope"]
+    choice = payloads["operator_residual_target_choice"]
+    old_action = _first_string(
+        selection_packet.get("next_allowed_action"),
+        selection_packet.get("next_recommended_action"),
+        scope.get("next_allowed_action"),
+    )
+    stale_detected = bool(old_action and old_action != target_spec.canonical_next_action)
+    safely_normalized = (
+        not stale_detected
+        or (
+            choice.get("selected_residual_target_id") == target_spec.target_id
+            and selection_packet.get("selected_residual_target_id") == target_spec.target_id
+            and scope.get("selected_residual_target_id") == target_spec.target_id
+        )
+    )
+    return {
+        "stale_selection_routing_detected": stale_detected,
+        "stale_next_action_ignored": old_action if stale_detected else None,
+        "canonical_next_action": target_spec.canonical_next_action,
+        "routing_normalized_from_selected_target": stale_detected
+        and safely_normalized,
+        "stale_selection_routing_safely_normalized": safely_normalized,
+    }
+
+
+def _first_string(*values: object) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _has_final_or_phase_shift_claim(payload: dict[str, Any]) -> bool:
@@ -476,6 +658,71 @@ def _candidate_packet_dir(
     return fallback if fallback.exists() else None
 
 
+def _work_order_supersession_context(
+    *,
+    config: AbiConfig,
+    run_id: str,
+    source_selection_packet_id: str,
+    target_id: str,
+) -> dict[str, object]:
+    root = config.run_dir(run_id) / "residual_work_order"
+    base = {
+        "superseded_work_order_packet_id": None,
+        "supersession_reason": None,
+        "semantic_preflight_failures": [],
+        "new_canonical_work_order_packet_id": None,
+        "supersedes_semantically_stale_work_order": False,
+    }
+    if not root.exists():
+        return base
+    candidates: list[tuple[str, Path, dict[str, Any]]] = []
+    for packet_dir in sorted(root.glob("packet_*")):
+        packet_path = packet_dir / "residual_work_order_packet.json"
+        if not packet_path.exists():
+            continue
+        try:
+            envelope = read_json_file(packet_path)
+        except (OSError, ValueError):
+            continue
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("source_selection_packet_id") != source_selection_packet_id:
+            continue
+        if payload.get("selected_residual_target_id") != target_id:
+            continue
+        candidates.append((str(payload.get("packet_id") or packet_dir.name), packet_dir, payload))
+    if not candidates:
+        return base
+    for packet_id, packet_dir, _payload in reversed(candidates):
+        try:
+            payloads = {
+                artifact_type: read_json_file(packet_dir / f"{artifact_type}.json")[
+                    "payload"
+                ]
+                for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+                if (packet_dir / f"{artifact_type}.json").exists()
+            }
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        failures = semantic_preflight_failures_for_work_order(payloads)
+        if failures:
+            return {
+                **base,
+                "superseded_work_order_packet_id": packet_id,
+                "supersession_reason": "prior work order failed current target-adapter semantic preflight",
+                "semantic_preflight_failures": failures,
+                "new_canonical_work_order_packet_id": "assigned_after_packet_creation",
+                "supersedes_semantically_stale_work_order": True,
+            }
+        return {
+            **base,
+            "supersession_reason": "prior current-valid work order already exists",
+            "semantic_preflight_failures": [],
+        }
+    return base
+
+
 def _build_subject_manifest(
     subject: ResidualWorkOrderSubject,
     packet_dir: Path,
@@ -499,8 +746,18 @@ def _build_subject_manifest(
         "reader_state_packet_id": selection.get("reader_state_packet_id"),
         "source_synthesis_packet_id": intake.get("source_synthesis_packet_id"),
         "loop_review_packet_id": intake.get("loop_review_packet_id"),
-        "selected_residual_target_id": selection.get("selected_residual_target_id"),
+        "selected_residual_target_id": subject.selected_target_id,
+        "target_mechanism_description": subject.target_spec.mechanism_description,
+        "work_order_adapter": subject.target_spec.work_order_adapter,
+        **target_adapter_metadata(subject.selected_target_id),
         "selected_region_id": SELECTED_REGION_ID,
+        **subject.supersession,
+        "new_canonical_work_order_packet_id": (
+            packet_dir.name
+            if subject.supersession.get("supersedes_semantically_stale_work_order") is True
+            else subject.supersession.get("new_canonical_work_order_packet_id")
+        ),
+        **subject.routing,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -519,12 +776,14 @@ def _build_selection_intake(subject: ResidualWorkOrderSubject) -> dict[str, obje
         "selection_packet_consumed": True,
         "selection_packet_id": subject.selection_packet_id,
         "selection_packet_dir": str(subject.selection_packet_dir),
-        "selected_residual_target_id": selection.get("selected_residual_target_id"),
+        "selected_residual_target_id": subject.selected_target_id,
         "current_best_candidate_packet_id": subject.candidate.packet_id,
         "proof_packet_id": selection.get("proof_packet_id"),
         "reader_state_packet_id": selection.get("reader_state_packet_id"),
         "broad_blocker_class": selection.get("broad_blocker_class"),
         "next_allowed_action": scope.get("next_allowed_action"),
+        "canonical_next_action": subject.target_spec.canonical_next_action,
+        **subject.routing,
         "candidate_generation_authorized": False,
         "live_model_call_authorized": False,
         "ablation_authorized": False,
@@ -572,8 +831,8 @@ def _build_region_inventory(subject: ResidualWorkOrderSubject) -> dict[str, obje
             ),
             eligible=True,
             reason=(
-                "contains cup/ring/dust/spoon/saucer motion and consequence; "
-                "best fit for object-motion causality specificity"
+                "strategy evidence marks this as the plausible bounded region "
+                "for first-read object-event pressure"
             ),
         ),
         _region(
@@ -611,6 +870,8 @@ def _build_region_inventory(subject: ResidualWorkOrderSubject) -> dict[str, obje
         "regions": regions,
         "region_count": len(regions),
         "selected_region_candidate": SELECTED_REGION_ID,
+        "selected_residual_target_id": subject.selected_target_id,
+        "target_mechanism_description": subject.target_spec.mechanism_description,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -642,6 +903,7 @@ def _region(
         "protected_effects": protected_effects,
         "modification_risk": modification_risk,
         "eligible_for_object_motion_causality_specificity_work": eligible,
+        "eligible_for_tactile_inevitability_gap_work": eligible,
         "reason": reason,
     }
 
@@ -651,8 +913,59 @@ def _build_diagnostic(
     inventory: dict[str, object],
 ) -> dict[str, object]:
     selected_region = _find_region(inventory, SELECTED_REGION_ID)
+    if subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        return {
+            "selected_residual_target_id": subject.selected_target_id,
+            "current_best_candidate_packet_id": subject.candidate.packet_id,
+            "diagnostic_findings": [
+                {
+                    "category": "tactile_force_or_contact_relation",
+                    "status": "candidate_region_contains_material relations",
+                    "evidence": _tactile_evidence_sentences(
+                        str(selected_region.get("text_excerpt") or "")
+                    ),
+                },
+                {
+                    "category": "distinct_from_object_motion_causality",
+                    "status": "requires force/contact necessity rather than another motion pass",
+                    "evidence": [
+                        "object-motion causality has already been attempted",
+                        "new work must preserve motion-to-consequence while adding physical non-optionality",
+                    ],
+                },
+                {
+                    "category": "generic_vividness_risk",
+                    "status": "blocking_if_future_work_adds_sensory_adjectives_only",
+                    "evidence": ["tactile inevitability is material force, not atmosphere"],
+                },
+                {
+                    "category": "rival_mimicry_risk",
+                    "status": "blocking_pressure_preserved",
+                    "evidence": ["strongest rival remains pressure, not a template"],
+                },
+            ],
+            "likely_strongest_candidate_region": SELECTED_REGION_ID,
+            "selected_region_text_excerpt": selected_region.get("text_excerpt"),
+            "opening_and_final_return_protection": (
+                "opening and final return should remain protected unless a later "
+                "authorization selects a narrower unit"
+            ),
+            "proof_no_answer_region_protection": (
+                "proof/no-answer region should be protected from renewed proof compression"
+            ),
+            "summary": (
+                "Middle recurrence / ordinary trace logic is the bounded candidate "
+                "region for tactile inevitability because strategy evidence points "
+                "there and the region already carries material traces."
+            ),
+            "candidate_generated": False,
+            "model_calls": 0,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+            "worker": "tactile_inevitability_diagnostic_v1_controller",
+        }
     return {
-        "selected_residual_target_id": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "selected_residual_target_id": subject.selected_target_id,
         "current_best_candidate_packet_id": subject.candidate.packet_id,
         "diagnostic_findings": [
             {
@@ -724,16 +1037,34 @@ def _build_selected_region(
 ) -> dict[str, object]:
     selected_region = _find_region(inventory, SELECTED_REGION_ID)
     selected_text = _region_text(subject.candidate.text, SELECTED_REGION_ID)
+    if subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        selection_reason = (
+            "The strategy evidence marks this bounded middle recurrence region "
+            "as plausible; it already contains material trace relations, and "
+            "reopening it is less risky than reopening the opening, proof, or final return."
+        )
+    else:
+        selection_reason = (
+            "This region already contains object motion and implied consequence; "
+            "it is the narrowest bounded place to sharpen causality before explanation."
+        )
     return {
         "selected_region_id": SELECTED_REGION_ID,
         "selected_region_before_text": selected_text,
         "selected_region_sha256": sha256_text(selected_text),
         "selected_region_paragraph_refs": selected_region.get("paragraph_refs", []),
-        "selection_reason": (
-            "This region already contains object motion and implied consequence "
-            "through cup, ring, crumb, dust, spoon, saucer, hand, and fall; it is "
-            "the narrowest bounded place to sharpen causality before explanation."
+        "selection_reason": selection_reason,
+        "selected_residual_target_id": subject.selected_target_id,
+        "target_mechanism_description": subject.target_spec.mechanism_description,
+        "region_exists_in_current_best": bool(selected_text),
+        "region_hash_matches_current_best": (
+            selected_region.get("region_text_sha256") == sha256_text(selected_text)
         ),
+        "strategy_evidence_points_to_region": _strategy_points_to_selected_region(subject),
+        "distinct_from_prior_object_motion_operation": (
+            subject.selected_target_id != OBJECT_MOTION_CAUSALITY_TARGET_ID
+        ),
+        "less_risky_than_reopening_protected_regions": True,
         "why_other_regions_were_not_selected": [
             {
                 "region_id": "opening_table_dust_spoon_saucer_ring_field",
@@ -762,6 +1093,8 @@ def _build_target_unit_map(
     subject: ResidualWorkOrderSubject,
     selected_region: dict[str, object],
 ) -> dict[str, object]:
+    if subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+        return _build_tactile_target_unit_map(subject, selected_region)
     selected_text = str(selected_region["selected_region_before_text"])
     units = [
         _unit(
@@ -796,6 +1129,9 @@ def _build_target_unit_map(
         ),
     ]
     return {
+        "selected_residual_target_id": subject.selected_target_id,
+        "unit_map_kind": subject.target_spec.work_order_adapter,
+        **target_adapter_metadata(subject.selected_target_id),
         "selected_region_id": selected_region["selected_region_id"],
         "target_units": units,
         "target_unit_count": len(units),
@@ -847,6 +1183,488 @@ def _unit(
     }
 
 
+def _build_tactile_target_unit_map(
+    subject: ResidualWorkOrderSubject,
+    selected_region: dict[str, object],
+) -> dict[str, object]:
+    selected_text = str(selected_region["selected_region_before_text"])
+    inherited_units = _inherited_target_units(subject)
+    units = compile_tactile_target_units(
+        inherited_units=inherited_units,
+        selected_text=selected_text,
+        parent_region_id=str(selected_region["selected_region_id"]),
+    )
+    return {
+        "selected_residual_target_id": subject.selected_target_id,
+        "unit_map_kind": subject.target_spec.work_order_adapter,
+        **target_adapter_metadata(subject.selected_target_id),
+        "selected_region_id": selected_region["selected_region_id"],
+        "target_units": units,
+        "target_unit_count": len(units),
+        "inherited_units_count": len(inherited_units),
+        "tactile_specific_units_count": len(units),
+        "object_labels_source": (
+            "candidate packet inherited target units and selected-region text"
+            if inherited_units
+            else "selected-region text"
+        ),
+        "candidate_generated": False,
+        "model_calls": 0,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "worker": "tactile_inevitability_target_unit_map_v1_controller",
+    }
+
+
+def _build_target_novelty_distinctness_report(
+    subject: ResidualWorkOrderSubject,
+    selected_region: dict[str, object],
+    unit_map: dict[str, object],
+) -> dict[str, object]:
+    attempted = _attempted_target_ids(subject)
+    units = [
+        unit for unit in unit_map.get("target_units", []) if isinstance(unit, dict)
+    ]
+    selected_text = str(selected_region.get("selected_region_before_text") or "")
+    region_repeated = (
+        subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID
+        and OBJECT_MOTION_CAUSALITY_TARGET_ID in attempted
+    )
+    generic_vividness = _selection_reads_as_generic_vividness(subject)
+    no_concrete_relation = not units
+    merely_relabels = (
+        subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID
+        and bool(units)
+        and all(
+            "object-motion" in str(unit.get("distinct_from_object_motion_basis", ""))
+            for unit in units
+        )
+        and not any(
+            _contains_tactile_signal(
+                str(unit.get("before_text") or ""),
+                [str(label) for label in unit.get("involved_object_labels", [])]
+                if isinstance(unit.get("involved_object_labels"), list)
+                else [],
+            )
+            for unit in units
+        )
+    )
+    region_justified = (
+        bool(selected_text)
+        and selected_region.get("region_hash_matches_current_best") is True
+        and selected_region.get("strategy_evidence_points_to_region") is True
+        and selected_region.get("less_risky_than_reopening_protected_regions") is True
+    )
+    only_rival_justification = _only_strongest_rival_basis(subject)
+    proceed = (
+        bool(units)
+        and not generic_vividness
+        and not merely_relabels
+        and region_justified
+        and not only_rival_justification
+    )
+    refusal_reasons: list[str] = []
+    if no_concrete_relation:
+        refusal_reasons.append("no concrete tactile relation identified")
+    if merely_relabels:
+        refusal_reasons.append("all units merely relabel object-motion causality")
+    if generic_vividness:
+        refusal_reasons.append("proposed work order is generic vividness")
+    if only_rival_justification:
+        refusal_reasons.append("only justification is strongest-rival pressure")
+    if not region_justified:
+        refusal_reasons.append("bounded region is not justified by evidence")
+    return {
+        "selected_target_id": subject.selected_target_id,
+        "attempted_target_ids": attempted,
+        "distinct_from_attempted_targets": (
+            subject.selected_target_id not in attempted
+            and not merely_relabels
+        ),
+        "distinct_mechanism_basis": subject.target_spec.mechanism_description,
+        "repeated_region_detected": region_repeated,
+        "repeated_region_justified": region_justified,
+        "inherited_units_count": int(unit_map.get("inherited_units_count") or 0),
+        "tactile_specific_units_count": int(
+            unit_map.get("tactile_specific_units_count")
+            or (len(units) if subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID else 0)
+        ),
+        "merely_relabels_object_motion": merely_relabels,
+        "generic_vividness_only": generic_vividness,
+        "diminishing_returns_risk": (
+            "medium: repeated region after object-motion work"
+            if region_repeated
+            else "low"
+        ),
+        "proceed_with_work_order": proceed,
+        "refusal_reason": "; ".join(refusal_reasons) if not proceed else None,
+        "candidate_generated": False,
+        "model_calls": 0,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "worker": "target_novelty_distinctness_report_v1_controller",
+    }
+
+
+def _attempted_target_ids(subject: ResidualWorkOrderSubject) -> list[str]:
+    residual_map = subject.strategy_payloads["residual_target_option_map"]
+    attempted = residual_map.get("exhausted_or_attempted_target_ids")
+    result: list[str] = []
+    if isinstance(attempted, list):
+        result.extend(str(target) for target in attempted if isinstance(target, str))
+    repeated = residual_map.get("repeated_target_id")
+    if isinstance(repeated, str) and repeated and repeated not in result:
+        result.append(repeated)
+    broad = residual_map.get("broad_blocker_class")
+    if isinstance(broad, str) and broad and broad not in result:
+        result.append(broad)
+    return result
+
+
+def _selection_reads_as_generic_vividness(subject: ResidualWorkOrderSubject) -> bool:
+    if subject.selected_target_id != TACTILE_INEVITABILITY_TARGET_ID:
+        return False
+    text = " ".join(
+        [
+            str(subject.selected_option.get("description") or ""),
+            " ".join(
+                str(item)
+                for item in subject.selected_option.get("source_evidence_basis", [])
+                if isinstance(item, str)
+            )
+            if isinstance(subject.selected_option.get("source_evidence_basis"), list)
+            else "",
+            " ".join(
+                str(item)
+                for item in subject.payloads["selected_residual_target_contract"].get(
+                    "operational_definition",
+                    [],
+                )
+                if isinstance(item, str)
+            )
+            if isinstance(
+                subject.payloads["selected_residual_target_contract"].get(
+                    "operational_definition"
+                ),
+                list,
+            )
+            else "",
+        ]
+    ).lower()
+    has_vividness = "vivid" in text or "sensory" in text
+    has_tactile = any(
+        term in text
+        for term in (
+            "tactile",
+            "force",
+            "contact",
+            "material",
+            "pressure",
+            "resistance",
+            "friction",
+            "residue",
+            "physical",
+        )
+    )
+    return has_vividness and not has_tactile
+
+
+def _only_strongest_rival_basis(subject: ResidualWorkOrderSubject) -> bool:
+    descriptor = " ".join(
+        [
+            str(subject.selected_option.get("description") or ""),
+            subject.target_spec.mechanism_description,
+        ]
+    ).lower()
+    if any(
+        term in descriptor
+        for term in ("tactile", "material", "force", "contact", "object motion")
+    ):
+        return False
+    basis = subject.selected_option.get("source_evidence_basis")
+    if not isinstance(basis, list) or not basis:
+        return False
+    normalized = [str(item).lower() for item in basis if isinstance(item, str)]
+    return bool(normalized) and all("rival" in item for item in normalized)
+
+
+def _evidence_chain_resolved(subject: ResidualWorkOrderSubject) -> bool:
+    selection = subject.payloads["residual_target_selection_packet"]
+    intake = subject.payloads["strategy_packet_intake_summary"]
+    return all(
+        isinstance(value, str) and bool(value)
+        for value in (
+            selection.get("proof_packet_id"),
+            selection.get("reader_state_packet_id"),
+            intake.get("source_synthesis_packet_id"),
+            intake.get("loop_review_packet_id"),
+            selection.get("source_strategy_packet_id") or intake.get("strategy_packet_id"),
+        )
+    )
+
+
+def _tactile_unit(
+    *,
+    index: int,
+    source_target_unit_id: str | None,
+    before_text: str,
+    parent_region_id: str,
+    object_labels: list[str],
+) -> dict[str, object]:
+    return {
+        "target_unit_id": f"tactile_unit_{index:03d}",
+        "unit_id": f"tactile_unit_{index:03d}",
+        "source_target_unit_id": source_target_unit_id,
+        "before_text": before_text,
+        "before_text_sha256": sha256_text(before_text),
+        "parent_region_id": parent_region_id,
+        "involved_object_labels": object_labels,
+        "objects": object_labels,
+        "current_physical_relation": _current_physical_relation(before_text),
+        "tactile_inevitability_deficit": (
+            "the relation can become more force/contact necessary without "
+            "adding decorative sensory atmosphere"
+        ),
+        "allowed_operations": [
+            "make contact, pressure, resistance, residue, displacement, or breakage materially causal",
+            "preserve current object-motion consequence while adding physical necessity",
+            "keep interpretation after material consequence",
+        ],
+        "forbidden_operations": [
+            "decorative sensory detail",
+            "new object inventory",
+            "rival mimicry",
+            "generic vividness amplification",
+            "abstract inevitability language",
+            "full rewrite",
+            "reopening unrelated regions",
+            "weakening current causal object relations",
+        ],
+        "forbidden_operation": [
+            "add decorative detail",
+            "add new object list",
+            "add rival-like scene",
+            "explain abstract inevitability",
+            "full rewrite",
+        ],
+        "intended_first_read_effect": (
+            "reader feels the material change as physically unavoidable before explanation"
+        ),
+        "target_effect": (
+            "reader feels material consequence before interpretation explains it"
+        ),
+        "protected_effects": [
+            "current-best partial reread transformation",
+            "record-bearing object field",
+            "proof/no-answer gains",
+            "opening-return/final-return gains",
+            "reduced overexplanation",
+            "current macro structure",
+        ],
+        "required_material_change": (
+            "increase physical force/contact necessity, not quantity of sensory description"
+        ),
+        "material_change_required": True,
+        "distinct_from_object_motion_basis": (
+            "object-motion asks moved-therefore-changed; tactile inevitability "
+            "asks why the material relation could not have failed to leave the mark"
+        ),
+    }
+
+
+def _inherited_target_units(subject: ResidualWorkOrderSubject) -> list[dict[str, Any]]:
+    candidate_work_order = subject.candidate.packet_dir / "macro_recomposition_work_order.json"
+    if candidate_work_order.exists():
+        envelope = read_json_file(candidate_work_order)
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        if isinstance(payload, dict) and isinstance(payload.get("target_units"), list):
+            return [unit for unit in payload["target_units"] if isinstance(unit, dict)]
+    source_dir = _source_work_order_packet_dir(subject)
+    if source_dir is not None:
+        unit_path = source_dir / "object_motion_target_unit_map.json"
+        if unit_path.exists():
+            envelope = read_json_file(unit_path)
+            payload = envelope.get("payload") if isinstance(envelope, dict) else None
+            units = payload.get("target_units") if isinstance(payload, dict) else None
+            if isinstance(units, list):
+                return [unit for unit in units if isinstance(unit, dict)]
+    return []
+
+
+def _source_work_order_packet_dir(subject: ResidualWorkOrderSubject) -> Path | None:
+    for file_name in ("macro_recomposition_packet.json", "macro_recomposition_subject_manifest.json"):
+        path = subject.candidate.packet_dir / file_name
+        if not path.exists():
+            continue
+        envelope = read_json_file(path)
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        packet_dir = payload.get("source_work_order_packet_dir")
+        if isinstance(packet_dir, str) and packet_dir:
+            resolved = Path(packet_dir)
+            if not resolved.is_absolute():
+                resolved = (subject.candidate.packet_dir / resolved).resolve()
+            return resolved
+    return None
+
+
+def _object_labels_from_unit(unit: dict[str, Any]) -> list[str]:
+    labels = unit.get("objects")
+    if isinstance(labels, list):
+        result = [str(label) for label in labels if isinstance(label, str) and label]
+        if result:
+            return result
+    before_text = unit.get("before_text")
+    return _extract_object_labels(str(before_text or ""))
+
+
+def _extract_object_labels(text: str) -> list[str]:
+    stop_words = {
+        "the",
+        "and",
+        "that",
+        "this",
+        "with",
+        "into",
+        "where",
+        "when",
+        "again",
+        "before",
+        "after",
+        "already",
+        "only",
+        "ordinary",
+        "strict",
+        "visible",
+        "change",
+        "thing",
+        "things",
+        "another",
+        "matter",
+        "makes",
+        "keeps",
+        "seems",
+        "first",
+        "next",
+        "same",
+        "side",
+        "plain",
+        "small",
+    }
+    labels: list[str] = []
+    for token in re.findall(r"[A-Za-z][A-Za-z'\-]{2,}", text):
+        lower = token.lower().strip("'")
+        if lower in stop_words or lower.endswith("ly"):
+            continue
+        if lower not in labels:
+            labels.append(lower)
+        if len(labels) >= 8:
+            break
+    return labels
+
+
+def _contains_tactile_signal(text: str, labels: list[str]) -> bool:
+    lower = text.lower()
+    tactile_terms = (
+        "contact",
+        "touch",
+        "touched",
+        "weight",
+        "pressure",
+        "pressed",
+        "press",
+        "resistance",
+        "friction",
+        "residue",
+        "mark",
+        "marks",
+        "marked",
+        "trace",
+        "grain",
+        "surface",
+        "crack",
+        "cracked",
+        "break",
+        "broke",
+        "broken",
+        "fall",
+        "fell",
+        "drop",
+        "dropped",
+        "released",
+        "lifted",
+        "set down",
+        "narrow",
+        "thinner",
+        "wet",
+        "dust",
+        "shift",
+        "nudged",
+    )
+    return any(term in lower for term in tactile_terms) and bool(labels)
+
+
+def _prevalidate_target_adapter(subject: ResidualWorkOrderSubject) -> None:
+    if subject.selected_target_id != TACTILE_INEVITABILITY_TARGET_ID:
+        return
+    inventory = _build_region_inventory(subject)
+    selected_region = _build_selected_region(subject, inventory)
+    unit_map = _build_tactile_target_unit_map(subject, selected_region)
+    failures = semantic_preflight_failures_for_work_order(
+        {
+            "residual_work_order_packet": {
+                "selected_residual_target_id": subject.selected_target_id,
+                **target_adapter_metadata(subject.selected_target_id),
+            },
+            "object_motion_target_unit_map": unit_map,
+        }
+    )
+    if failures:
+        raise ValueError(
+            "Residual work-order planning refused; tactile inevitability "
+            "adapter failed stop-test; semantic preflight failed: "
+            f"{'; '.join(failures)}; no concrete tactile relation identified"
+        )
+    novelty = _build_target_novelty_distinctness_report(
+        subject,
+        selected_region,
+        unit_map,
+    )
+    if novelty["proceed_with_work_order"] is not True:
+        reason = novelty.get("refusal_reason") or "target adapter refused"
+        raise ValueError(
+            "Residual work-order planning refused; tactile inevitability "
+            f"adapter failed stop-test: {reason}"
+        )
+
+
+def _current_physical_relation(text: str) -> str:
+    lower = text.lower()
+    if any(term in lower for term in ("crack", "break", "fall", "released")):
+        return "release, fall, or impact leaves a visible break"
+    if any(term in lower for term in ("ring", "wet", "grain", "crumb", "narrow")):
+        return "contact and residue alter the surface trace"
+    if any(term in lower for term in ("dust", "surface", "touch", "crossed")):
+        return "contact with the surface leaves residue as a record"
+    return "material contact leaves a visible consequence"
+
+
+def _sentences(text: str) -> list[str]:
+    normalized = " ".join(text.split())
+    return [sentence.strip() for sentence in re.split(r"(?<=[.!?;])\s+", normalized) if sentence.strip()]
+
+
+def _tactile_evidence_sentences(text: str) -> list[str]:
+    sentences = _sentences(text)
+    evidence = [
+        sentence
+        for sentence in sentences
+        if _contains_tactile_signal(sentence, _extract_object_labels(sentence))
+    ]
+    return evidence[:4] or sentences[:2]
+
+
 def _build_protected_effects_and_forbidden_changes(
     subject: ResidualWorkOrderSubject,
 ) -> dict[str, object]:
@@ -856,27 +1674,10 @@ def _build_protected_effects_and_forbidden_changes(
             f"{subject.candidate.packet_id} as current best candidate",
             f"executed ablation support from {selection.get('proof_packet_id')}",
             f"reader-state support from {selection.get('reader_state_packet_id')}",
-            "partial reread transformation",
-            "table/dust/spoon/saucer/ring causal field",
-            "proof/no-answer gains",
-            "final-return gains",
-            "reduced overexplanation",
-            "strongest-rival pressure preservation",
-            "no finality claim",
+            *subject.target_spec.protected_effects,
         ],
-        "forbidden_changes": [
-            "generic vividness",
-            "object lists",
-            "decorative sensory detail",
-            "rival mimicry",
-            "proof/no-answer compression by inertia",
-            "final-return overwork",
-            "summary compression",
-            "abstract explanation of causality",
-            "candidate generation in this command",
-            "finality claim",
-            "phase-shift claim",
-        ],
+        "forbidden_changes": list(subject.target_spec.forbidden_changes),
+        "selected_residual_target_id": subject.selected_target_id,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -892,7 +1693,10 @@ def _build_future_generation_contract(
 ) -> dict[str, object]:
     return {
         "future_generation_contract_created": True,
-        "selected_residual_target_id": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "selected_residual_target_id": subject.selected_target_id,
+        "target_mechanism_description": subject.target_spec.mechanism_description,
+        "work_order_adapter": subject.target_spec.work_order_adapter,
+        **target_adapter_metadata(subject.selected_target_id),
         "base_candidate_packet_id": subject.candidate.packet_id,
         "selected_region_id": selected_region["selected_region_id"],
         "selected_region_sha256": selected_region["selected_region_sha256"],
@@ -901,6 +1705,28 @@ def _build_future_generation_contract(
             for unit in unit_map["target_units"]
             if isinstance(unit, dict)
         ],
+        "target_unit_hashes": {
+            str(unit["unit_id"]): str(unit.get("before_text_sha256") or "")
+            for unit in unit_map["target_units"]
+            if isinstance(unit, dict)
+        },
+        "authoritative_target_units": list(unit_map["target_units"]),
+        "mechanism_contract": list(subject.target_spec.operational_definition),
+        "protected_effects": list(subject.target_spec.protected_effects),
+        "forbidden_operations": list(subject.target_spec.forbidden_changes),
+        "materiality_requirements": [
+            "selected-region material change required",
+            "target-unit mappings are necessary but insufficient",
+            "preserve protected effects rather than sentence architecture",
+            "reject generic vividness, full rewrite, and nonselected-region edits",
+        ],
+        "target_specific_ablation_controls": list(
+            subject.target_spec.target_specific_ablation_controls
+        ),
+        "target_specific_reader_state_focus": list(
+            subject.target_spec.target_specific_reader_state_focus
+        ),
+        "one_attempt_budget": 1,
         "future_generator_may_replace_only": [
             "selected region",
             "selected target units",
@@ -914,17 +1740,10 @@ def _build_future_generation_contract(
             "controller-owned assembly and gates",
         ],
         "must_materially_improve": [
-            "object-motion causality specificity",
-            "visible consequence before explanation",
-            "local inference of pressure",
+            subject.target_spec.mechanism_description,
+            *subject.target_spec.target_specific_reader_state_focus[:2],
         ],
-        "must_not": [
-            "add decorative vividness",
-            "mimic rival",
-            "claim finality",
-            "alter nonselected regions",
-            "perform full rewrite",
-        ],
+        "must_not": list(subject.target_spec.forbidden_changes),
         "controller_owns_assembly_and_gates": True,
         "future_generation_requires_separate_authorization": True,
         "candidate_generation_authorized": False,
@@ -941,29 +1760,18 @@ def _build_ablation_and_reader_eval_plan(subject: ResidualWorkOrderSubject) -> d
     return {
         "if_future_candidate_is_generated": [
             f"execute ablation against {subject.candidate.packet_id}",
-            "revert object-motion causality intervention",
-            "isolate object-motion relation",
-            "include decorative-vividness control",
-            "include object-list/no-causal-motion control",
+            *subject.target_spec.target_specific_ablation_controls,
             "run strongest-rival comparison",
-            "run reader-state evaluation focused on first-read causal specificity",
+            "run reader-state evaluation focused on selected residual target",
             "verify preservation of partial reread transformation",
         ],
-        "future_ablation_controls": [
-            "revert_object_motion_causality_intervention",
-            "isolate_object_motion_relation",
-            "decorative_vividness_control",
-            "object_list_no_causal_motion_control",
-            "strongest_rival_comparison",
-        ],
-        "future_reader_state_eval_focus": [
-            "first-read causal specificity",
-            "object movement producing consequence before explanation",
-            "reread preservation",
-            "proof/no-answer carry",
-            "final-return preservation",
-            "hostile scaffold risk",
-        ],
+        "future_ablation_controls": list(
+            subject.target_spec.target_specific_ablation_controls
+        ),
+        "future_reader_state_eval_focus": list(
+            subject.target_spec.target_specific_reader_state_focus
+        ),
+        "selected_residual_target_id": subject.selected_target_id,
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
         "candidate_generated": False,
@@ -976,17 +1784,52 @@ def _build_ablation_and_reader_eval_plan(subject: ResidualWorkOrderSubject) -> d
 
 def _build_gate_report(
     *,
+    subject: ResidualWorkOrderSubject,
     payloads: dict[str, dict[str, object]],
 ) -> dict[str, object]:
+    unit_map = payloads["object_motion_target_unit_map"]
+    selected_region = payloads["selected_intervention_region"]
+    novelty = payloads["target_novelty_distinctness_report"]
     gate_results = [
         _gate_result("selection_packet_consumed", True),
         _gate_result("selected_target_valid", True),
+        _gate_result("selected_target_supported", True),
+        _gate_result("operator_choice_matches_selected_target", True),
+        _gate_result("stale_selection_routing_detected", True),
+        _gate_result(
+            "stale_selection_routing_safely_normalized",
+            subject.routing["stale_selection_routing_safely_normalized"] is True,
+        ),
+        _gate_result("target_adapter_resolved", True),
         _gate_result("current_best_candidate_loaded", True),
+        _gate_result("current_best_candidate_resolved", True),
+        _gate_result("evidence_chain_resolved", _evidence_chain_resolved(subject)),
         _gate_result("candidate_region_inventory_created", True),
         _gate_result("selected_region_chosen", True),
         _gate_result(
+            "bounded_region_selected",
+            bool(selected_region.get("selected_region_before_text"))
+            and selected_region.get("strategy_evidence_points_to_region") is True,
+        ),
+        _gate_result(
             "target_unit_map_created",
-            payloads["object_motion_target_unit_map"]["target_unit_count"] > 0,
+            unit_map["target_unit_count"] > 0,
+        ),
+        _gate_result(
+            "target_units_created",
+            unit_map["target_unit_count"] > 0,
+        ),
+        _gate_result(
+            "target_mechanism_distinct",
+            novelty["proceed_with_work_order"] is True,
+            []
+            if novelty["proceed_with_work_order"] is True
+            else [
+                str(
+                    novelty.get("refusal_reason")
+                    or "target mechanism distinctness failed"
+                )
+            ],
         ),
         _gate_result("future_generation_contract_created", True),
         _gate_result("ablation_and_reader_eval_plan_created", True),
@@ -998,6 +1841,12 @@ def _build_gate_report(
             "candidate_generation_authorized",
             False,
             ["work-order planning does not authorize generation"],
+            record=False,
+        ),
+        _gate_result(
+            "candidate_generated",
+            False,
+            ["work-order planning did not generate a candidate"],
             record=False,
         ),
         _gate_result(
@@ -1013,9 +1862,21 @@ def _build_gate_report(
             record=False,
         ),
         _gate_result(
+            "ablation_completed",
+            False,
+            ["work-order planning does not run ablation"],
+            record=False,
+        ),
+        _gate_result(
             "reader_state_eval_authorized",
             False,
             ["work-order planning does not authorize reader-state evaluation"],
+            record=False,
+        ),
+        _gate_result(
+            "reader_state_eval_completed",
+            False,
+            ["work-order planning does not run reader-state evaluation"],
             record=False,
         ),
         _gate_result(
@@ -1063,15 +1924,25 @@ def _build_gate_report(
         "live_model_call_authorized": False,
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
+        "ablation_completed": False,
+        "reader_state_eval_completed": False,
         "strongest_rival_defeated": False,
         "human_validation_present": False,
+        "selected_residual_target_id": subject.selected_target_id,
+        "stale_selection_routing_detected": subject.routing[
+            "stale_selection_routing_detected"
+        ],
+        "stale_selection_routing_safely_normalized": subject.routing[
+            "stale_selection_routing_safely_normalized"
+        ],
+        "canonical_next_action": subject.target_spec.canonical_next_action,
         "gate_results": gate_results,
         "failed_gates": failed_gates,
         "missing_gates": [],
         "final_gates_marked_passed": [],
         "unresolved_blockers": blockers,
         "summary_verdict": (
-            "Object-motion work-order planning selected a bounded future region "
+            "Residual work-order planning selected a bounded future region "
             "and target-unit map, but remains fail-closed and authorizes no "
             "generation."
         ),
@@ -1093,6 +1964,7 @@ def _build_packet_summary(
     )
     unit_map = payloads["object_motion_target_unit_map"]
     selected_region = payloads["selected_intervention_region"]
+    novelty = payloads["target_novelty_distinctness_report"]
     return {
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
@@ -1111,14 +1983,31 @@ def _build_packet_summary(
         "source_selection_packet_id": subject.selection_packet_id,
         "current_best_candidate_packet_id": subject.candidate.packet_id,
         "candidate_text_sha256": subject.candidate.text_sha256,
-        "selected_residual_target_id": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "selected_residual_target_id": subject.selected_target_id,
+        "target_mechanism_description": subject.target_spec.mechanism_description,
+        "work_order_adapter": subject.target_spec.work_order_adapter,
+        **target_adapter_metadata(subject.selected_target_id),
         "selected_region_id": selected_region["selected_region_id"],
+        "selected_region_sha256": selected_region["selected_region_sha256"],
         "target_unit_count": unit_map["target_unit_count"],
+        "target_unit_ids": [
+            str(unit["unit_id"])
+            for unit in unit_map["target_units"]
+            if isinstance(unit, dict)
+        ],
+        "target_novelty_distinctness_report": novelty,
+        **subject.supersession,
+        "new_canonical_work_order_packet_id": (
+            packet_dir.name
+            if subject.supersession.get("supersedes_semantically_stale_work_order") is True
+            else subject.supersession.get("new_canonical_work_order_packet_id")
+        ),
+        **subject.routing,
         "candidate_generated": False,
         "candidate_generation_authorized": False,
         "future_generation_contract_created": True,
-        "next_allowed_action": NEXT_RECOMMENDED_ACTION,
-        "next_recommended_action": NEXT_RECOMMENDED_ACTION,
+        "next_allowed_action": subject.target_spec.review_action,
+        "next_recommended_action": subject.target_spec.review_action,
         "live_model_call_authorized": False,
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
@@ -1154,16 +2043,28 @@ def _result_payload(
         },
         "counts": packet["counts"],
         "current_best_candidate_packet_id": subject.candidate.packet_id,
-        "selected_residual_target_id": OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        "selected_residual_target_id": subject.selected_target_id,
         "selected_region_id": packet["selected_region_id"],
+        "selected_region_sha256": packet["selected_region_sha256"],
         "target_unit_count": packet["target_unit_count"],
+        "target_novelty_distinctness_report": packet[
+            "target_novelty_distinctness_report"
+        ],
+        "target_adapter_id": packet.get("target_adapter_id"),
+        "target_adapter_version": packet.get("target_adapter_version"),
+        "work_order_contract_version": packet.get("work_order_contract_version"),
+        "superseded_work_order_packet_id": packet.get("superseded_work_order_packet_id"),
+        "supersession_reason": packet.get("supersession_reason"),
+        "semantic_preflight_failures": packet.get("semantic_preflight_failures", []),
+        "new_canonical_work_order_packet_id": packet.get("new_canonical_work_order_packet_id"),
+        **subject.routing,
         "candidate_generated": False,
         "candidate_generation_authorized": False,
         "future_generation_contract_created": True,
-        "next_allowed_action": NEXT_RECOMMENDED_ACTION,
+        "next_allowed_action": subject.target_spec.review_action,
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
-        "next_recommended_action": NEXT_RECOMMENDED_ACTION,
+        "next_recommended_action": subject.target_spec.review_action,
         "model_calls": 0,
     }
 
@@ -1175,6 +2076,23 @@ def _find_region(inventory: dict[str, object], region_id: str) -> dict[str, Any]
             if isinstance(region, dict) and region.get("region_id") == region_id:
                 return region
     return {}
+
+
+def _strategy_points_to_selected_region(subject: ResidualWorkOrderSubject) -> bool:
+    pressure_map = subject.strategy_payloads.get("candidate_region_pressure_map", {})
+    regions = pressure_map.get("regions")
+    if not isinstance(regions, list):
+        return False
+    for region in regions:
+        if not isinstance(region, dict):
+            continue
+        if region.get("region_id") != SELECTED_REGION_ID:
+            continue
+        return bool(
+            region.get("plausible_next_intervention_region") is True
+            or region.get("recommendation") == "plausible_next_intervention_region"
+        )
+    return False
 
 
 def _region_text(text: str, region_id: str) -> str:

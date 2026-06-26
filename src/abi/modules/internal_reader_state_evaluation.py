@@ -1896,7 +1896,15 @@ def _pending_candidate_for_target(
 
 
 def _validate_pending_candidate_target(candidate: dict[str, Any]) -> None:
-    expected_target = "object_motion_causality_specificity"
+    supported_targets = {
+        "object_motion_causality_specificity",
+        "tactile_inevitability_gap",
+    }
+    candidate_target = (
+        candidate.get("selected_residual_target_id")
+        or candidate.get("target_scope")
+        or candidate.get("target_movement")
+    )
     checks = [
         (
             candidate.get("packet_kind") == "bounded_macro_recomposition",
@@ -1927,10 +1935,8 @@ def _validate_pending_candidate_target(candidate: dict[str, Any]) -> None:
             "target candidate is not pending reader-state supersession evidence",
         ),
         (
-            candidate.get("selected_residual_target_id") == expected_target
-            or candidate.get("target_scope") == expected_target
-            or candidate.get("target_movement") == expected_target,
-            "target candidate is not the object_motion_causality_specificity residual target",
+            candidate_target in supported_targets,
+            "target candidate is not a supported residual target",
         ),
     ]
     for passed, message in checks:
