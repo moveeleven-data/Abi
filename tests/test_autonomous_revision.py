@@ -86,6 +86,7 @@ from abi.modules.executed_ablation import (
     REVISION_PACKET_KIND_AUTONOMOUS,
     REVISION_PACKET_KIND_BOUNDED_MACRO,
     _build_comparison_consistency_report,
+    _build_tactile_causal_effect_report,
     _load_subject,
     run_executed_ablation,
 )
@@ -5193,6 +5194,123 @@ def test_target_aware_ablation_marks_role_confused_comparator_non_authoritative(
     assert gate["eligible"] is False
 
 
+def test_target_aware_ablation_role_consistency_ignores_negated_guardrails():
+    variant_set = {
+        "target_aware_ablation": True,
+        "variants": [
+            {
+                "variant_id": "executed_ablation_variant_001",
+                "operation_id": "operation_revert_tactile_intervention_to_current_best",
+                "variant_role": "current_best_object_motion_baseline",
+                "evidence_countable": True,
+                "operation_matches_actual_change": True,
+                "planned_only": False,
+            },
+            {
+                "variant_id": "executed_ablation_variant_002",
+                "operation_id": "operation_preserve_object_motion_remove_tactile_force_relation",
+                "variant_role": "tactile_removed_object_motion_preserved_control",
+                "evidence_countable": True,
+                "operation_matches_actual_change": True,
+                "planned_only": False,
+            },
+            {
+                "variant_id": "executed_ablation_variant_003",
+                "operation_id": "operation_decorative_or_abstract_tactile_control",
+                "variant_role": "noncausal_vividness_or_explanation_control",
+                "evidence_countable": True,
+                "operation_matches_actual_change": True,
+                "planned_only": False,
+            },
+        ],
+    }
+    internal = {
+        "comparison_rows": [
+            {
+                "variant_id": "executed_ablation_variant_001",
+                "operation_id": "operation_revert_tactile_intervention_to_current_best",
+                "comparison_summary": (
+                    "Current-best object-motion baseline; restores baseline object-motion "
+                    "causality without tactile force/contact necessity."
+                ),
+                "reader_state_effect_estimate": "baseline anchor, low added tactile inevitability",
+                "rationale": (
+                    "Keeps trace logic while removing the target tactile intervention."
+                ),
+                "risk_notes": (
+                    "Do not mislabel as full tactile candidate or as restored tactile force."
+                ),
+                "comparator_do_not_confuse_with": [
+                    "full tactile candidate",
+                    "restored tactile force/contact",
+                ],
+                "target_role_consistency_requirements": [
+                    "do not say this variant restores tactile force/contact",
+                    "do not count as full tactile intervention",
+                ],
+            },
+            {
+                "variant_id": "executed_ablation_variant_002",
+                "operation_id": "operation_preserve_object_motion_remove_tactile_force_relation",
+                "comparison_summary": (
+                    "Primary target-aware control; preserves object-motion consequences "
+                    "while removing force/contact necessity."
+                ),
+                "reader_state_effect_estimate": (
+                    "likely negative relative to full tactile candidate on first-read "
+                    "physical inevitability"
+                ),
+                "rationale": (
+                    "Tests whether tactile force/contact adds value beyond object-motion "
+                    "trace causality by stripping force/contact wording."
+                ),
+                "risk_notes": "avoid treating as decorative control",
+                "target_role_consistency_requirements": [
+                    "do not describe as full tactile intervention",
+                ],
+            },
+            {
+                "variant_id": "executed_ablation_variant_003",
+                "operation_id": "operation_decorative_or_abstract_tactile_control",
+                "comparison_summary": (
+                    "Decorative or abstract tactile control; substitutes vivid "
+                    "explanation for causal tactile necessity."
+                ),
+                "reader_state_effect_estimate": (
+                    "weak to moderate, but not strong embodied tactile inevitability"
+                ),
+                "rationale": (
+                    "Any gain would be noncausal and weaker than tactile necessity."
+                ),
+                "risk_notes": "Do not count as embodied proof of tactile force.",
+                "target_role_consistency_requirements": [
+                    "do not count as embodied tactile inevitability",
+                    "do not treat as material force/contact proof",
+                ],
+            },
+        ]
+    }
+    old_new = {
+        "tactile_force_contact_adds_value": True,
+        "summary": "target-aware comparison supports tactile value",
+        "rationale": "target-aware comparison supports tactile value",
+        "comparison_basis": "target-aware diagnostic",
+    }
+
+    report = _build_comparison_consistency_report(
+        variant_set=variant_set,
+        internal_comparison=internal,
+        old_new_comparison=old_new,
+        fixture_only=False,
+    )
+
+    assert report["target_role_consistency_checked"] is True
+    assert report["target_role_consistency_passed"] is True
+    assert report["comparison_internal_consistency"] is True
+    assert report["target_role_consistency_failures"] == []
+    assert report["contradictions"] == []
+
+
 def test_target_aware_ablation_supersedes_prior_generic_ablation_metadata(tmp_path):
     config, residual_payload = build_fake_tactile_residual_candidate_packet(tmp_path)
     prior = run_executed_ablation(
@@ -5547,6 +5665,71 @@ def test_target_aware_ablation_consistency_rejects_stale_macro_labels():
     assert report["comparison_internal_consistency"] is False
     assert "proof/no-outside-answer" in failures
     assert "record compression" in failures
+
+
+def test_tactile_causal_report_blocks_when_tactile_removed_control_matches_or_beats():
+    subject = type(
+        "DummyTactileSubject",
+        (),
+        {
+            "target_adapter_id": "tactile_inevitability",
+            "selected_residual_target_id": TACTILE_INEVITABILITY_TARGET_ID,
+            "target_scope": TACTILE_INEVITABILITY_TARGET_ID,
+            "target_movement": TACTILE_INEVITABILITY_TARGET_ID,
+            "selected_region_id": RESIDUAL_WORK_ORDER_SELECTED_REGION_ID,
+            "target_unit_ids": ("tactile_unit_001",),
+            "target_specific_ablation_controls": (
+                "preserve_object_motion_remove_tactile_force_relation",
+            ),
+            "revision_packet_id": "packet_0063",
+            "target_aware_ablation": True,
+            "previous_generic_ablation_packet_id": "packet_0026",
+        },
+    )()
+    variant_set = {
+        "variants": [
+            {
+                "variant_id": "executed_ablation_variant_002",
+                "operation_id": "operation_preserve_object_motion_remove_tactile_force_relation",
+                "evidence_countable": True,
+            }
+        ]
+    }
+    old_new = {
+        "tactile_intervention_has_causal_support": True,
+        "tactile_force_contact_adds_value": True,
+        "object_motion_preserved_tactile_removed_performs_same_or_better": True,
+        "revert_to_current_best_performs_same_or_better": False,
+        "decorative_or_abstract_control_performs_same_or_better": False,
+        "packet_0063_earns_reader_state_eval": True,
+        "candidate_earns_reader_state_eval": True,
+        "revised_improves_over_original": True,
+        "strongest_rival_still_beats_candidate": True,
+    }
+    consistency = {
+        "comparison_internal_consistency": True,
+        "target_role_consistency_checked": True,
+        "target_role_consistency_passed": True,
+        "target_role_consistency_failures": [],
+    }
+
+    report = _build_tactile_causal_effect_report(
+        subject=subject,
+        variant_set=variant_set,
+        old_new_comparison=old_new,
+        consistency_report=consistency,
+        fixture_only=False,
+    )
+
+    assert report["target_role_consistency_passed"] is True
+    assert (
+        report["object_motion_preserved_tactile_removed_performs_same_or_better"]
+        is True
+    )
+    assert report["tactile_intervention_has_causal_support"] is False
+    assert report["packet_0063_earns_reader_state_eval"] is False
+    assert report["candidate_earns_reader_state_eval"] is False
+    assert report["selected_repair_causal_status"] == "noncausal_or_cosmetic"
 
 
 def test_executed_ablation_openai_guard_refuses_before_model_call(tmp_path, monkeypatch):

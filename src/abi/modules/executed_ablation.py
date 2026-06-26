@@ -3055,7 +3055,7 @@ def _target_role_consistency_report(
     operation_alignment_passed = True
     for variant_id, variant in variants_by_id.items():
         row = row_by_id.get(variant_id)
-        row_text = _comparison_row_text(row or {})
+        positive_text = _comparison_positive_claim_text(row or {})
         expected_operation = str(variant.get("operation_id") or "")
         actual_operation = str((row or {}).get("operation_id") or expected_operation)
         operation_aligned = actual_operation == expected_operation
@@ -3067,8 +3067,8 @@ def _target_role_consistency_report(
             row_failures.append(
                 f"row operation_id {actual_operation!r} does not match {expected_operation!r}"
         )
-        row_failures.extend(_target_role_failures_for_row(variant, row_text))
-        row_stale_failures = _stale_tactile_comparator_label_failures(row_text)
+        row_failures.extend(_target_role_failures_for_row(variant, row or {}))
+        row_stale_failures = _stale_tactile_comparator_label_failures(positive_text)
         row_failures.extend(row_stale_failures)
         alignment[variant_id] = {
             "operation_id": expected_operation,
@@ -3096,43 +3096,96 @@ def _target_role_consistency_report(
     }
 
 
-def _comparison_row_text(row: dict[str, Any]) -> str:
-    return " ".join(
-        str(row.get(field) or "")
-        for field in (
-            "comparison_summary",
-            "reader_state_effect_estimate",
-            "rationale",
-            "risk_notes",
-            "summary",
-        )
-    ).lower()
+POSITIVE_COMPARATOR_FIELDS = (
+    "comparison_summary",
+    "reader_state_effect_estimate",
+    "rationale",
+    "summary",
+    "verdict",
+    "comparison_verdict",
+    "selected_verdict",
+    "causal_support",
+    "causal_support_verdict",
+    "ranking",
+    "rank",
+    "rank_reason",
+    "reader_state_verdict",
+)
+
+
+def _comparison_positive_claim_text(row: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for field in POSITIVE_COMPARATOR_FIELDS:
+        chunks.extend(_text_fragments(row.get(field)))
+    risk_notes = _flatten_text(row.get("risk_notes")).strip()
+    if risk_notes and not _text_is_prohibitive_or_guardrail(risk_notes):
+        chunks.append(risk_notes)
+    return " ".join(chunks).lower()
+
+
+def _text_fragments(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        fragments: list[str] = []
+        for item in value.values():
+            fragments.extend(_text_fragments(item))
+        return fragments
+    if isinstance(value, (list, tuple, set)):
+        fragments = []
+        for item in value:
+            fragments.extend(_text_fragments(item))
+        return fragments
+    return [str(value)]
+
+
+def _flatten_text(value: Any) -> str:
+    return " ".join(_text_fragments(value))
+
+
+def _text_is_prohibitive_or_guardrail(text: str) -> bool:
+    lowered = text.lower()
+    guardrail_markers = (
+        "do not",
+        "don't",
+        "avoid",
+        "must not",
+        "should not",
+        "not be",
+        "not count",
+        "not counted",
+        "exclude",
+        "mislabel",
+        "do not mislabel",
+        "do not treat",
+        "do not describe",
+    )
+    return any(marker in lowered for marker in guardrail_markers)
 
 
 def _target_role_failures_for_row(
     variant: dict[str, Any],
-    row_text: str,
+    row: dict[str, Any],
 ) -> list[str]:
     operation_id = str(variant.get("operation_id") or "")
+    positive_text = _comparison_positive_claim_text(row)
     failures: list[str] = []
     if operation_id == TACTILE_REVERT_OPERATION_ID:
-        if _describes_restored_tactile_force(row_text):
+        if _describes_restored_tactile_force(positive_text):
             failures.append(
                 "revert-to-current-best row describes restored tactile force/contact"
             )
-        if "full tactile intervention" in row_text:
+        if _describes_as_full_tactile(positive_text):
             failures.append("revert-to-current-best row is described as full tactile intervention")
     elif operation_id == TACTILE_FORCE_REMOVAL_OPERATION_ID:
-        if "full tactile intervention" in row_text or "full tactile candidate" in row_text:
+        if _describes_as_full_tactile(positive_text):
             failures.append("tactile-removed control is described as full tactile intervention")
-        if _describes_restored_tactile_force(row_text):
+        if _describes_restored_tactile_force(positive_text):
             failures.append("tactile-removed control is described as restoring tactile force/contact")
     elif operation_id == TACTILE_DECORATIVE_OPERATION_ID:
-        if (
-            "embodied tactile causality" in row_text
-            or "embodied tactile inevitability" in row_text
-            or "material necessity" in row_text
-        ):
+        if _describes_as_embodied_tactile_proof(positive_text):
             failures.append(
                 "decorative/abstract control is described as embodied tactile causality"
             )
@@ -3140,19 +3193,117 @@ def _target_role_failures_for_row(
 
 
 def _describes_restored_tactile_force(text: str) -> bool:
-    restored = any(term in text for term in ("restor", "restore", "restores", "restoring"))
-    tactile = any(
-        term in text
-        for term in (
-            "tactile force",
-            "tactile-force",
-            "force/contact",
-            "force contact",
-            "contact force",
-            "tactile contact",
-        )
+    restore_terms = ("restore", "restores", "restored", "restoring")
+    tactile_terms = (
+        "tactile force",
+        "tactile-force",
+        "force/contact",
+        "force contact",
+        "contact force",
+        "tactile contact",
     )
-    return restored and tactile
+    for restore_index in _term_indexes(text, restore_terms):
+        for tactile_index in _term_indexes(text, tactile_terms):
+            distance = abs(tactile_index - restore_index)
+            if distance > 120:
+                continue
+            context = _claim_context(text, min(restore_index, tactile_index))
+            if _context_is_negated_or_comparative(context):
+                continue
+            return True
+    return False
+
+
+def _describes_as_full_tactile(text: str) -> bool:
+    return _contains_positive_role_phrase(
+        text,
+        phrases=("full tactile intervention", "full tactile candidate"),
+        allowed_comparison_markers=(
+            "relative to",
+            "weaker than",
+            "stronger than",
+            "better than",
+            "worse than",
+            "rather than",
+            "compared with",
+            "compared to",
+            "versus",
+            " vs ",
+            "beyond",
+        ),
+    )
+
+
+def _describes_as_embodied_tactile_proof(text: str) -> bool:
+    return _contains_positive_role_phrase(
+        text,
+        phrases=(
+            "embodied tactile causality",
+            "embodied tactile inevitability",
+            "material necessity",
+        ),
+        allowed_comparison_markers=(),
+    )
+
+
+def _contains_positive_role_phrase(
+    text: str,
+    *,
+    phrases: tuple[str, ...],
+    allowed_comparison_markers: tuple[str, ...],
+) -> bool:
+    for phrase in phrases:
+        for index in _term_indexes(text, (phrase,)):
+            context = _claim_context(text, index)
+            if _context_is_negated_or_comparative(context):
+                continue
+            if any(marker in context for marker in allowed_comparison_markers):
+                continue
+            return True
+    return False
+
+
+def _term_indexes(text: str, terms: tuple[str, ...]) -> list[int]:
+    indexes: list[int] = []
+    for term in terms:
+        start = 0
+        while True:
+            index = text.find(term, start)
+            if index < 0:
+                break
+            indexes.append(index)
+            start = index + len(term)
+    return indexes
+
+
+def _claim_context(text: str, index: int, *, window: int = 90) -> str:
+    return text[max(0, index - window) : index + window]
+
+
+def _context_is_negated_or_comparative(context: str) -> bool:
+    negation_markers = (
+        "do not",
+        "don't",
+        "avoid",
+        "must not",
+        "should not",
+        "not ",
+        "no ",
+        "without",
+        "removing",
+        "removes",
+        "removed",
+        "stripping",
+        "strips",
+        "stripped",
+        "absence of",
+        "absent",
+        "lacks",
+        "lacking",
+        "minus",
+        "rather than",
+    )
+    return any(marker in context for marker in negation_markers)
 
 
 def _stale_tactile_comparator_label_failures(
@@ -3168,11 +3319,15 @@ def _stale_tactile_comparator_label_failures(
         "return echo",
         "return-echo",
     )
-    return [
-        f"stale generic macro comparator label used: {term}"
-        for term in stale_terms
-        if term in row_text
-    ]
+    failures = []
+    for term in stale_terms:
+        for index in _term_indexes(row_text, (term,)):
+            context = _claim_context(row_text, index)
+            if _context_is_negated_or_comparative(context):
+                continue
+            failures.append(f"stale generic macro comparator label used: {term}")
+            break
+    return failures
 
 
 def _build_causal_effect_report(
@@ -3260,7 +3415,17 @@ def _build_tactile_causal_effect_report(
         consistency_report["comparison_internal_consistency"]
     )
     raw_support = bool(old_new_comparison["tactile_intervention_has_causal_support"])
-    support = raw_support and role_consistency_passed and internal_consistency_passed
+    tactile_removed_same_or_better = bool(
+        old_new_comparison[
+            "object_motion_preserved_tactile_removed_performs_same_or_better"
+        ]
+    )
+    support = (
+        raw_support
+        and role_consistency_passed
+        and internal_consistency_passed
+        and not tactile_removed_same_or_better
+    )
     if not role_consistency_passed:
         status = "inconclusive_due_to_comparator_role_confusion"
         next_action = "review_target_aware_ablation_comparator_inconsistency"
