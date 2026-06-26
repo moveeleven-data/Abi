@@ -10,7 +10,7 @@ preserved across the build.
 
 Current endpoint in Git history:
 
-- `5dcf829 Fix object-motion generation materiality feedback`
+- `8ab798a Add target-aware residual generation handoff`
 - Active branch during latest changelog update:
   `main`
 - The active runtime direction is the autonomous creative-engine path.
@@ -1317,6 +1317,125 @@ Verification at the object-motion materiality endpoint:
   ineligible.
 - `finalize --profile autonomous_creative_candidate` refused.
 
+## Updates Since The Previous Changelog Endpoint
+
+These entries cover the commits after `5dcf829 Fix object-motion generation
+materiality feedback`.
+
+### README Cleanup
+
+Commit:
+
+- `676cb0e update readme`
+
+Implemented:
+
+- Simplified the top-level README around Abi's current autonomous
+  creative-engine shape.
+- Removed outdated public-facing validation/paper positioning language.
+- Kept the README focused on Abi's architecture, current capabilities, and
+  repository layout.
+
+### Targeted Provisional Reader-State Evaluation
+
+Commit:
+
+- `0e498f8 Add targeted provisional reader-state evaluation`
+
+Implemented:
+
+- Targeted internal reader-state evaluation support for provisional residual
+  candidates.
+- Autonomous evidence synthesis ingestion for those provisional reader-state
+  packets.
+- Tests covering targeted provisional evaluation and its synthesis
+  integration.
+
+### Candidate Evidence Graph Adjudication
+
+Commit:
+
+- `defcdea Adjudicate residual candidate evidence graph in synthesis`
+
+Implemented:
+
+- Candidate evidence graph adjudication inside autonomous evidence synthesis.
+- Explicit comparison of candidate evidence states rather than treating newer
+  residual packets as automatically superior.
+- Regression tests for evidence graph behavior and candidate selection
+  outcomes.
+
+### Loop-Integrity Cleanup Checkpoint
+
+Commit:
+
+- `54dd057 Add loop integrity cleanup checkpoint`
+
+Implemented:
+
+- `loop_integrity_cleanup` packet production.
+- CLI support for creating loop-integrity cleanup checkpoints before further
+  generation.
+- Controller state support for the cleanup checkpoint phase.
+- Tests proving cleanup packets preserve fail-closed loop behavior.
+
+### Cleanup-Aware Supervised Strategy Handoff
+
+Commit:
+
+- `12cb7e0 Add cleanup-aware supervised strategy handoff`
+
+Implemented:
+
+- Cleanup-aware supervised next-cycle authorization.
+- Cleanup-aware next-target strategy planning.
+- Residual target selection updates that account for cleanup packet state.
+- Guardrails preventing follow-on generation from proceeding without the
+  expected cleanup and authorization evidence.
+
+### Target-Aware Residual Generation Handoff
+
+Commit:
+
+- `8ab798a Add target-aware residual generation handoff`
+
+Implemented:
+
+- Shared residual target adapter registry in `residual_targets.py`.
+- Target-aware support for:
+  - object-motion causality specificity
+  - tactile inevitability gaps
+- Generic residual intervention generator schema and OpenAI adapter prompt path.
+- Target-aware residual work-order planning with:
+  - target adapter IDs
+  - target adapter versions
+  - work-order contract versions
+  - semantic preflight checks
+  - target-unit validation
+  - supersession metadata for stale work orders
+- Target-aware residual generation authorization with a recorded
+  `residual_generation_contract`.
+- Target-aware residual candidate generation dispatch.
+- Tactile validation that rejects decorative, generic, abstract, or
+  object-motion-relabel outputs when the selected target is tactile
+  inevitability.
+- Internal reader-state loader compatibility for supported residual target
+  packet types.
+
+Verification at this endpoint:
+
+- `ruff check .` passed.
+- `pytest` passed with 391 tests.
+- Planning from
+  `runs\run_8fa54199f23f3d8e\residual_target_selection\packet_0003` produced
+  `residual_work_order\packet_0005`.
+- The corrected tactile work order superseded stale `packet_0004` without
+  making model calls.
+- `gate list` succeeded.
+- `finalization status --profile autonomous_creative_candidate` remained
+  ineligible.
+- `finalize --profile autonomous_creative_candidate` refused.
+
 ## Current Runtime Surface
 
 The current repo includes these active areas:
@@ -1345,9 +1464,11 @@ The current repo includes these active areas:
 - supervised next-cycle authorization
 - authorization-aware next-target planning
 - narrow residual target selection
-- object-motion residual work-order planning
+- target-aware residual work-order planning
 - supervised residual generation authorization
-- one-shot object-motion residual candidate generation
+- one-shot target-aware residual candidate generation
+- residual target adapters for object-motion causality and tactile
+  inevitability gaps
 - model-driver demos and model-call inspection
 - guarded live paths behind explicit opt-in
 
