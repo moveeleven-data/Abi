@@ -1069,6 +1069,19 @@ def retarget_cleanup_chain_to_proof(
     rewrite_payload(loop_dir / "completed_cycle_map.json", _update_cycle_map)
 
 
+def build_completed_tactile_cleanup_chain(tmp_path: Path):
+    chain = build_completed_tactile_residual_loop_review_chain(tmp_path)
+    cleanup = run_loop_integrity_cleanup(
+        chain["config"],
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert cleanup.exit_code == 0
+    assert cleanup.payload["accepted"] is True
+    chain["cleanup"] = cleanup.payload
+    return chain
+
+
 def build_object_event_strategy_chain(tmp_path: Path):
     chain = build_next_target_strategy_ready_chain(tmp_path)
     strategy = run_next_target_strategy(
@@ -13378,6 +13391,212 @@ def test_cleanup_aware_authorization_accepts_latest_cleanup_and_blocks_reuse(tmp
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
     assert len(after_calls) == len(before_calls)
+
+
+def test_cleanup_aware_authorization_accepts_target_aware_cleanup_cycle(tmp_path):
+    chain = build_completed_tactile_cleanup_chain(tmp_path)
+    config = chain["config"]
+    first_cleanup = chain["cleanup"]
+    second_cleanup = run_loop_integrity_cleanup(
+        config,
+        loop_review_packet=Path(str(chain["residual_loop_review"]["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert second_cleanup.exit_code == 0
+
+    stale = run_supervised_cycle_authorization(
+        config,
+        loop_cleanup_packet=Path(str(first_cleanup["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+    assert stale.exit_code == 1
+    assert stale.payload["accepted"] is False
+    assert "stale" in stale.payload["message"]
+    assert str(second_cleanup.payload["packet_dir"]) in stale.payload["message"]
+
+    generation_decision = run_supervised_cycle_authorization(
+        config,
+        loop_cleanup_packet=Path(str(second_cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="pause_generation",
+    )
+    assert generation_decision.exit_code == 1
+    assert generation_decision.payload["accepted"] is False
+    assert "only supports --decision authorize_next_strategy_only" in (
+        generation_decision.payload["message"]
+    )
+
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_supervised_cycle_authorization(
+        config,
+        loop_cleanup_packet=Path(str(second_cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_kind"] == "loop_cleanup"
+    assert result.payload["source_loop_cleanup_packet_id"] == second_cleanup.payload[
+        "packet_id"
+    ]
+    assert result.payload["source_loop_review_packet_id"] == chain[
+        "residual_loop_review"
+    ]["packet_id"]
+    assert result.payload["source_synthesis_packet_id"] == chain["residual_synthesis"][
+        "packet_id"
+    ]
+    assert result.payload["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert result.payload["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["target_adapter_id"] == "tactile_inevitability"
+    assert result.payload["target_scope"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert result.payload["next_strategy_authorized"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["ready_for_supervised_next_strategy"] is True
+    assert result.payload["ready_for_supervised_candidate_generation"] is False
+    assert result.payload["ready_for_full_autonomous_loop_controller"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        "plan_next_target_from_cleanup_authorization"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    manifest = read_payload(
+        packet_dir / "supervised_cycle_authorization_subject_manifest.json"
+    )
+    assert manifest["source_loop_cleanup_packet_id"] == second_cleanup.payload[
+        "packet_id"
+    ]
+    assert manifest["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert manifest["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert manifest["target_adapter_id"] == "tactile_inevitability"
+
+    cleanup_report = read_payload(packet_dir / "cleanup_resolution_report.json")
+    assert cleanup_report["current_best_candidate_packet_id"] == chain[
+        "residual_candidate"
+    ]["packet_id"]
+    assert cleanup_report["proof_packet_id"] == chain["residual_proof"]["packet_id"]
+    assert cleanup_report["reader_state_packet_id"] == chain["residual_reader_state"][
+        "packet_id"
+    ]
+    assert cleanup_report["selected_residual_target_id"] == (
+        TACTILE_INEVITABILITY_TARGET_ID
+    )
+    assert cleanup_report["target_adapter_id"] == "tactile_inevitability"
+    assert cleanup_report["stale_prior_cycle_summary"][
+        "prior_cycle_entries_recorded"
+    ] is True
+
+    constraints = read_payload(packet_dir / "next_cycle_scope_constraints.json")
+    assert constraints["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert constraints["target_adapter_id"] == "tactile_inevitability"
+    assert constraints["next_generation_authorized"] is False
+
+    packet = read_payload(packet_dir / "supervised_cycle_authorization_packet.json")
+    assert packet["source_loop_cleanup_packet_id"] == second_cleanup.payload["packet_id"]
+    assert packet["current_best_candidate_packet_id"] == chain["residual_candidate"][
+        "packet_id"
+    ]
+    assert packet["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
+    assert packet["target_adapter_id"] == "tactile_inevitability"
+    assert packet["next_strategy_authorized"] is True
+    assert packet["next_generation_authorized"] is False
+    assert packet["candidate_generated"] is False
+    assert packet["model_calls"] == 0
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_message"),
+    [
+        ("next_generation_authorized", "authorizes generation directly"),
+        ("finalization_eligible", "finality or phase-shift"),
+        ("phase_shift_claim", "finality or phase-shift"),
+        ("fixture_proof", "proof packet is fixture-only"),
+        ("fixture_reader_state", "reader-state packet is fixture-only"),
+        ("generic_proof", "target-aware proof"),
+        ("role_failed_proof", "target role consistency"),
+    ],
+)
+def test_cleanup_aware_authorization_refuses_invalid_target_aware_cleanup(
+    tmp_path,
+    mutation,
+    expected_message,
+):
+    chain = build_completed_tactile_cleanup_chain(tmp_path)
+    cleanup_dir = Path(str(chain["cleanup"]["packet_dir"]))
+
+    if mutation == "next_generation_authorized":
+        rewrite_payload(
+            cleanup_dir / "loop_integrity_cleanup_packet.json",
+            lambda payload: payload.__setitem__("next_generation_authorized", True),
+        )
+    elif mutation == "finalization_eligible":
+        rewrite_payload(
+            cleanup_dir / "loop_integrity_cleanup_packet.json",
+            lambda payload: payload.__setitem__("finalization_eligible", True),
+        )
+    elif mutation == "phase_shift_claim":
+        rewrite_payload(
+            cleanup_dir / "loop_integrity_cleanup_packet.json",
+            lambda payload: payload.__setitem__("no_phase_shift_claim", False),
+        )
+    elif mutation == "fixture_proof":
+        mark_packet_fixture_only(Path(str(chain["residual_proof"]["packet_dir"])))
+    elif mutation == "fixture_reader_state":
+        mark_packet_fixture_only(
+            Path(str(chain["residual_reader_state"]["packet_dir"]))
+        )
+    elif mutation == "generic_proof":
+        _rewrite_tactile_proof_as_generic_non_authoritative(chain["residual_proof"])
+    elif mutation == "role_failed_proof":
+        _rewrite_tactile_proof_as_role_consistency_failed(chain["residual_proof"])
+
+    result = run_supervised_cycle_authorization(
+        chain["config"],
+        loop_cleanup_packet=cleanup_dir,
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["next_strategy_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
 
 
 def test_plan_next_target_consumes_cleanup_aware_authorization(tmp_path):

@@ -65,14 +65,6 @@ REQUIRED_LOOP_REVIEW_ARTIFACTS = (
 
 REQUIRED_LOOP_CLEANUP_ARTIFACTS = LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES
 
-KNOWN_RESIDUAL_RUN_ID = "run_8fa54199f23f3d8e"
-KNOWN_LOOP_CLEANUP_PACKET_ID = "packet_0002"
-KNOWN_CURRENT_BEST_PACKET_ID = "packet_0061"
-KNOWN_PROOF_PACKET_ID = "packet_0023"
-KNOWN_READER_STATE_PACKET_ID = "packet_0011"
-KNOWN_SOURCE_SYNTHESIS_PACKET_ID = "packet_0026"
-KNOWN_LOOP_REVIEW_PACKET_ID = "packet_0006"
-
 
 @dataclass(frozen=True)
 class SupervisedCycleAuthorizationResult:
@@ -104,6 +96,10 @@ class SupervisedCycleAuthorizationSubject:
     reader_state_packet_dir: str
     source_synthesis_packet_id: str
     source_synthesis_packet_dir: str
+    selected_residual_target_id: str | None
+    target_adapter_id: str | None
+    target_scope: str | None
+    target_movement: str | None
     completed_cycles: int
     strongest_rival_still_blocks: bool
     source_parent_ids: tuple[str, ...]
@@ -426,6 +422,10 @@ def _load_loop_review_subject(
             or ""
         ),
         source_synthesis_packet_dir=str(manifest.get("source_synthesis_packet_dir") or ""),
+        selected_residual_target_id=None,
+        target_adapter_id=None,
+        target_scope=None,
+        target_movement=None,
         completed_cycles=int(loop_packet.get("completed_cycle_count") or loop_packet.get("completed_cycles") or 0),
         strongest_rival_still_blocks=bool(
             loop_packet.get("strongest_rival_still_blocks")
@@ -474,35 +474,24 @@ def _load_cleanup_subject(
         "cleanup packet missing source loop-review packet ID",
     )
     cleanup_packet_id = str(cleanup_packet.get("packet_id") or loop_cleanup_packet_dir.name)
-
-    if run_id == KNOWN_RESIDUAL_RUN_ID:
-        expected = {
-            "cleanup packet": (cleanup_packet_id, KNOWN_LOOP_CLEANUP_PACKET_ID),
-            "current best candidate": (
-                current_best_packet_id,
-                KNOWN_CURRENT_BEST_PACKET_ID,
-            ),
-            "proof packet": (proof_packet_id, KNOWN_PROOF_PACKET_ID),
-            "reader-state packet": (reader_state_packet_id, KNOWN_READER_STATE_PACKET_ID),
-            "source synthesis packet": (
-                source_synthesis_packet_id,
-                KNOWN_SOURCE_SYNTHESIS_PACKET_ID,
-            ),
-            "source loop-review packet": (
-                loop_review_packet_id,
-                KNOWN_LOOP_REVIEW_PACKET_ID,
-            ),
-        }
-        mismatches = [
-            f"{label} is {actual}, expected {expected_value}"
-            for label, (actual, expected_value) in expected.items()
-            if actual != expected_value
-        ]
-        if mismatches:
-            raise ValueError(
-                "Supervised cycle authorization refused; cleanup checkpoint "
-                f"does not match the authoritative residual state: {'; '.join(mismatches)}."
-            )
+    selected_residual_target_id = _first_string(
+        cleanup_packet.get("selected_residual_target_id"),
+        checkpoint.get("selected_residual_target_id"),
+    )
+    target_adapter_id = _first_string(
+        cleanup_packet.get("target_adapter_id"),
+        checkpoint.get("target_adapter_id"),
+    )
+    target_scope = _first_string(
+        cleanup_packet.get("target_scope"),
+        checkpoint.get("target_scope"),
+    )
+    target_movement = _first_string(
+        cleanup_packet.get("target_movement"),
+        checkpoint.get("target_movement"),
+        selected_residual_target_id,
+        target_scope,
+    )
 
     current_best_packet_dir = _resolve_packet_dir(
         config=config,
@@ -523,7 +512,7 @@ def _load_cleanup_subject(
         packet_id=proof_packet_id,
         preferred=checkpoint.get("proof_packet_dir"),
     )
-    _require_packet_file(
+    proof_payload = _require_packet_file(
         proof_packet_dir,
         "executed_ablation_packet.json",
         "proof packet cannot be resolved",
@@ -535,7 +524,7 @@ def _load_cleanup_subject(
         packet_id=reader_state_packet_id,
         preferred=checkpoint.get("reader_state_packet_dir"),
     )
-    _require_packet_file(
+    reader_state_payload = _require_packet_file(
         reader_state_packet_dir,
         "internal_reader_state_eval_packet.json",
         "reader-state packet cannot be resolved",
@@ -550,10 +539,35 @@ def _load_cleanup_subject(
             or checkpoint.get("synthesis_packet_dir")
         ),
     )
-    _require_packet_file(
+    source_synthesis_payload = _require_packet_file(
         source_synthesis_packet_dir,
         "autonomous_evidence_synthesis_packet.json",
         "source synthesis cannot be resolved",
+    )
+    current_best = _best_current_candidate_from_synthesis(
+        source_synthesis_packet_dir,
+        source_synthesis_payload,
+    )
+    _validate_cleanup_chain_matches_synthesis(
+        cleanup_current_best=current_best_packet_id,
+        cleanup_proof=proof_packet_id,
+        cleanup_reader=reader_state_packet_id,
+        cleanup_target=selected_residual_target_id,
+        cleanup_adapter=target_adapter_id,
+        source_synthesis_payload=source_synthesis_payload,
+        current_best=current_best,
+    )
+    _validate_cleanup_evidence_packets(
+        current_best=current_best,
+        cleanup_current_best=current_best_packet_id,
+        cleanup_proof=proof_packet_id,
+        cleanup_reader=reader_state_packet_id,
+        selected_residual_target_id=selected_residual_target_id,
+        target_adapter_id=target_adapter_id,
+        proof_payload=proof_payload,
+        proof_packet_dir=proof_packet_dir,
+        reader_state_payload=reader_state_payload,
+        reader_state_packet_dir=reader_state_packet_dir,
     )
     loop_review_packet_dir = _resolve_packet_dir(
         config=config,
@@ -593,6 +607,17 @@ def _load_cleanup_subject(
             "Supervised cycle authorization refused; cleanup packet is stale. "
             f"Use the later cleanup checkpoint: {later_cleanup}."
         )
+    superseding_cleanup = _later_cleanup_superseding_current_best(
+        config,
+        run_id=run_id,
+        cleanup_packet_id=cleanup_packet_id,
+        current_best_packet_id=current_best_packet_id,
+    )
+    if superseding_cleanup is not None:
+        raise ValueError(
+            "Supervised cycle authorization refused; cleanup packet is stale. "
+            f"Use the later cleanup checkpoint: {superseding_cleanup}."
+        )
 
     cleanup_path = loop_cleanup_packet_dir / "loop_integrity_cleanup_packet.json"
     loop_path = loop_review_packet_dir / "evidence_loop_review_packet.json"
@@ -630,6 +655,10 @@ def _load_cleanup_subject(
         reader_state_packet_dir=str(reader_state_packet_dir),
         source_synthesis_packet_id=source_synthesis_packet_id,
         source_synthesis_packet_dir=str(source_synthesis_packet_dir),
+        selected_residual_target_id=selected_residual_target_id or None,
+        target_adapter_id=target_adapter_id or None,
+        target_scope=target_scope or None,
+        target_movement=target_movement or None,
         completed_cycles=int(
             loop_packet.get("completed_cycle_count")
             or loop_packet.get("completed_cycles")
@@ -800,6 +829,212 @@ def _validate_cleanup_chain_matches_loop_review(
         )
 
 
+def _best_current_candidate_from_synthesis(
+    source_synthesis_packet_dir: Path,
+    source_synthesis_payload: dict[str, Any],
+) -> dict[str, Any]:
+    _validate_payload_no_final_or_phase_claim(
+        source_synthesis_payload,
+        "source synthesis",
+    )
+    current_best = _as_dict(source_synthesis_payload.get("best_current_candidate"))
+    if current_best:
+        return current_best
+    best_selection = _optional_packet_payload(
+        source_synthesis_packet_dir,
+        "best_current_candidate_selection.json",
+    )
+    current_best = _as_dict(best_selection.get("selected_best_candidate"))
+    if current_best:
+        return current_best
+    raise ValueError(
+        "Supervised cycle authorization refused; source synthesis does not expose "
+        "best_current_candidate."
+    )
+
+
+def _validate_cleanup_chain_matches_synthesis(
+    *,
+    cleanup_current_best: str,
+    cleanup_proof: str,
+    cleanup_reader: str,
+    cleanup_target: str,
+    cleanup_adapter: str,
+    source_synthesis_payload: dict[str, Any],
+    current_best: dict[str, Any],
+) -> None:
+    _validate_payload_no_final_or_phase_claim(
+        source_synthesis_payload,
+        "source synthesis",
+    )
+    expected = {
+        "current best candidate": (
+            cleanup_current_best,
+            _first_string(current_best.get("packet_id")),
+        ),
+        "proof packet": (cleanup_proof, _first_string(current_best.get("proof_packet_id"))),
+        "reader-state packet": (
+            cleanup_reader,
+            _first_string(current_best.get("reader_state_packet_id")),
+        ),
+    }
+    if cleanup_target:
+        expected["selected residual target"] = (
+            cleanup_target,
+            _first_string(
+                current_best.get("selected_residual_target_id"),
+                current_best.get("target_movement"),
+                current_best.get("target_scope"),
+            ),
+        )
+    if cleanup_adapter:
+        expected["target adapter"] = (
+            cleanup_adapter,
+            _first_string(current_best.get("target_adapter_id")),
+        )
+    mismatches = [
+        f"{label} is {actual}, source synthesis has {expected_value}"
+        for label, (actual, expected_value) in expected.items()
+        if expected_value and actual != expected_value
+    ]
+    if mismatches:
+        raise ValueError(
+            "Supervised cycle authorization refused; cleanup checkpoint does not "
+            f"match source synthesis state: {'; '.join(mismatches)}."
+        )
+
+
+def _validate_cleanup_evidence_packets(
+    *,
+    current_best: dict[str, Any],
+    cleanup_current_best: str,
+    cleanup_proof: str,
+    cleanup_reader: str,
+    selected_residual_target_id: str,
+    target_adapter_id: str,
+    proof_payload: dict[str, Any],
+    proof_packet_dir: Path,
+    reader_state_payload: dict[str, Any],
+    reader_state_packet_dir: Path,
+) -> None:
+    _validate_payload_no_final_or_phase_claim(proof_payload, "proof packet")
+    _validate_payload_no_final_or_phase_claim(reader_state_payload, "reader-state packet")
+    if _packet_fixture_only(proof_packet_dir, "executed_ablation_packet.json"):
+        raise ValueError(
+            "Supervised cycle authorization refused; proof packet is fixture-only "
+            "and cannot authorize the next strategy."
+        )
+    if _packet_fixture_only(
+        reader_state_packet_dir,
+        "internal_reader_state_eval_packet.json",
+    ):
+        raise ValueError(
+            "Supervised cycle authorization refused; reader-state packet is "
+            "fixture-only and cannot authorize the next strategy."
+        )
+    _validate_match(
+        label="proof source revision",
+        actual=_required_text(
+            proof_payload.get("source_revision_packet_id"),
+            "proof packet missing source_revision_packet_id",
+        ),
+        expected=cleanup_current_best,
+    )
+    selected_reader_candidate = _required_text(
+        reader_state_payload.get("selected_candidate_packet_id")
+        or reader_state_payload.get("evaluated_candidate_packet_id"),
+        "reader-state packet missing selected candidate packet ID",
+    )
+    _validate_match(
+        label="reader-state selected candidate",
+        actual=selected_reader_candidate,
+        expected=cleanup_current_best,
+    )
+    _validate_match(
+        label="reader-state proof packet",
+        actual=_required_text(
+            reader_state_payload.get("proof_packet_id"),
+            "reader-state packet missing proof_packet_id",
+        ),
+        expected=cleanup_proof,
+    )
+    if reader_state_payload.get("packet_id") not in (None, "", cleanup_reader):
+        _validate_match(
+            label="reader-state packet self ID",
+            actual=str(reader_state_payload.get("packet_id")),
+            expected=cleanup_reader,
+        )
+    requires_target_aware_proof = (
+        current_best.get("proof_target_aware_ablation") is True
+        or target_adapter_id == "tactile_inevitability"
+    )
+    if requires_target_aware_proof:
+        if proof_payload.get("target_aware_ablation") is not True:
+            raise ValueError(
+                "Supervised cycle authorization refused; target-aware current "
+                "best requires target-aware proof, but proof is generic."
+            )
+        _validate_match(
+            label="target adapter",
+            actual=_required_text(
+                proof_payload.get("target_adapter_id"),
+                "proof packet missing target_adapter_id",
+            ),
+            expected=_required_text(
+                target_adapter_id,
+                "cleanup checkpoint missing target_adapter_id",
+            ),
+        )
+        _validate_match(
+            label="selected residual target",
+            actual=_required_text(
+                proof_payload.get("selected_residual_target_id"),
+                "proof packet missing selected_residual_target_id",
+            ),
+            expected=_required_text(
+                selected_residual_target_id,
+                "cleanup checkpoint missing selected_residual_target_id",
+            ),
+        )
+        if proof_payload.get("target_role_consistency_passed") is not True:
+            raise ValueError(
+                "Supervised cycle authorization refused; target-aware proof "
+                "failed target role consistency."
+            )
+        if proof_payload.get("comparison_internal_consistency") is not True:
+            raise ValueError(
+                "Supervised cycle authorization refused; target-aware proof "
+                "failed comparison internal consistency."
+            )
+    causal_status = proof_payload.get("selected_repair_causal_status")
+    if causal_status not in ("useful_but_insufficient", "stronger_than_prior"):
+        raise ValueError(
+            "Supervised cycle authorization refused; proof packet is not useful "
+            f"current-cycle evidence: {causal_status}."
+        )
+
+
+def _validate_payload_no_final_or_phase_claim(payload: dict[str, Any], label: str) -> None:
+    if (
+        payload.get("finalization_eligible") is True
+        or payload.get("phase_shift_claim") is True
+        or payload.get("no_phase_shift_claim") is False
+        or payload.get("candidate_final") is True
+    ):
+        raise ValueError(
+            "Supervised cycle authorization refused; "
+            f"{label} contains finality or phase-shift claim fields."
+        )
+
+
+def _validate_match(*, label: str, actual: str, expected: str) -> None:
+    if actual != expected:
+        raise ValueError(
+            "Supervised cycle authorization refused; "
+            f"{label} mismatch: found {actual}, expected {expected}."
+        )
+
+
 def _resolve_packet_dir(
     *,
     config: AbiConfig,
@@ -831,6 +1066,32 @@ def _require_packet_file(
     if not isinstance(payload, dict):
         raise ValueError(f"Supervised cycle authorization refused; malformed packet: {path}.")
     return payload
+
+
+def _optional_packet_payload(packet_dir: object, file_name: str) -> dict[str, Any]:
+    if not isinstance(packet_dir, (str, Path)) or not str(packet_dir):
+        return {}
+    path = Path(packet_dir) / file_name
+    if not path.exists():
+        return {}
+    envelope = read_json_file(path)
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    return payload if isinstance(payload, dict) else {}
+
+
+def _packet_fixture_only(packet_dir: Path, file_name: str) -> bool:
+    path = packet_dir / file_name
+    if not path.exists():
+        return False
+    envelope = read_json_file(path)
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    return bool(
+        isinstance(envelope, dict)
+        and (
+            envelope.get("fixture_only") is True
+            or (isinstance(payload, dict) and payload.get("fixture_only") is True)
+        )
+    )
 
 
 def _later_cleanup_for_same_chain(
@@ -866,6 +1127,54 @@ def _later_cleanup_for_same_chain(
     return None
 
 
+def _later_cleanup_superseding_current_best(
+    config: AbiConfig,
+    *,
+    run_id: str,
+    cleanup_packet_id: str,
+    current_best_packet_id: str,
+) -> Path | None:
+    base_dir = config.run_dir(run_id) / "loop_integrity_cleanup"
+    if not base_dir.exists():
+        return None
+    packet_dirs = sorted(
+        [child for child in base_dir.glob("packet_*") if child.is_dir()],
+        key=lambda path: path.name,
+    )
+    for packet_dir in reversed(packet_dirs):
+        if packet_dir.name <= cleanup_packet_id:
+            continue
+        packet_payload = _optional_packet_payload(
+            packet_dir,
+            "loop_integrity_cleanup_packet.json",
+        )
+        if not packet_payload:
+            continue
+        stale_registry = _as_dict(packet_payload.get("stale_recommendation_registry"))
+        stale_entries = stale_registry.get("stale_recommendations")
+        if not isinstance(stale_entries, list):
+            stale_file = _optional_packet_payload(
+                packet_dir,
+                "stale_recommendation_registry.json",
+            )
+            stale_entries = stale_file.get("stale_recommendations")
+        if not isinstance(stale_entries, list):
+            continue
+        for entry in stale_entries:
+            if not isinstance(entry, dict):
+                continue
+            if (
+                entry.get("reference_packet_id") == current_best_packet_id
+                and entry.get("reference_type")
+                in {
+                    "prior_best_candidate",
+                    "historical_completed_cycle_candidate",
+                }
+            ):
+                return packet_dir
+    return None
+
+
 def _build_subject_manifest(
     subject: SupervisedCycleAuthorizationSubject,
     packet_dir: Path,
@@ -894,6 +1203,10 @@ def _build_subject_manifest(
         "proof_packet_dir": subject.proof_packet_dir,
         "reader_state_packet_id": subject.reader_state_packet_id,
         "reader_state_packet_dir": subject.reader_state_packet_dir,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "completed_cycles": subject.completed_cycles,
         "strongest_rival_still_blocks": subject.strongest_rival_still_blocks,
         "finalization_eligible": False,
@@ -927,6 +1240,10 @@ def _build_loop_review_intake_summary(
         "proof_packet_id": subject.proof_packet_id,
         "reader_state_packet_id": subject.reader_state_packet_id,
         "source_synthesis_packet_id": subject.source_synthesis_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "completed_cycles": subject.completed_cycles,
         "artifact_count_consistent": counts.get("artifact_count_consistent") is True,
         "produced_artifacts": counts.get("produced_artifacts"),
@@ -963,6 +1280,10 @@ def _build_operator_review_record(
         "reviewed_loop_review_packet_id": subject.loop_review_packet_id,
         "reviewed_loop_review_packet_dir": str(subject.loop_review_packet_dir),
         "decision": decision,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "not_final_operator_approval": True,
         "not_human_validation": True,
         "does_not_authorize_finalization": True,
@@ -1016,6 +1337,15 @@ def _build_cleanup_resolution_report(
         if subject.loop_cleanup_packet_dir
         else None,
         "cleanup_checkpoint_consumed": cleanup_checkpoint_consumed,
+        "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
+        "proof_packet_id": subject.proof_packet_id,
+        "reader_state_packet_id": subject.reader_state_packet_id,
+        "source_synthesis_packet_id": subject.source_synthesis_packet_id,
+        "source_loop_review_packet_id": subject.loop_review_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "explicit_cleanup_readiness_used": cleanup_checkpoint_consumed,
         "loop_integrity_cleanup_completed": cleanup_packet.get(
             "loop_integrity_cleanup_completed"
@@ -1048,6 +1378,7 @@ def _build_cleanup_resolution_report(
             "older source packets only; fresh loop-review output is count-consistent"
         ),
         "fresh_loop_integrity_cleanup_passed": fresh_cleanup_passed,
+        "stale_prior_cycle_summary": _stale_prior_cycle_summary(subject),
         "full_autonomous_loop_cleanup_complete": False,
         "supervised_strategy_step_cleanup_complete": fresh_cleanup_passed,
         "full_autonomous_loop_controller_remains_not_ready": True,
@@ -1090,6 +1421,8 @@ def _build_supervised_next_cycle_readiness_report(
             f"current best candidate {subject.current_best_candidate_packet_id} exists",
             f"proof packet {subject.proof_packet_id} is linked",
             f"reader-state packet {subject.reader_state_packet_id} is linked",
+            f"selected residual target: {subject.selected_residual_target_id}",
+            f"target adapter: {subject.target_adapter_id}",
             f"completed cycles mapped: {subject.completed_cycles}",
             "drift risk was assessed by loop review",
             "no stale recommendation is currently detected",
@@ -1103,6 +1436,10 @@ def _build_supervised_next_cycle_readiness_report(
             cleanup_report=cleanup_report,
         ),
         "decision": decision,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -1134,6 +1471,14 @@ def _build_next_cycle_scope_constraints(
         ],
         "candidate_generation_requires_later_authorization_packet": True,
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
+        "proof_packet_id": subject.proof_packet_id,
+        "reader_state_packet_id": subject.reader_state_packet_id,
+        "source_synthesis_packet_id": subject.source_synthesis_packet_id,
+        "source_loop_review_packet_id": subject.loop_review_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "strongest_rival_still_blocks": subject.strongest_rival_still_blocks,
         "reader_state_gain_remains_partial": True,
         "candidate_generated": False,
@@ -1231,6 +1576,16 @@ def _build_authorization_gate_report(
         "ready_for_full_autonomous_loop_controller": False,
         "next_strategy_authorized": next_strategy_authorized,
         "next_generation_authorized": False,
+        "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
+        "proof_packet_id": subject.proof_packet_id,
+        "reader_state_packet_id": subject.reader_state_packet_id,
+        "source_synthesis_packet_id": subject.source_synthesis_packet_id,
+        "source_loop_review_packet_id": subject.loop_review_packet_id,
+        "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "candidate_generated": False,
         "model_calls": 0,
         "no_phase_shift_claim": True,
@@ -1301,6 +1656,10 @@ def _build_packet_summary(
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "proof_packet_id": subject.proof_packet_id,
         "reader_state_packet_id": subject.reader_state_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "completed_cycles": subject.completed_cycles,
         "operator_reviewed": True,
         "decision": decision,
@@ -1362,6 +1721,10 @@ def _result_payload(
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "proof_packet_id": subject.proof_packet_id,
         "reader_state_packet_id": subject.reader_state_packet_id,
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "target_adapter_id": subject.target_adapter_id,
+        "target_scope": subject.target_scope,
+        "target_movement": subject.target_movement,
         "operator_reviewed": True,
         "decision": decision,
         "next_strategy_authorized": packet["next_strategy_authorized"],
@@ -1400,6 +1763,52 @@ def _readiness_blockers(
     if cleanup_report["fresh_loop_integrity_cleanup_passed"] is not True:
         blockers.append("fresh loop-integrity cleanup did not pass")
     return blockers
+
+
+def _stale_prior_cycle_summary(
+    subject: SupervisedCycleAuthorizationSubject,
+) -> dict[str, object]:
+    stale_registry = _as_dict(
+        subject.loop_cleanup_payloads.get("stale_recommendation_registry")
+    )
+    entries = stale_registry.get("stale_recommendations")
+    if not isinstance(entries, list):
+        embedded_packet = _as_dict(
+            subject.loop_cleanup_payloads.get("loop_integrity_cleanup_packet")
+        )
+        embedded_registry = _as_dict(
+            embedded_packet.get("stale_recommendation_registry")
+        )
+        entries = embedded_registry.get("stale_recommendations")
+    if not isinstance(entries, list):
+        entries = []
+    selected_entries = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("reference_type")
+        in {
+            "prior_best_candidate",
+            "prior_best_proof",
+            "prior_best_reader_state",
+            "historical_completed_cycle_candidate",
+            "non_authoritative_proof_attempt",
+            "fixture_reader_state_attempt",
+        }
+    ]
+    return {
+        "prior_cycle_entries_recorded": bool(selected_entries),
+        "prior_cycle_entry_count": len(selected_entries),
+        "historical_or_superseded_references": [
+            {
+                "reference_packet_id": entry.get("reference_packet_id"),
+                "reference_type": entry.get("reference_type"),
+                "status": entry.get("status"),
+            }
+            for entry in selected_entries[:20]
+        ],
+        "older_cleanup_chain_not_authoritative": bool(selected_entries),
+    }
 
 
 def _gate_result(
