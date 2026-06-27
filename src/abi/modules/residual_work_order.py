@@ -25,6 +25,7 @@ from abi.packets import (
     read_json_file,
 )
 from abi.modules.residual_targets import (
+    HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     SELECTED_REGION_ID,
     TACTILE_INEVITABILITY_TARGET_ID,
@@ -572,6 +573,18 @@ def _selection_routing_report(
         "routing_normalized_from_selected_target": stale_detected
         and safely_normalized,
         "stale_selection_routing_safely_normalized": safely_normalized,
+        "stale_strategy_current_best_reference_detected": bool(
+            selection_packet.get("stale_strategy_current_best_reference_detected")
+        ),
+        "stale_reference_packet_id": selection_packet.get("stale_reference_packet_id"),
+        "stale_reference_packet_ids": selection_packet.get(
+            "stale_reference_packet_ids",
+            [],
+        ),
+        "authoritative_current_best_packet_id": selection_packet.get(
+            "authoritative_current_best_packet_id"
+        )
+        or selection_packet.get("current_best_candidate_packet_id"),
     }
 
 
@@ -904,6 +917,7 @@ def _region(
         "modification_risk": modification_risk,
         "eligible_for_object_motion_causality_specificity_work": eligible,
         "eligible_for_tactile_inevitability_gap_work": eligible,
+        "eligible_for_hostile_scaffold_visibility_work": eligible,
         "reason": reason,
     }
 
@@ -963,6 +977,81 @@ def _build_diagnostic(
             "finalization_eligible": False,
             "no_phase_shift_claim": True,
             "worker": "tactile_inevitability_diagnostic_v1_controller",
+        }
+    if subject.selected_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return {
+            "selected_residual_target_id": subject.selected_target_id,
+            "current_best_candidate_packet_id": subject.candidate.packet_id,
+            "diagnostic_findings": [
+                {
+                    "category": "overexplanation",
+                    "status": "active_scaffold_visibility_risk",
+                    "evidence": _selected_option_evidence(subject)
+                    or ["reader-state synthesis still marks scaffold pressure active"],
+                },
+                {
+                    "category": "thesis_replacing_artifact",
+                    "status": "active_hostile_reader_risk",
+                    "evidence": [
+                        "future work must let field relations carry meaning before thesis language",
+                    ],
+                },
+                {
+                    "category": "cosmic_silence_as_slogan",
+                    "status": "risk_to_reduce_without_deleting_no_answer_pressure",
+                    "evidence": [
+                        "proof/no-answer pressure remains partial and can become stated rather than embodied",
+                    ],
+                },
+                {
+                    "category": "proof_no_outside_answer_refinement",
+                    "status": "partial_protected_gain",
+                    "evidence": [
+                        "proof/no-answer carry should remain inside objects, not be flattened into explanation",
+                    ],
+                },
+                {
+                    "category": "final_return_echo_reread_strength",
+                    "status": "partial_protected_gain",
+                    "evidence": [
+                        "opening-return relation should be preserved without closing explanation",
+                    ],
+                },
+                {
+                    "category": "strongest_rival_first_read_vividness",
+                    "status": "blocking_pressure_preserved",
+                    "evidence": [
+                        "strongest rival still wins first-read vividness/local embodiment",
+                    ],
+                },
+                {
+                    "category": "local_embodiment_vs_compression_balance",
+                    "status": "target_must_preserve_embodiment",
+                    "evidence": [
+                        "reduce scaffold without compressing record/law/proof/answer into summary",
+                    ],
+                },
+            ],
+            "likely_strongest_candidate_region": SELECTED_REGION_ID,
+            "selected_region_text_excerpt": selected_region.get("text_excerpt"),
+            "opening_and_final_return_protection": (
+                "opening field and final return are protected; only narrow scaffold "
+                "visibility units may be prepared for later generation authorization"
+            ),
+            "proof_no_answer_region_protection": (
+                "proof/no-answer pressure must be preserved as embodied pressure, "
+                "not deleted or made more abstract"
+            ),
+            "summary": (
+                "Hostile scaffold visibility targets visible explanatory pressure "
+                "while preserving packet current-best object field, proof/no-answer, "
+                "and reread gains."
+            ),
+            "candidate_generated": False,
+            "model_calls": 0,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+            "worker": "hostile_scaffold_visibility_diagnostic_v1_controller",
         }
     return {
         "selected_residual_target_id": subject.selected_target_id,
@@ -1043,6 +1132,13 @@ def _build_selected_region(
             "as plausible; it already contains material trace relations, and "
             "reopening it is less risky than reopening the opening, proof, or final return."
         )
+    elif subject.selected_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        selection_reason = (
+            "The strategy evidence marks visible scaffold/explanatory pressure as "
+            "active. The middle recurrence region is the bounded planning anchor, "
+            "with narrow proof and return units protected for later authorized work "
+            "rather than broad rewrite."
+        )
     else:
         selection_reason = (
             "This region already contains object motion and implied consequence; "
@@ -1095,6 +1191,8 @@ def _build_target_unit_map(
 ) -> dict[str, object]:
     if subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID:
         return _build_tactile_target_unit_map(subject, selected_region)
+    if subject.selected_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return _build_hostile_scaffold_target_unit_map(subject, selected_region)
     selected_text = str(selected_region["selected_region_before_text"])
     units = [
         _unit(
@@ -1180,6 +1278,189 @@ def _unit(
             "preserve partial reread transformation",
             "preserve proof/no-answer and final-return gains",
         ],
+    }
+
+
+def _build_hostile_scaffold_target_unit_map(
+    subject: ResidualWorkOrderSubject,
+    selected_region: dict[str, object],
+) -> dict[str, object]:
+    del selected_region
+    paragraphs = _paragraphs(subject.candidate.text)
+    units = [
+        _hostile_scaffold_unit(
+            subject=subject,
+            unit_id="thesis_visible_proof_language_reduction",
+            parent_region_id="middle_recurrence_ordinary_trace_logic",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=1,
+                end=4,
+                needles=("record", "law", "proof", "answer", "pattern"),
+            ),
+            weakness=(
+                "visible thesis/proof language can tell the reader what the field "
+                "means before the field makes it unavoidable"
+            ),
+            allowed_operation=(
+                "reduce explicit thesis/proof naming while preserving local object pressure"
+            ),
+            target_effect=(
+                "reader infers pressure from the object field before explanation names it"
+            ),
+        ),
+        _hostile_scaffold_unit(
+            subject=subject,
+            unit_id="proof_no_answer_embodiment_preservation",
+            parent_region_id="proof_no_outside_answer_region",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=2,
+                end=8,
+                needles=("no answer", "outside", "proof", "silence", "cosmic"),
+            ),
+            weakness=(
+                "proof/no-answer pressure remains partial and can become slogan or abstraction"
+            ),
+            allowed_operation=(
+                "keep no-answer pressure embodied in room/object consequence, not deleted"
+            ),
+            target_effect=(
+                "proof/no-answer carry remains felt without extra explanatory signage"
+            ),
+        ),
+        _hostile_scaffold_unit(
+            subject=subject,
+            unit_id="final_return_echo_without_explanation",
+            parent_region_id="final_return_opening_transformation_region",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=max(len(paragraphs) - 3, 0),
+                end=len(paragraphs) - 1,
+                needles=("return", "beginning", "morning", "changed", "opening"),
+            ),
+            weakness=(
+                "return can explain transformation instead of letting the opening field return changed"
+            ),
+            allowed_operation=(
+                "preserve the return relation while reducing visible explanation of return"
+            ),
+            target_effect=(
+                "final return echoes the opening without announcing the lesson"
+            ),
+        ),
+        _hostile_scaffold_unit(
+            subject=subject,
+            unit_id="hostile_scaffold_risk_reduction",
+            parent_region_id="cross_region_scaffold_visibility",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=0,
+                end=len(paragraphs) - 1,
+                needles=("means", "matters", "pattern", "announcing", "described"),
+            ),
+            weakness=(
+                "hostile reader can see the scaffold when explanation replaces enactment"
+            ),
+            allowed_operation=(
+                "replace explanatory signage with local relation while keeping causal proof"
+            ),
+            target_effect="hostile scaffold visibility decreases without vagueness",
+        ),
+        _hostile_scaffold_unit(
+            subject=subject,
+            unit_id="preserve_table_dust_spoon_saucer_ring_causal_field",
+            parent_region_id="opening_table_dust_spoon_saucer_ring_field",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=0,
+                end=min(2, len(paragraphs) - 1),
+                needles=("table", "dust", "spoon", "saucer", "ring"),
+            ),
+            weakness=(
+                "scaffold reduction must not thin the embodied causal field or delete local objects"
+            ),
+            allowed_operation=(
+                "preserve causal object field while reducing only visible scaffold pressure"
+            ),
+            target_effect=(
+                "object field remains the source of pressure rather than a decorative inventory"
+            ),
+        ),
+    ]
+    return {
+        "selected_residual_target_id": subject.selected_target_id,
+        "unit_map_kind": subject.target_spec.work_order_adapter,
+        **target_adapter_metadata(subject.selected_target_id),
+        "selected_region_id": SELECTED_REGION_ID,
+        "target_units": units,
+        "target_unit_count": len(units),
+        "target_semantic_contract": list(subject.target_spec.operational_definition),
+        "materiality_policy_placeholder": {
+            "policy": "future generation must materially reduce scaffold visibility without deleting embodied pressure",
+            "future_generation_authorized": False,
+        },
+        "ablation_control_plan_placeholder": list(
+            subject.target_spec.target_specific_ablation_controls
+        ),
+        "reader_state_focus_plan_placeholder": list(
+            subject.target_spec.target_specific_reader_state_focus
+        ),
+        "stop_test_policy": target_adapter_metadata(subject.selected_target_id).get(
+            "stop_test_policy"
+        ),
+        "future_generation_requires_separate_authorization": True,
+        "future_generation_authorized": False,
+        "candidate_generated": False,
+        "model_calls": 0,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "worker": "hostile_scaffold_visibility_target_unit_map_v1_controller",
+    }
+
+
+def _hostile_scaffold_unit(
+    *,
+    subject: ResidualWorkOrderSubject,
+    unit_id: str,
+    parent_region_id: str,
+    text: str,
+    weakness: str,
+    allowed_operation: str,
+    target_effect: str,
+) -> dict[str, object]:
+    before_text = text or _excerpt(subject.candidate.text)
+    return {
+        "unit_id": unit_id,
+        "target_unit_id": unit_id,
+        "before_text": before_text,
+        "before_text_sha256": sha256_text(before_text),
+        "parent_region_id": parent_region_id,
+        "source_text_packet_id": subject.candidate.packet_id,
+        "current_best_candidate_packet_id": subject.candidate.packet_id,
+        "weakness": weakness,
+        "allowed_operation": allowed_operation,
+        "forbidden_operation": [
+            "delete proof/no-answer structure",
+            "make prose vaguer",
+            "add decorative vividness",
+            "imitate the rival",
+            "weaken tactile/object pressure",
+            "turn candidate into explanation",
+            "broad rewrite",
+        ],
+        "protected_effects": [
+            f"{subject.candidate.packet_id} as current best candidate",
+            "proof/no-answer pressure",
+            "opening-return relation",
+            "tactile/object field gains",
+            "table/dust/spoon/saucer/ring causal field",
+            "strongest-rival pressure preservation",
+        ],
+        "target_effect": target_effect,
+        "material_change_required": True,
+        "semantic_contract": list(subject.target_spec.operational_definition),
+        "future_generation_authorized": False,
     }
 
 
@@ -1378,7 +1659,19 @@ def _only_strongest_rival_basis(subject: ResidualWorkOrderSubject) -> bool:
     ).lower()
     if any(
         term in descriptor
-        for term in ("tactile", "material", "force", "contact", "object motion")
+        for term in (
+            "tactile",
+            "material",
+            "force",
+            "contact",
+            "object motion",
+            "scaffold",
+            "thesis",
+            "proof",
+            "return",
+            "explanation",
+            "no-answer",
+        )
     ):
         return False
     basis = subject.selected_option.get("source_evidence_basis")
@@ -1653,6 +1946,33 @@ def _current_physical_relation(text: str) -> str:
 def _sentences(text: str) -> list[str]:
     normalized = " ".join(text.split())
     return [sentence.strip() for sentence in re.split(r"(?<=[.!?;])\s+", normalized) if sentence.strip()]
+
+
+def _sentence_for_hostile_unit(
+    paragraphs: list[str],
+    *,
+    start: int,
+    end: int,
+    needles: tuple[str, ...],
+) -> str:
+    if not paragraphs:
+        return ""
+    bounded_start = max(0, min(start, len(paragraphs) - 1))
+    bounded_end = max(bounded_start, min(end, len(paragraphs) - 1))
+    text = "\n\n".join(paragraphs[bounded_start : bounded_end + 1])
+    for sentence in _sentences(text):
+        lowered = sentence.lower()
+        if any(needle.lower() in lowered for needle in needles):
+            return sentence
+    sentences = _sentences(text)
+    return sentences[0] if sentences else text.strip()
+
+
+def _selected_option_evidence(subject: ResidualWorkOrderSubject) -> list[str]:
+    basis = subject.selected_option.get("source_evidence_basis")
+    if not isinstance(basis, list):
+        return []
+    return [str(item) for item in basis if isinstance(item, str) and item]
 
 
 def _tactile_evidence_sentences(text: str) -> list[str]:
@@ -1983,6 +2303,12 @@ def _build_packet_summary(
         "source_selection_packet_id": subject.selection_packet_id,
         "current_best_candidate_packet_id": subject.candidate.packet_id,
         "candidate_text_sha256": subject.candidate.text_sha256,
+        "proof_packet_id": subject.payloads["residual_target_selection_packet"].get(
+            "proof_packet_id"
+        ),
+        "reader_state_packet_id": subject.payloads["residual_target_selection_packet"].get(
+            "reader_state_packet_id"
+        ),
         "selected_residual_target_id": subject.selected_target_id,
         "target_mechanism_description": subject.target_spec.mechanism_description,
         "work_order_adapter": subject.target_spec.work_order_adapter,
@@ -2004,6 +2330,7 @@ def _build_packet_summary(
         ),
         **subject.routing,
         "candidate_generated": False,
+        "model_calls": 0,
         "candidate_generation_authorized": False,
         "future_generation_contract_created": True,
         "next_allowed_action": subject.target_spec.review_action,
@@ -2043,6 +2370,8 @@ def _result_payload(
         },
         "counts": packet["counts"],
         "current_best_candidate_packet_id": subject.candidate.packet_id,
+        "proof_packet_id": packet.get("proof_packet_id"),
+        "reader_state_packet_id": packet.get("reader_state_packet_id"),
         "selected_residual_target_id": subject.selected_target_id,
         "selected_region_id": packet["selected_region_id"],
         "selected_region_sha256": packet["selected_region_sha256"],

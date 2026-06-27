@@ -116,6 +116,9 @@ from abi.modules.residual_target_selection import (
     run_residual_target_selection,
 )
 from abi.modules.residual_targets import (
+    HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION,
+    HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+    HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION,
     OBJECT_MOTION_GENERATION_CONTRACT_VERSION,
     OBJECT_MOTION_WORK_ORDER_CONTRACT_VERSION,
     TACTILE_GENERATION_CONTRACT_VERSION,
@@ -8523,6 +8526,28 @@ def test_residual_target_selection_refuses_without_operator_review(tmp_path):
     assert len(after_calls) == len(before_calls)
 
 
+def test_residual_target_selection_refuses_hostile_scaffold_without_operator_review(
+    tmp_path,
+):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+
+    result = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        operator_reviewed=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["selected_residual_target_id"] == (
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+
+
 def test_residual_target_selection_refuses_invalid_target_id(tmp_path):
     chain = build_residual_target_selection_ready_chain(tmp_path)
     config = chain["config"]
@@ -8762,9 +8787,107 @@ def test_residual_target_selection_accepts_tactile_inevitability_gap(tmp_path):
     assert packet["work_order_adapter"] == "tactile_inevitability"
 
 
+def test_residual_target_selection_accepts_hostile_scaffold_visibility_and_normalizes_stale_best(
+    tmp_path,
+):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    strategy_packet = tmp_path / "strategy_with_stale_current_best_wording"
+    shutil.copytree(Path(str(chain["selection_strategy"]["packet_dir"])), strategy_packet)
+    current_best_id = chain["object_event"]["packet_id"]
+
+    def _add_stale_strategy_text(payload):
+        payload.setdefault("strategy", []).append(
+            "preserve packet_0061 as current best candidate"
+        )
+
+    def _add_stale_protection(payload):
+        payload.setdefault("protected_effects", []).append(
+            "protect packet_0061 partial reread transformation"
+        )
+
+    def _add_stale_ablation_text(payload):
+        payload.setdefault("if_future_candidate_is_generated", []).append(
+            "future ablation should run against packet_0061"
+        )
+
+    rewrite_payload(
+        strategy_packet / "next_intervention_strategy.json",
+        _add_stale_strategy_text,
+    )
+    rewrite_payload(
+        strategy_packet / "protected_effects_and_forbidden_changes.json",
+        _add_stale_protection,
+    )
+    rewrite_payload(
+        strategy_packet / "ablation_and_reader_eval_plan.json",
+        _add_stale_ablation_text,
+    )
+
+    with connect(chain["config"].db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=strategy_packet,
+        target=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == (
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    )
+    assert result.payload["current_best_candidate_packet_id"] == current_best_id
+    assert result.payload["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["next_allowed_action"] == (
+        "prepare_hostile_scaffold_visibility_work_order"
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["next_strategy_or_work_order_authorized"] is True
+    assert result.payload["model_calls"] == 0
+    assert result.payload["stale_strategy_current_best_reference_detected"] is True
+    assert result.payload["stale_reference_packet_id"] == "packet_0061"
+    assert result.payload["authoritative_current_best_packet_id"] == current_best_id
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    contract = read_payload(packet_dir / "selected_residual_target_contract.json")
+    assert contract["target_definition"][
+        "visible_thesis_scaffold_or_explanatory_pressure_should_decrease"
+    ] is True
+    assert "delete proof/no-answer structure" in contract["forbidden_under_this_target"]
+    assert contract["stale_strategy_current_best_reference_detected"] is True
+
+    protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
+    assert any(current_best_id in item for item in protected["protected_effects"])
+    assert all("packet_0061" not in item for item in protected["protected_effects"])
+    assert "turning the candidate into explanation" in protected["forbidden_changes"]
+
+    scope = read_payload(packet_dir / "next_work_order_scope.json")
+    assert scope["work_order_adapter"] == "hostile_scaffold_visibility"
+    assert scope["candidate_generation_authorized"] is False
+    assert scope["live_model_call_authorized"] is False
+
+    with connect(chain["config"].db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
 def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     object_adapter = require_residual_target_adapter(OBJECT_MOTION_CAUSALITY_TARGET_ID)
     tactile_adapter = require_residual_target_adapter(TACTILE_INEVITABILITY_TARGET_ID)
+    hostile_adapter = require_residual_target_adapter(HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID)
 
     assert object_adapter.generation_contract_version == (
         OBJECT_MOTION_GENERATION_CONTRACT_VERSION
@@ -8775,8 +8898,17 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     assert tactile_adapter.generation_schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA
     assert tactile_adapter.generation_contract_version == TACTILE_GENERATION_CONTRACT_VERSION
     assert tactile_adapter.work_order_contract_version == TACTILE_WORK_ORDER_CONTRACT_VERSION
+    assert hostile_adapter.generation_schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA
+    assert hostile_adapter.generation_contract_version == (
+        HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION
+    )
+    assert hostile_adapter.work_order_contract_version == (
+        HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION
+    )
+    assert hostile_adapter.adapter_id == "hostile_scaffold_visibility"
     assert object_adapter.materiality_policy.policy_id
     assert tactile_adapter.materiality_policy.policy_id
+    assert hostile_adapter.materiality_policy.policy_id
     assert object_adapter.materiality_policy.primary_materiality_scope == (
         "whole_selected_region"
     )
@@ -8956,6 +9088,127 @@ def test_residual_work_order_normalizes_stale_tactile_selection_routing(tmp_path
         "human_validation_present",
     ):
         assert gates[gate_name]["passed"] is False
+
+
+def test_residual_work_order_accepts_hostile_scaffold_visibility_selection(
+    tmp_path,
+):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert selection.exit_code == 0
+    with connect(chain["config"].db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["selected_residual_target_id"] == (
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    )
+    assert result.payload["next_allowed_action"] == (
+        "review_hostile_scaffold_visibility_work_order_before_generation_authorization"
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    subject = read_payload(packet_dir / "residual_work_order_subject_manifest.json")
+    assert subject["target_adapter_id"] == "hostile_scaffold_visibility"
+    assert subject["work_order_contract_version"] == (
+        HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION
+    )
+    assert subject["candidate_generated"] is False
+
+    diagnostic = read_payload(packet_dir / "object_motion_causality_diagnostic.json")
+    categories = {
+        finding["category"] for finding in diagnostic["diagnostic_findings"]
+    }
+    assert "overexplanation" in categories
+    assert "thesis_replacing_artifact" in categories
+    assert "cosmic_silence_as_slogan" in categories
+    assert "proof_no_outside_answer_refinement" in categories
+    assert "final_return_echo_reread_strength" in categories
+    assert "strongest_rival_first_read_vividness" in categories
+    assert "local_embodiment_vs_compression_balance" in categories
+
+    unit_map = read_payload(packet_dir / "object_motion_target_unit_map.json")
+    assert unit_map["selected_residual_target_id"] == (
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    )
+    assert unit_map["unit_map_kind"] == "hostile_scaffold_visibility"
+    unit_ids = {unit["unit_id"] for unit in unit_map["target_units"]}
+    assert {
+        "thesis_visible_proof_language_reduction",
+        "proof_no_answer_embodiment_preservation",
+        "final_return_echo_without_explanation",
+        "hostile_scaffold_risk_reduction",
+        "preserve_table_dust_spoon_saucer_ring_causal_field",
+    }.issubset(unit_ids)
+    for unit in unit_map["target_units"]:
+        assert unit["before_text_sha256"]
+        assert unit["future_generation_authorized"] is False
+        assert "broad rewrite" in unit["forbidden_operation"]
+    assert unit_map["future_generation_requires_separate_authorization"] is True
+    assert unit_map["future_generation_authorized"] is False
+
+    protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
+    assert any(chain["object_event"]["packet_id"] in item for item in protected["protected_effects"])
+    assert "table/dust/spoon/saucer/ring causal field" in protected["protected_effects"]
+    assert "proof/no-answer pressure" in protected["protected_effects"]
+    assert "opening-return relation" in protected["protected_effects"]
+    assert "generic vividness" in protected["forbidden_changes"]
+    assert "turning the candidate into explanation" in protected["forbidden_changes"]
+
+    contract = read_payload(packet_dir / "future_generation_contract.json")
+    assert contract["future_generation_requires_separate_authorization"] is True
+    assert contract["candidate_generation_authorized"] is False
+    assert contract["live_model_call_authorized"] is False
+    assert "hostile scaffold visibility" in " ".join(
+        contract["target_specific_reader_state_focus"]
+    )
+
+    plan = read_payload(packet_dir / "ablation_and_reader_eval_plan.json")
+    assert "proof_no_answer_preservation_control" in plan["future_ablation_controls"]
+    assert "hostile scaffold visibility" in plan["future_reader_state_eval_focus"]
+    assert plan["ablation_authorized"] is False
+    assert plan["reader_state_eval_authorized"] is False
+
+    gate = read_payload(packet_dir / "residual_work_order_gate_report.json")
+    gates = {item["gate_name"]: item for item in gate["gate_results"]}
+    assert gates["target_adapter_resolved"]["passed"] is True
+    assert gates["target_units_created"]["passed"] is True
+    assert gates["target_mechanism_distinct"]["passed"] is True
+    assert gates["no_openai_calls"]["passed"] is True
+    assert gates["candidate_generation_authorized"]["passed"] is False
+    assert gate["finalization_eligible"] is False
+
+    with connect(chain["config"].db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
 
 
 def test_tactile_stale_work_order_fails_preflight_and_successor_supersedes(tmp_path):

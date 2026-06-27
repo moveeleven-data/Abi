@@ -17,14 +17,18 @@ from abi.model_schemas import (
 
 OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
 TACTILE_INEVITABILITY_TARGET_ID = "tactile_inevitability_gap"
+HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
 REPEATED_BROAD_TARGET_ID = "first_read_object_event_pressure_gap"
 SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
 OBJECT_MOTION_TARGET_SPEC_VERSION = "1"
 TACTILE_TARGET_SPEC_VERSION = "2"
+HOSTILE_SCAFFOLD_TARGET_SPEC_VERSION = "1"
 OBJECT_MOTION_WORK_ORDER_CONTRACT_VERSION = "1"
 TACTILE_WORK_ORDER_CONTRACT_VERSION = "2"
+HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION = "1"
 OBJECT_MOTION_GENERATION_CONTRACT_VERSION = "1"
 TACTILE_GENERATION_CONTRACT_VERSION = "1"
+HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION = "placeholder_1"
 
 
 @dataclass(frozen=True)
@@ -283,9 +287,104 @@ TACTILE_INEVITABILITY_SPEC = ResidualTargetSpec(
     ),
 )
 
+HOSTILE_SCAFFOLD_VISIBILITY_SPEC = ResidualTargetSpec(
+    target_id=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+    canonical_next_action="prepare_hostile_scaffold_visibility_work_order",
+    review_action="review_hostile_scaffold_visibility_work_order_before_generation_authorization",
+    work_order_adapter="hostile_scaffold_visibility",
+    mechanism_description=(
+        "Reduce visible thesis/scaffold/explanatory pressure while preserving "
+        "the embodied causal object field and current reread/proof gains."
+    ),
+    permitted_source_candidate_kinds=("bounded_macro_recomposition",),
+    required_evidence_inputs=(
+        "current best candidate text",
+        "strategy residual target option map",
+        "strategy candidate region pressure map",
+        "proof packet reference",
+        "reader-state packet reference",
+        "synthesis blocker evidence",
+        "hostile reader risk evidence",
+    ),
+    generation_requires_separate_authorization=True,
+    target_specific_ablation_controls=(
+        "revert_hostile_scaffold_visibility_intervention",
+        "isolate_scaffold_reduction_intervention",
+        "proof_no_answer_preservation_control",
+        "embodiment_preservation_control",
+        "strongest_rival_comparison",
+    ),
+    target_specific_reader_state_focus=(
+        "hostile scaffold visibility",
+        "thesis replacing artifact risk",
+        "overexplanation reduction without vagueness",
+        "proof/no-answer carry preservation",
+        "opening-return preservation",
+        "first-read local embodiment versus compression",
+        "strongest-rival pressure",
+    ),
+    target_definition={
+        "visible_thesis_scaffold_or_explanatory_pressure_should_decrease": True,
+        "object_field_must_keep_doing_causal_work": True,
+        "proof_no_answer_structure_must_be_preserved_as_pressure_not_deleted": True,
+        "reader_should_infer_meaning_from_field_before_explanation": True,
+        "must_preserve_current_best_macro_and_reader_state_gains": True,
+    },
+    operational_definition=(
+        "reduce visible thesis/scaffold/explanatory framing that tells the reader what the object field means",
+        "preserve embodied causal field, tactile/object pressure, proof/no-answer carry, and opening-return/reread gains",
+        "keep proof/no-answer pressure embodied rather than deleting or abstracting it",
+        "do not return to object-motion or tactile-force microtargeting",
+        "do not imitate the rival or add decorative vividness",
+        "the intervention must preserve current-best macro and reader-state gains",
+    ),
+    forbidden_under_this_target=(
+        "delete proof/no-answer structure",
+        "flatten the artifact into summary",
+        "make prose vaguer",
+        "add decorative vividness",
+        "rival mimicry",
+        "weaken the current causal object field",
+        "return to object-motion microtargeting",
+        "return to tactile-force microtargeting",
+        "proof/no-answer abstract explanation",
+        "broad rewrite",
+        "direct candidate generation in this command",
+        "finality claim",
+        "phase-shift claim",
+    ),
+    protected_effects=(
+        "current best candidate",
+        "executed ablation support",
+        "reader-state support",
+        "current-best partial reread transformation",
+        "tactile/object field gains",
+        "table/dust/spoon/saucer/ring causal field",
+        "proof/no-answer pressure",
+        "opening-return relation",
+        "strongest-rival pressure preservation",
+        "no finality claim",
+        "no phase-shift claim",
+    ),
+    forbidden_changes=(
+        "generic vividness",
+        "rival imitation",
+        "deleting causal objects",
+        "making proof more abstract",
+        "summary compression",
+        "weakening tactile/object pressure",
+        "turning the candidate into explanation",
+        "broad rewrite",
+        "candidate generation in this command",
+        "finality claim",
+        "phase-shift claim",
+    ),
+)
+
 RESIDUAL_TARGET_SPECS = {
     OBJECT_MOTION_SPEC.target_id: OBJECT_MOTION_SPEC,
     TACTILE_INEVITABILITY_SPEC.target_id: TACTILE_INEVITABILITY_SPEC,
+    HOSTILE_SCAFFOLD_VISIBILITY_SPEC.target_id: HOSTILE_SCAFFOLD_VISIBILITY_SPEC,
 }
 
 MATERIALITY_FAILURE_REPORT_FIELDS = (
@@ -395,6 +494,50 @@ TACTILE_MATERIALITY_POLICY = ResidualMaterialityPolicy(
     failure_report_fields=MATERIALITY_FAILURE_REPORT_FIELDS,
 )
 
+HOSTILE_SCAFFOLD_MATERIALITY_POLICY = ResidualMaterialityPolicy(
+    policy_id="hostile_scaffold_visibility_planning_placeholder_v1",
+    policy_version="1",
+    primary_materiality_scope="target_unit_scope",
+    whole_region_guard={
+        "scope": "bounded_target_regions",
+        "diagnostic_only_until_generation_authorized": True,
+        "exact_copy_fails_if_generation_is_later_authorized": True,
+    },
+    target_bearing_scope={
+        "scope": "sentences_or_paragraphs_containing scaffold/proof/return pressure",
+        "diagnostic_only_until_generation_authorized": True,
+    },
+    target_unit_scope={
+        "scope": "each hostile scaffold visibility target unit",
+        "must_reduce_scaffold_without_deleting_pressure": True,
+    },
+    overlap_cluster_policy={
+        "detect_shared_before_text_hash": True,
+        "evaluate_scaffold_reduction_and_embodiment_preservation_together": True,
+    },
+    absolute_change_floor=0,
+    ratio_floor=0.0,
+    token_edit_distance_floor=0,
+    sequence_similarity_ceiling=1.0,
+    changed_sentence_floor=0,
+    protected_context_exemptions=(
+        "planning-only target; no text change is authorized by the work order",
+        "future generation must preserve embodied proof and object-field pressure",
+    ),
+    prompt_feedback=(
+        "reduce visible explanation rather than deleting proof/no-answer pressure",
+        "preserve embodied causal objects and current reread gains",
+        "do not replace scaffold with vagueness, summary, rival mimicry, or decorative vividness",
+    ),
+    failure_report_fields=(
+        "scaffold_leakage_failures",
+        "proof_no_answer_deletion_failures",
+        "object_field_preservation_failures",
+        "vagueness_or_summary_failures",
+        "rival_mimicry_failures",
+    ),
+)
+
 OBJECT_MOTION_ADAPTER = ResidualTargetAdapter(
     target_id=OBJECT_MOTION_CAUSALITY_TARGET_ID,
     target_spec_version=OBJECT_MOTION_TARGET_SPEC_VERSION,
@@ -464,9 +607,48 @@ TACTILE_INEVITABILITY_ADAPTER = ResidualTargetAdapter(
     materiality_policy=TACTILE_MATERIALITY_POLICY,
 )
 
+HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER = ResidualTargetAdapter(
+    target_id=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+    target_spec_version=HOSTILE_SCAFFOLD_TARGET_SPEC_VERSION,
+    work_order_contract_version=HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION,
+    generation_contract_version=HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION,
+    canonical_work_order_action=HOSTILE_SCAFFOLD_VISIBILITY_SPEC.canonical_next_action,
+    review_action=HOSTILE_SCAFFOLD_VISIBILITY_SPEC.review_action,
+    work_order_adapter=HOSTILE_SCAFFOLD_VISIBILITY_SPEC.work_order_adapter,
+    generation_schema=RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
+    worker_role=WorkerRole.RESIDUAL_INTERVENTION_GENERATOR,
+    prompt_contract_id=(
+        "autonomous.residual_intervention_generation.v1.hostile_scaffold_visibility"
+    ),
+    prompt_instructions=(
+        "planning target only until a separate generation authorization exists",
+        "reduce visible thesis/scaffold/explanatory pressure",
+        "preserve embodied causal object field, tactile/object pressure, proof/no-answer carry, and opening-return gains",
+        "do not make the prose vague, decorative, rival-like, summary-like, final, or phase-shift claiming",
+    ),
+    mechanism_contract=HOSTILE_SCAFFOLD_VISIBILITY_SPEC.operational_definition,
+    ablation_controls=HOSTILE_SCAFFOLD_VISIBILITY_SPEC.target_specific_ablation_controls,
+    reader_state_evaluation_focus=(
+        HOSTILE_SCAFFOLD_VISIBILITY_SPEC.target_specific_reader_state_focus
+    ),
+    stop_test_policy={
+        "cycle_kind": "residual_stop_test",
+        "pause_action": "pause_until_generation_authorization",
+        "failure_conditions": [
+            "scaffold reduction deletes proof/no-answer pressure",
+            "artifact becomes vague summary",
+            "object field or tactile/object pressure weakens",
+            "strongest-rival pressure is treated as defeated",
+            "finality or phase-shift is claimed",
+        ],
+    },
+    materiality_policy=HOSTILE_SCAFFOLD_MATERIALITY_POLICY,
+)
+
 RESIDUAL_TARGET_ADAPTERS = {
     OBJECT_MOTION_ADAPTER.target_id: OBJECT_MOTION_ADAPTER,
     TACTILE_INEVITABILITY_ADAPTER.target_id: TACTILE_INEVITABILITY_ADAPTER,
+    HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER.target_id: HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER,
 }
 
 TACTILE_FORCE_TERMS = (

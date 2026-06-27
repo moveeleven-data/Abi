@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
 
@@ -23,6 +24,7 @@ from abi.packets import (
     read_json_file,
 )
 from abi.modules.residual_targets import (
+    HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     REPEATED_BROAD_TARGET_ID,
     ResidualTargetSpec,
@@ -289,6 +291,7 @@ def _load_subject(
     run_id = packet.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("Residual target selection refused; strategy packet missing run_id.")
+    _validate_current_best_consistency(payloads)
     strategy_packet_id = str(packet.get("packet_id") or strategy_packet_dir.name)
     if _strategy_marked_stale_by_latest_cleanup(config, run_id, strategy_packet_id):
         raise ValueError(
@@ -403,6 +406,7 @@ def _build_subject_manifest(
     packet_dir: Path,
 ) -> dict[str, object]:
     strategy_packet = subject.payloads["next_target_strategy_packet"]
+    stale_report = _stale_current_best_reference_report(subject)
     return {
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
@@ -419,6 +423,7 @@ def _build_subject_manifest(
         "loop_review_packet_id": strategy_packet.get("loop_review_packet_id"),
         "authorization_packet_id": strategy_packet.get("authorization_packet_id"),
         "selected_residual_target_id": subject.selected_target_id,
+        **stale_report,
         "broad_blocker_class": _broad_blocker_class(subject),
         "repeated_broad_target_detected": _repeated_broad_target_detected(subject),
         "same_broad_target_allowed": _same_broad_target_allowed(subject),
@@ -438,6 +443,7 @@ def _build_strategy_intake_summary(
 ) -> dict[str, object]:
     packet = subject.payloads["next_target_strategy_packet"]
     residual_map = subject.payloads["residual_target_option_map"]
+    stale_report = _stale_current_best_reference_report(subject)
     return {
         "strategy_packet_consumed": True,
         "strategy_packet_id": subject.strategy_packet_id,
@@ -453,6 +459,7 @@ def _build_strategy_intake_summary(
         or residual_map.get("repeated_target_id"),
         "primary_next_target": packet.get("primary_next_target"),
         "primary_next_subtarget": packet.get("primary_next_subtarget"),
+        **stale_report,
         "same_broad_target_allowed": _same_broad_target_allowed(subject),
         "next_generation_authorized": packet.get("next_generation_authorized") is True,
         "candidate_generated": False,
@@ -519,8 +526,10 @@ def _build_selected_residual_target_contract(
     current_best_id = subject.payloads["next_target_strategy_packet"].get(
         "current_best_candidate_packet_id"
     )
+    stale_report = _stale_current_best_reference_report(subject)
     return {
         "selected_residual_target_id": subject.selected_target_id,
+        **stale_report,
         "target_definition": subject.target_spec.target_definition,
         "operational_definition": [
             item.replace("current-best", str(current_best_id))
@@ -546,6 +555,7 @@ def _build_protected_effects_and_forbidden_changes(
     subject: ResidualTargetSelectionSubject,
 ) -> dict[str, object]:
     packet = subject.payloads["next_target_strategy_packet"]
+    stale_report = _stale_current_best_reference_report(subject)
     return {
         "protected_effects": [
             f"{packet.get('current_best_candidate_packet_id')} as current best candidate",
@@ -554,6 +564,7 @@ def _build_protected_effects_and_forbidden_changes(
             *subject.target_spec.protected_effects,
         ],
         "forbidden_changes": list(subject.target_spec.forbidden_changes),
+        **stale_report,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -565,6 +576,7 @@ def _build_protected_effects_and_forbidden_changes(
 def _build_next_work_order_scope(
     subject: ResidualTargetSelectionSubject,
 ) -> dict[str, object]:
+    stale_report = _stale_current_best_reference_report(subject)
     return {
         "selected_residual_target_id": subject.selected_target_id,
         "next_allowed_action": subject.target_spec.canonical_next_action,
@@ -579,6 +591,7 @@ def _build_next_work_order_scope(
         "future_generation_requires_separate_authorization": (
             subject.target_spec.generation_requires_separate_authorization
         ),
+        **stale_report,
         "next_strategy_or_work_order_authorized": True,
         "candidate_generated": False,
         "model_calls": 0,
@@ -606,6 +619,7 @@ def _build_gate_report(
             "protected_effects_recorded",
             bool(payloads["protected_effects_and_forbidden_changes"]["protected_effects"]),
         ),
+        _gate_result("current_best_reference_normalized", True),
         _gate_result("no_candidate_generated", True),
         _gate_result("no_openai_calls", True),
         _gate_result("no_final_claim", True),
@@ -701,6 +715,7 @@ def _build_packet_summary(
     artifacts: dict[str, ArtifactRecord],
 ) -> dict[str, object]:
     packet = subject.payloads["next_target_strategy_packet"]
+    stale_report = _stale_current_best_reference_report(subject)
     counts = packet_artifact_count_summary(
         required_artifact_types=RESIDUAL_TARGET_SELECTION_ARTIFACT_TYPES,
         produced_artifact_types=list(artifacts),
@@ -728,6 +743,7 @@ def _build_packet_summary(
         "proof_packet_id": packet.get("proof_packet_id"),
         "reader_state_packet_id": packet.get("reader_state_packet_id"),
         "selected_residual_target_id": subject.selected_target_id,
+        **stale_report,
         "broad_blocker_class": _broad_blocker_class(subject),
         "repeated_broad_target_detected": _repeated_broad_target_detected(subject),
         "same_broad_target_allowed": _same_broad_target_allowed(subject),
@@ -738,6 +754,7 @@ def _build_packet_summary(
         "next_recommended_action": subject.target_spec.canonical_next_action,
         "work_order_adapter": subject.target_spec.work_order_adapter,
         "candidate_generated": False,
+        "model_calls": 0,
         "candidate_generation_authorized": False,
         "live_model_call_authorized": False,
         "ablation_authorized": False,
@@ -775,7 +792,16 @@ def _result_payload(
         },
         "counts": packet["counts"],
         "current_best_candidate_packet_id": packet["current_best_candidate_packet_id"],
+        "proof_packet_id": packet["proof_packet_id"],
+        "reader_state_packet_id": packet["reader_state_packet_id"],
         "selected_residual_target_id": subject.selected_target_id,
+        "stale_strategy_current_best_reference_detected": packet[
+            "stale_strategy_current_best_reference_detected"
+        ],
+        "stale_reference_packet_id": packet["stale_reference_packet_id"],
+        "authoritative_current_best_packet_id": packet[
+            "authoritative_current_best_packet_id"
+        ],
         "broad_blocker_class": packet["broad_blocker_class"],
         "next_allowed_action": subject.target_spec.canonical_next_action,
         "candidate_generated": False,
@@ -795,6 +821,13 @@ def _operator_selection_reason(subject: ResidualTargetSelectionSubject) -> str:
             "broad first-read object-event pressure target, evidence-aligned "
             "with the rival gap, and less likely to drift into generic vividness, "
             "rival mimicry, proof/no-answer compression, or final-return overwork."
+        )
+    if subject.selected_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return (
+            "hostile scaffold visibility is a narrower residual target than the "
+            "repeated broad first-read object-event pressure target; it asks for "
+            "less visible thesis/explanatory pressure while preserving embodied "
+            "causal field, proof/no-answer carry, and opening-return gains."
         )
     return (
         "tactile inevitability is a narrower residual target than the repeated "
@@ -867,6 +900,161 @@ def _artifact_ids_from_packet(packet_payload: dict[str, Any]) -> dict[str, str]:
         for key, value in artifact_ids.items()
         if isinstance(value, str)
     }
+
+
+def _validate_current_best_consistency(payloads: dict[str, dict[str, Any]]) -> None:
+    packet = payloads["next_target_strategy_packet"]
+    current_best = packet.get("current_best_candidate_packet_id")
+    if not isinstance(current_best, str) or not current_best:
+        raise ValueError(
+            "Residual target selection refused; strategy packet missing current "
+            "best candidate packet ID."
+        )
+    checks = (
+        (
+            "next_target_strategy_subject_manifest.current_best_candidate_packet_id",
+            payloads["next_target_strategy_subject_manifest"].get(
+                "current_best_candidate_packet_id"
+            ),
+        ),
+        (
+            "source_evidence_summary.current_best_candidate_packet_id",
+            payloads["source_evidence_summary"].get("current_best_candidate_packet_id"),
+        ),
+        (
+            "current_best_candidate_summary.current_best_candidate_packet_id",
+            payloads["current_best_candidate_summary"].get(
+                "current_best_candidate_packet_id"
+            ),
+        ),
+    )
+    for field_name, value in checks:
+        if isinstance(value, str) and value and value != current_best:
+            raise ValueError(
+                "Residual target selection refused; strategy current best is "
+                f"inconsistent: {field_name}={value}, authoritative={current_best}."
+            )
+    current_best_object = packet.get("current_best_candidate")
+    if isinstance(current_best_object, dict):
+        object_id = current_best_object.get("packet_id")
+        if isinstance(object_id, str) and object_id and object_id != current_best:
+            raise ValueError(
+                "Residual target selection refused; strategy current best object "
+                f"does not match top-level current best: {object_id} != {current_best}."
+            )
+
+
+def _stale_current_best_reference_report(
+    subject: ResidualTargetSelectionSubject,
+) -> dict[str, object]:
+    packet = subject.payloads["next_target_strategy_packet"]
+    current_best = str(packet.get("current_best_candidate_packet_id") or "")
+    allowed = _allowed_packet_references(subject)
+    stale_locations: list[dict[str, object]] = []
+    for artifact_type, payload in subject.payloads.items():
+        _collect_stale_packet_refs(
+            payload,
+            path=artifact_type,
+            allowed_packet_ids=allowed,
+            stale_locations=stale_locations,
+        )
+    stale_ids = sorted(
+        {
+            str(location["packet_id"])
+            for location in stale_locations
+            if isinstance(location.get("packet_id"), str)
+        }
+    )
+    return {
+        "stale_strategy_current_best_reference_detected": bool(stale_ids),
+        "stale_reference_packet_id": stale_ids[0] if len(stale_ids) == 1 else None,
+        "stale_reference_packet_ids": stale_ids,
+        "authoritative_current_best_packet_id": current_best,
+        "stale_reference_locations": stale_locations[:12],
+    }
+
+
+def _allowed_packet_references(subject: ResidualTargetSelectionSubject) -> set[str]:
+    packet = subject.payloads["next_target_strategy_packet"]
+    values = [
+        subject.strategy_packet_id,
+        packet.get("packet_id"),
+        packet.get("current_best_candidate_packet_id"),
+        packet.get("proof_packet_id"),
+        packet.get("reader_state_packet_id"),
+        packet.get("source_synthesis_packet_id"),
+        packet.get("authorization_packet_id"),
+        packet.get("source_authorization_packet_id"),
+        packet.get("source_loop_cleanup_packet_id"),
+        packet.get("loop_review_packet_id"),
+        packet.get("source_loop_review_packet_id"),
+    ]
+    current_best = packet.get("current_best_candidate")
+    if isinstance(current_best, dict):
+        values.append(current_best.get("packet_id"))
+    return {str(value) for value in values if isinstance(value, str) and value}
+
+
+def _collect_stale_packet_refs(
+    value: object,
+    *,
+    path: str,
+    allowed_packet_ids: set[str],
+    stale_locations: list[dict[str, object]],
+) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if _historical_reference_field(child_path):
+                continue
+            _collect_stale_packet_refs(
+                child,
+                path=child_path,
+                allowed_packet_ids=allowed_packet_ids,
+                stale_locations=stale_locations,
+            )
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            _collect_stale_packet_refs(
+                child,
+                path=f"{path}[{index}]",
+                allowed_packet_ids=allowed_packet_ids,
+                stale_locations=stale_locations,
+            )
+        return
+    if not isinstance(value, str):
+        return
+    for packet_id in re.findall(r"\bpacket_\d+\b", value):
+        if packet_id in allowed_packet_ids:
+            continue
+        stale_locations.append(
+            {
+                "packet_id": packet_id,
+                "path": path,
+                "snippet": _snippet(value),
+            }
+        )
+
+
+def _historical_reference_field(path: str) -> bool:
+    lowered = path.lower()
+    return any(
+        token in lowered
+        for token in (
+            "superseded",
+            "prior_best",
+            "base_candidate_packet_id",
+            "source_selection_packet_id",
+        )
+    )
+
+
+def _snippet(value: str, limit: int = 160) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 3].rstrip()}..."
 
 
 def _artifact_for_path(connection: sqlite3.Connection, path: Path) -> ArtifactRecord | None:
