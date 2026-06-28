@@ -720,10 +720,18 @@ def _work_order_supersession_context(
             continue
         failures = semantic_preflight_failures_for_work_order(payloads)
         if failures:
+            supersession_reason = (
+                "out_of_region_target_units_in_single_region_work_order"
+                if any(
+                    "out_of_region_target_units_in_single_region_work_order" in failure
+                    for failure in failures
+                )
+                else "prior work order failed current target-adapter semantic preflight"
+            )
             return {
                 **base,
                 "superseded_work_order_packet_id": packet_id,
-                "supersession_reason": "prior work order failed current target-adapter semantic preflight",
+                "supersession_reason": supersession_reason,
                 "semantic_preflight_failures": failures,
                 "new_canonical_work_order_packet_id": "assigned_after_packet_creation",
                 "supersedes_semantically_stale_work_order": True,
@@ -981,6 +989,12 @@ def _build_diagnostic(
     if subject.selected_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
         return {
             "selected_residual_target_id": subject.selected_target_id,
+            "diagnostic_kind": "hostile_scaffold_visibility_diagnostic",
+            "legacy_artifact_name": "object_motion_causality_diagnostic",
+            "artifact_name_compatibility_reason": (
+                "residual work-order packet contract still expects this artifact "
+                "filename; target_adapter_id and diagnostic_kind are authoritative"
+            ),
             "current_best_candidate_packet_id": subject.candidate.packet_id,
             "diagnostic_findings": [
                 {
@@ -1285,25 +1299,27 @@ def _build_hostile_scaffold_target_unit_map(
     subject: ResidualWorkOrderSubject,
     selected_region: dict[str, object],
 ) -> dict[str, object]:
-    del selected_region
-    paragraphs = _paragraphs(subject.candidate.text)
+    selected_text = str(selected_region["selected_region_before_text"])
+    selected_region_id = str(selected_region["selected_region_id"])
+    selected_paragraphs = _paragraphs(selected_text)
     units = [
         _hostile_scaffold_unit(
             subject=subject,
-            unit_id="thesis_visible_proof_language_reduction",
-            parent_region_id="middle_recurrence_ordinary_trace_logic",
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="trace_before_naming_scaffold_reduction",
             text=_sentence_for_hostile_unit(
-                paragraphs,
-                start=1,
-                end=4,
-                needles=("record", "law", "proof", "answer", "pattern"),
+                selected_paragraphs,
+                start=0,
+                end=0,
+                needles=("trace before anyone names it", "already taken the trace"),
             ),
             weakness=(
-                "visible thesis/proof language can tell the reader what the field "
-                "means before the field makes it unavoidable"
+                "trace-before-naming can still slide into explanation if future work "
+                "names the thesis rather than trusting the material sequence"
             ),
             allowed_operation=(
-                "reduce explicit thesis/proof naming while preserving local object pressure"
+                "reduce visible explanatory framing around the trace while preserving cup/ring/crumb pressure"
             ),
             target_effect=(
                 "reader infers pressure from the object field before explanation names it"
@@ -1311,90 +1327,112 @@ def _build_hostile_scaffold_target_unit_map(
         ),
         _hostile_scaffold_unit(
             subject=subject,
-            unit_id="proof_no_answer_embodiment_preservation",
-            parent_region_id="proof_no_outside_answer_region",
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="crossings_matter_without_thesis_pressure",
             text=_sentence_for_hostile_unit(
-                paragraphs,
-                start=2,
-                end=8,
-                needles=("no answer", "outside", "proof", "silence", "cosmic"),
-            ),
-            weakness=(
-                "proof/no-answer pressure remains partial and can become slogan or abstraction"
-            ),
-            allowed_operation=(
-                "keep no-answer pressure embodied in room/object consequence, not deleted"
-            ),
-            target_effect=(
-                "proof/no-answer carry remains felt without extra explanatory signage"
-            ),
-        ),
-        _hostile_scaffold_unit(
-            subject=subject,
-            unit_id="final_return_echo_without_explanation",
-            parent_region_id="final_return_opening_transformation_region",
-            text=_sentence_for_hostile_unit(
-                paragraphs,
-                start=max(len(paragraphs) - 3, 0),
-                end=len(paragraphs) - 1,
-                needles=("return", "beginning", "morning", "changed", "opening"),
-            ),
-            weakness=(
-                "return can explain transformation instead of letting the opening field return changed"
-            ),
-            allowed_operation=(
-                "preserve the return relation while reducing visible explanation of return"
-            ),
-            target_effect=(
-                "final return echoes the opening without announcing the lesson"
-            ),
-        ),
-        _hostile_scaffold_unit(
-            subject=subject,
-            unit_id="hostile_scaffold_risk_reduction",
-            parent_region_id="cross_region_scaffold_visibility",
-            text=_sentence_for_hostile_unit(
-                paragraphs,
+                selected_paragraphs,
                 start=0,
-                end=len(paragraphs) - 1,
-                needles=("means", "matters", "pattern", "announcing", "described"),
+                end=0,
+                needles=("world holds", "makes them matter", "crossings"),
             ),
             weakness=(
-                "hostile reader can see the scaffold when explanation replaces enactment"
+                "the sentence risks making the rule visible as a thesis instead of letting crossings carry it"
             ),
             allowed_operation=(
-                "replace explanatory signage with local relation while keeping causal proof"
+                "let crossings make matter through local pressure rather than thesis-signaling"
             ),
-            target_effect="hostile scaffold visibility decreases without vagueness",
+            target_effect=(
+                "reader feels mattering from accumulated contact rather than an announced rule"
+            ),
         ),
         _hostile_scaffold_unit(
             subject=subject,
-            unit_id="preserve_table_dust_spoon_saucer_ring_causal_field",
-            parent_region_id="opening_table_dust_spoon_saucer_ring_field",
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="ordinary_table_no_scaffold_signage",
             text=_sentence_for_hostile_unit(
-                paragraphs,
-                start=0,
-                end=min(2, len(paragraphs) - 1),
-                needles=("table", "dust", "spoon", "saucer", "ring"),
+                selected_paragraphs,
+                start=1,
+                end=1,
+                needles=("At first", "ordinary"),
             ),
             weakness=(
-                "scaffold reduction must not thin the embodied causal field or delete local objects"
+                "ordinary status can become a setup label instead of an enacted pressure"
             ),
             allowed_operation=(
-                "preserve causal object field while reducing only visible scaffold pressure"
+                "keep the table ordinary while reducing visible cueing about what ordinary means"
             ),
             target_effect=(
-                "object field remains the source of pressure rather than a decorative inventory"
+                "ordinary presentation remains embodied instead of explanatory"
+            ),
+        ),
+        _hostile_scaffold_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="ordinary_things_strict_without_abstraction",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=1,
+                end=1,
+                needles=("ordinary things are strict", "strict about what reaches them"),
+            ),
+            weakness=(
+                "strictness can sound like conceptual declaration unless anchored in the following material marks"
+            ),
+            allowed_operation=(
+                "reduce abstract strictness while preserving material consequence"
+            ),
+            target_effect="hostile scaffold visibility decreases without making the prose vague",
+        ),
+        _hostile_scaffold_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="small_kitchen_rule_plainness_reduction",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=1,
+                end=1,
+                needles=("kitchen is small", "one rule plain", "leaves a mark"),
+            ),
+            weakness=(
+                "plain-rule language is the highest scaffold-risk unit in the selected region"
+            ),
+            allowed_operation=(
+                "make the rule arrive through mark and pressure rather than announcement"
+            ),
+            target_effect=(
+                "reader reads the rule from object consequence before it is named"
             ),
         ),
     ]
+    protected_references = _hostile_scaffold_protected_reference_units(
+        subject=subject,
+        selected_region_text=selected_text,
+    )
     return {
         "selected_residual_target_id": subject.selected_target_id,
         "unit_map_kind": subject.target_spec.work_order_adapter,
+        "legacy_artifact_name": "object_motion_target_unit_map",
+        "artifact_name_compatibility_reason": (
+            "residual work-order packet contract still expects this artifact "
+            "filename; target_adapter_id and unit_map_kind are authoritative"
+        ),
         **target_adapter_metadata(subject.selected_target_id),
-        "selected_region_id": SELECTED_REGION_ID,
+        "selected_region_id": selected_region_id,
         "target_units": units,
         "target_unit_count": len(units),
+        "material_target_units_all_inside_selected_region": True,
+        "protected_reference_units": protected_references,
+        "protected_reference_unit_count": len(protected_references),
+        "future_evaluation_focus": [
+            "proof/no-answer pressure remains protected outside selected region",
+            "final-return/opening-return relation remains protected outside selected region",
+            "opening table/dust/spoon/saucer/ring field remains protected unless separately selected",
+            "reader-state evaluation should test scaffold reduction without loss of object pressure",
+        ],
         "target_semantic_contract": list(subject.target_spec.operational_definition),
         "materiality_policy_placeholder": {
             "policy": "future generation must materially reduce scaffold visibility without deleting embodied pressure",
@@ -1422,20 +1460,29 @@ def _build_hostile_scaffold_target_unit_map(
 def _hostile_scaffold_unit(
     *,
     subject: ResidualWorkOrderSubject,
+    selected_region_id: str,
+    selected_region_text: str,
     unit_id: str,
-    parent_region_id: str,
     text: str,
     weakness: str,
     allowed_operation: str,
     target_effect: str,
 ) -> dict[str, object]:
     before_text = text or _excerpt(subject.candidate.text)
+    source_span = _source_span_for_selected_region_text(
+        selected_region_id=selected_region_id,
+        selected_region_text=selected_region_text,
+        before_text=before_text,
+    )
     return {
         "unit_id": unit_id,
         "target_unit_id": unit_id,
         "before_text": before_text,
         "before_text_sha256": sha256_text(before_text),
-        "parent_region_id": parent_region_id,
+        "parent_region_id": selected_region_id,
+        "source_region_id": selected_region_id,
+        "source_span": source_span,
+        "contained_in_selected_region": source_span["contained_in_selected_region"],
         "source_text_packet_id": subject.candidate.packet_id,
         "current_best_candidate_packet_id": subject.candidate.packet_id,
         "weakness": weakness,
@@ -1461,6 +1508,93 @@ def _hostile_scaffold_unit(
         "material_change_required": True,
         "semantic_contract": list(subject.target_spec.operational_definition),
         "future_generation_authorized": False,
+    }
+
+
+def _hostile_scaffold_protected_reference_units(
+    *,
+    subject: ResidualWorkOrderSubject,
+    selected_region_text: str,
+) -> list[dict[str, object]]:
+    paragraphs = _paragraphs(subject.candidate.text)
+    references = [
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="proof_no_answer_embodiment_preservation",
+            source_region_id="proof_no_outside_answer_region",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=8,
+                end=9,
+                needles=("No answer", "outside", "Proof", "line of carry"),
+            ),
+            protection_reason=(
+                "proof/no-answer pressure is outside the selected region and must be preserved, not edited"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="final_return_echo_without_explanation",
+            source_region_id="final_return_opening_transformation_region",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=10,
+                end=10,
+                needles=("return", "opening", "same table", "relation"),
+            ),
+            protection_reason=(
+                "final/opening return relation is outside the selected region and remains protected"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="preserve_table_dust_spoon_saucer_ring_causal_field",
+            source_region_id="opening_table_dust_spoon_saucer_ring_field",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=0,
+                end=2,
+                needles=("table", "dust", "spoon", "saucer", "ring"),
+            ),
+            protection_reason=(
+                "opening object field is outside the selected region and must not become a material target"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+    ]
+    return [
+        reference
+        for reference in references
+        if not reference["contained_in_selected_region"]
+    ]
+
+
+def _protected_reference_unit(
+    *,
+    subject: ResidualWorkOrderSubject,
+    reference_unit_id: str,
+    source_region_id: str,
+    text: str,
+    protection_reason: str,
+    selected_region_text: str,
+) -> dict[str, object]:
+    before_text = text or _excerpt(subject.candidate.text)
+    return {
+        "reference_unit_id": reference_unit_id,
+        "unit_id": reference_unit_id,
+        "before_text": before_text,
+        "before_text_sha256": sha256_text(before_text),
+        "source_region_id": source_region_id,
+        "parent_region_id": source_region_id,
+        "source_text_packet_id": subject.candidate.packet_id,
+        "current_best_candidate_packet_id": subject.candidate.packet_id,
+        "contained_in_selected_region": _normalize_for_containment(before_text)
+        in _normalize_for_containment(selected_region_text),
+        "material_change_required": False,
+        "future_generation_authorized": False,
+        "protection_reason": protection_reason,
     }
 
 
@@ -1899,10 +2033,29 @@ def _contains_tactile_signal(text: str, labels: list[str]) -> bool:
 
 
 def _prevalidate_target_adapter(subject: ResidualWorkOrderSubject) -> None:
-    if subject.selected_target_id != TACTILE_INEVITABILITY_TARGET_ID:
-        return
     inventory = _build_region_inventory(subject)
     selected_region = _build_selected_region(subject, inventory)
+    if subject.selected_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        unit_map = _build_hostile_scaffold_target_unit_map(subject, selected_region)
+        failures = semantic_preflight_failures_for_work_order(
+            {
+                "residual_work_order_packet": {
+                    "selected_residual_target_id": subject.selected_target_id,
+                    **target_adapter_metadata(subject.selected_target_id),
+                },
+                "selected_intervention_region": selected_region,
+                "object_motion_target_unit_map": unit_map,
+            }
+        )
+        if failures:
+            raise ValueError(
+                "Residual work-order planning refused; hostile scaffold "
+                "adapter failed selected-region invariant; semantic preflight "
+                f"failed: {'; '.join(failures)}"
+            )
+        return
+    if subject.selected_target_id != TACTILE_INEVITABILITY_TARGET_ID:
+        return
     unit_map = _build_tactile_target_unit_map(subject, selected_region)
     failures = semantic_preflight_failures_for_work_order(
         {
@@ -1968,6 +2121,27 @@ def _sentence_for_hostile_unit(
     return sentences[0] if sentences else text.strip()
 
 
+def _source_span_for_selected_region_text(
+    *,
+    selected_region_id: str,
+    selected_region_text: str,
+    before_text: str,
+) -> dict[str, object]:
+    start = selected_region_text.find(before_text)
+    end = start + len(before_text) if start >= 0 else None
+    return {
+        "region_id": selected_region_id,
+        "char_start": start if start >= 0 else None,
+        "char_end": end,
+        "before_text_sha256": sha256_text(before_text),
+        "contained_in_selected_region": start >= 0,
+    }
+
+
+def _normalize_for_containment(value: str) -> str:
+    return " ".join(value.split())
+
+
 def _selected_option_evidence(subject: ResidualWorkOrderSubject) -> list[str]:
     basis = subject.selected_option.get("source_evidence_basis")
     if not isinstance(basis, list):
@@ -2031,6 +2205,8 @@ def _build_future_generation_contract(
             if isinstance(unit, dict)
         },
         "authoritative_target_units": list(unit_map["target_units"]),
+        "protected_reference_units": list(unit_map.get("protected_reference_units", [])),
+        "future_evaluation_focus": list(unit_map.get("future_evaluation_focus", [])),
         "mechanism_contract": list(subject.target_spec.operational_definition),
         "protected_effects": list(subject.target_spec.protected_effects),
         "forbidden_operations": list(subject.target_spec.forbidden_changes),
@@ -2110,6 +2286,23 @@ def _build_gate_report(
     unit_map = payloads["object_motion_target_unit_map"]
     selected_region = payloads["selected_intervention_region"]
     novelty = payloads["target_novelty_distinctness_report"]
+    semantic_failures = semantic_preflight_failures_for_work_order(
+        {
+            "residual_work_order_packet": {
+                "selected_residual_target_id": subject.selected_target_id,
+                **target_adapter_metadata(subject.selected_target_id),
+            },
+            "selected_intervention_region": selected_region,
+            "object_motion_target_unit_map": unit_map,
+        }
+    )
+    region_alignment_failures = [
+        failure
+        for failure in semantic_failures
+        if "out_of_region_target_units_in_single_region_work_order" in failure
+        or "single-region target alignment" in failure
+        or "source_span" in failure
+    ]
     gate_results = [
         _gate_result("selection_packet_consumed", True),
         _gate_result("selected_target_valid", True),
@@ -2138,6 +2331,11 @@ def _build_gate_report(
         _gate_result(
             "target_units_created",
             unit_map["target_unit_count"] > 0,
+        ),
+        _gate_result(
+            "target_units_inside_selected_region",
+            not region_alignment_failures,
+            region_alignment_failures,
         ),
         _gate_result(
             "target_mechanism_distinct",
@@ -2256,6 +2454,8 @@ def _build_gate_report(
             "stale_selection_routing_safely_normalized"
         ],
         "canonical_next_action": subject.target_spec.canonical_next_action,
+        "semantic_preflight_failures": semantic_failures,
+        "target_units_inside_selected_region": not region_alignment_failures,
         "gate_results": gate_results,
         "failed_gates": failed_gates,
         "missing_gates": [],

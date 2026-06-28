@@ -938,6 +938,95 @@ def validate_tactile_unit_map(unit_map: dict[str, Any]) -> list[str]:
     return failures
 
 
+def validate_single_region_target_unit_alignment(
+    unit_map: dict[str, Any],
+    selected_region: dict[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    selected_region_id = str(selected_region.get("selected_region_id") or "")
+    selected_region_text = str(selected_region.get("selected_region_before_text") or "")
+    normalized_region_text = _normalize_for_containment(selected_region_text)
+    if not selected_region_id:
+        failures.append("single-region target alignment missing selected_region_id")
+    if not normalized_region_text:
+        failures.append("single-region target alignment missing selected region text")
+    target_units = unit_map.get("target_units")
+    if not isinstance(target_units, list) or not target_units:
+        return failures + ["single-region target alignment has no target_units"]
+    for index, unit in enumerate(target_units, start=1):
+        if not isinstance(unit, dict):
+            failures.append(f"target unit {index} is not an object")
+            continue
+        material_change_required = unit.get("material_change_required") is True
+        if not material_change_required:
+            continue
+        unit_id = str(unit.get("unit_id") or unit.get("target_unit_id") or index)
+        before_text = str(unit.get("before_text") or "")
+        normalized_before_text = _normalize_for_containment(before_text)
+        if not normalized_before_text:
+            failures.append(f"{unit_id} material target unit has no before_text")
+            continue
+        if normalized_before_text not in normalized_region_text:
+            failures.append(
+                "out_of_region_target_units_in_single_region_work_order: "
+                f"{unit_id} before_text is outside selected region {selected_region_id}"
+            )
+        if unit.get("before_text_sha256") and unit.get("before_text_sha256") != sha256_text(before_text):
+            failures.append(f"{unit_id} before_text_sha256 does not match before_text")
+        source_region_id = _unit_source_region_id(unit)
+        if source_region_id != selected_region_id:
+            failures.append(
+                "out_of_region_target_units_in_single_region_work_order: "
+                f"{unit_id} source region {source_region_id or '<missing>'} "
+                f"does not match selected region {selected_region_id}"
+            )
+        source_span = unit.get("source_span")
+        if not isinstance(source_span, dict):
+            failures.append(f"{unit_id} material target unit missing source_span metadata")
+        elif str(source_span.get("region_id") or "") != selected_region_id:
+            failures.append(
+                "out_of_region_target_units_in_single_region_work_order: "
+                f"{unit_id} source_span region "
+                f"{source_span.get('region_id') or '<missing>'} does not match "
+                f"selected region {selected_region_id}"
+            )
+    protected_references = unit_map.get("protected_reference_units", [])
+    if protected_references is None:
+        protected_references = []
+    if not isinstance(protected_references, list):
+        failures.append("protected_reference_units must be a list")
+    else:
+        for index, reference in enumerate(protected_references, start=1):
+            if not isinstance(reference, dict):
+                failures.append(f"protected reference unit {index} is not an object")
+                continue
+            if reference.get("material_change_required") is True:
+                reference_id = str(
+                    reference.get("unit_id")
+                    or reference.get("reference_unit_id")
+                    or index
+                )
+                failures.append(
+                    f"{reference_id} protected_reference_units must not require material change"
+                )
+    return failures
+
+
+def _unit_source_region_id(unit: dict[str, Any]) -> str:
+    source_span = unit.get("source_span")
+    if isinstance(source_span, dict) and source_span.get("region_id"):
+        return str(source_span["region_id"])
+    for key in ("source_region_id", "parent_region_id"):
+        value = unit.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _normalize_for_containment(value: str) -> str:
+    return " ".join(value.split())
+
+
 def semantic_preflight_failures_for_work_order(payloads: dict[str, dict[str, Any]]) -> list[str]:
     packet = payloads.get("residual_work_order_packet", {})
     target_id = str(packet.get("selected_residual_target_id") or "")
@@ -968,6 +1057,13 @@ def semantic_preflight_failures_for_work_order(payloads: dict[str, dict[str, Any
     unit_map = payloads.get("object_motion_target_unit_map", {})
     if target_id == TACTILE_INEVITABILITY_TARGET_ID:
         failures.extend(validate_tactile_unit_map(unit_map))
+    if target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        failures.extend(
+            validate_single_region_target_unit_alignment(
+                unit_map,
+                payloads.get("selected_intervention_region", {}),
+            )
+        )
     return failures
 
 

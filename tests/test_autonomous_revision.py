@@ -9137,6 +9137,8 @@ def test_residual_work_order_accepts_hostile_scaffold_visibility_selection(
     assert subject["candidate_generated"] is False
 
     diagnostic = read_payload(packet_dir / "object_motion_causality_diagnostic.json")
+    assert diagnostic["diagnostic_kind"] == "hostile_scaffold_visibility_diagnostic"
+    assert diagnostic["legacy_artifact_name"] == "object_motion_causality_diagnostic"
     categories = {
         finding["category"] for finding in diagnostic["diagnostic_findings"]
     }
@@ -9148,25 +9150,55 @@ def test_residual_work_order_accepts_hostile_scaffold_visibility_selection(
     assert "strongest_rival_first_read_vividness" in categories
     assert "local_embodiment_vs_compression_balance" in categories
 
+    selected_region = read_payload(packet_dir / "selected_intervention_region.json")
+    selected_region_text = " ".join(
+        selected_region["selected_region_before_text"].split()
+    )
     unit_map = read_payload(packet_dir / "object_motion_target_unit_map.json")
     assert unit_map["selected_residual_target_id"] == (
         HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
     )
     assert unit_map["unit_map_kind"] == "hostile_scaffold_visibility"
+    assert unit_map["legacy_artifact_name"] == "object_motion_target_unit_map"
+    assert unit_map["material_target_units_all_inside_selected_region"] is True
     unit_ids = {unit["unit_id"] for unit in unit_map["target_units"]}
     assert {
-        "thesis_visible_proof_language_reduction",
+        "trace_before_naming_scaffold_reduction",
+        "crossings_matter_without_thesis_pressure",
+        "ordinary_table_no_scaffold_signage",
+        "ordinary_things_strict_without_abstraction",
+        "small_kitchen_rule_plainness_reduction",
+    }.issubset(unit_ids)
+    protected_reference_ids = {
+        unit["reference_unit_id"] for unit in unit_map["protected_reference_units"]
+    }
+    assert {
         "proof_no_answer_embodiment_preservation",
         "final_return_echo_without_explanation",
-        "hostile_scaffold_risk_reduction",
         "preserve_table_dust_spoon_saucer_ring_causal_field",
-    }.issubset(unit_ids)
+    } <= protected_reference_ids
+    assert "proof_no_answer_embodiment_preservation" not in unit_ids
+    assert "final_return_echo_without_explanation" not in unit_ids
+    assert "preserve_table_dust_spoon_saucer_ring_causal_field" not in unit_ids
     for unit in unit_map["target_units"]:
+        assert " ".join(unit["before_text"].split()) in selected_region_text
+        assert unit["source_region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+        assert unit["source_span"]["region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+        assert unit["source_span"]["contained_in_selected_region"] is True
         assert unit["before_text_sha256"]
         assert unit["future_generation_authorized"] is False
         assert "broad rewrite" in unit["forbidden_operation"]
+    for unit in unit_map["protected_reference_units"]:
+        assert unit["material_change_required"] is False
+        assert unit["future_generation_authorized"] is False
     assert unit_map["future_generation_requires_separate_authorization"] is True
     assert unit_map["future_generation_authorized"] is False
+
+    preflight_payloads = {
+        artifact_type: read_payload(packet_dir / f"{artifact_type}.json")
+        for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    }
+    assert semantic_preflight_failures_for_work_order(preflight_payloads) == []
 
     protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
     assert any(chain["object_event"]["packet_id"] in item for item in protected["protected_effects"])
@@ -9194,6 +9226,7 @@ def test_residual_work_order_accepts_hostile_scaffold_visibility_selection(
     gates = {item["gate_name"]: item for item in gate["gate_results"]}
     assert gates["target_adapter_resolved"]["passed"] is True
     assert gates["target_units_created"]["passed"] is True
+    assert gates["target_units_inside_selected_region"]["passed"] is True
     assert gates["target_mechanism_distinct"]["passed"] is True
     assert gates["no_openai_calls"]["passed"] is True
     assert gates["candidate_generation_authorized"]["passed"] is False
@@ -9209,6 +9242,125 @@ def test_residual_work_order_accepts_hostile_scaffold_visibility_selection(
 
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_hostile_scaffold_work_order_supersedes_out_of_region_target_units(
+    tmp_path,
+):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    unsafe = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+    assert unsafe.exit_code == 0
+    unsafe_packet_dir = Path(str(unsafe.payload["packet_dir"]))
+    out_of_region_text = "No answer enters from outside the room."
+
+    def _add_out_of_region_material_unit(payload):
+        payload["target_units"].append(
+            {
+                "unit_id": "proof_no_answer_embodiment_preservation",
+                "target_unit_id": "proof_no_answer_embodiment_preservation",
+                "before_text": out_of_region_text,
+                "before_text_sha256": sha256_text(out_of_region_text),
+                "parent_region_id": "proof_no_outside_answer_region",
+                "source_region_id": "proof_no_outside_answer_region",
+                "source_span": {
+                    "region_id": "proof_no_outside_answer_region",
+                    "char_start": None,
+                    "char_end": None,
+                    "before_text_sha256": sha256_text(out_of_region_text),
+                    "contained_in_selected_region": False,
+                },
+                "material_change_required": True,
+                "future_generation_authorized": False,
+            }
+        )
+        payload["target_unit_count"] = len(payload["target_units"])
+        payload["material_target_units_all_inside_selected_region"] = False
+
+    rewrite_payload(
+        unsafe_packet_dir / "object_motion_target_unit_map.json",
+        _add_out_of_region_material_unit,
+    )
+    payloads = {
+        artifact_type: read_payload(unsafe_packet_dir / f"{artifact_type}.json")
+        for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    }
+    failures = semantic_preflight_failures_for_work_order(payloads)
+    assert any(
+        "out_of_region_target_units_in_single_region_work_order" in failure
+        for failure in failures
+    )
+
+    refused = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=unsafe_packet_dir,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert refused.exit_code == 1
+    assert refused.payload["accepted"] is False
+    assert "work-order semantic preflight failed" in refused.payload["message"]
+    assert "out_of_region_target_units_in_single_region_work_order" in refused.payload[
+        "message"
+    ]
+
+    successor = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+
+    assert successor.exit_code == 0
+    assert successor.payload["accepted"] is True
+    assert successor.payload["superseded_work_order_packet_id"] == unsafe_packet_dir.name
+    assert successor.payload["supersession_reason"] == (
+        "out_of_region_target_units_in_single_region_work_order"
+    )
+    assert successor.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert successor.payload["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert successor.payload["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["candidate_generation_authorized"] is False
+    assert successor.payload["counts"]["model_calls"] == 0
+
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    selected_region = read_payload(successor_dir / "selected_intervention_region.json")
+    selected_region_text = " ".join(
+        selected_region["selected_region_before_text"].split()
+    )
+    unit_map = read_payload(successor_dir / "object_motion_target_unit_map.json")
+    for unit in unit_map["target_units"]:
+        assert unit["material_change_required"] is True
+        assert " ".join(unit["before_text"].split()) in selected_region_text
+        assert unit["source_region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+        assert unit["source_span"]["region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    protected_reference_ids = {
+        unit["reference_unit_id"] for unit in unit_map["protected_reference_units"]
+    }
+    assert "proof_no_answer_embodiment_preservation" in protected_reference_ids
+    assert "final_return_echo_without_explanation" in protected_reference_ids
+    assert "preserve_table_dust_spoon_saucer_ring_causal_field" in protected_reference_ids
+    assert all(
+        unit["material_change_required"] is False
+        for unit in unit_map["protected_reference_units"]
+    )
+
+    successor_payloads = {
+        artifact_type: read_payload(successor_dir / f"{artifact_type}.json")
+        for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    }
+    assert semantic_preflight_failures_for_work_order(successor_payloads) == []
 
 
 def test_tactile_stale_work_order_fails_preflight_and_successor_supersedes(tmp_path):
