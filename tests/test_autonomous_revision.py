@@ -1,11 +1,13 @@
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 import abi.modules.ablation_informed_revision as ablation_informed_revision_module
 import abi.modules.autonomous_revision as autonomous_revision_module
+import abi.modules.residual_targets as residual_targets_module
 from abi.artifacts import list_artifacts
 from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
@@ -117,6 +119,8 @@ from abi.modules.residual_target_selection import (
 )
 from abi.modules.residual_targets import (
     HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION,
+    HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID,
+    HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION,
     OBJECT_MOTION_GENERATION_CONTRACT_VERSION,
@@ -124,8 +128,10 @@ from abi.modules.residual_targets import (
     TACTILE_GENERATION_CONTRACT_VERSION,
     TACTILE_INEVITABILITY_TARGET_ID,
     TACTILE_WORK_ORDER_CONTRACT_VERSION,
+    payload_has_placeholder_generation_contract,
     require_residual_target_adapter,
     semantic_preflight_failures_for_work_order,
+    target_generation_readiness_failures,
 )
 from abi.modules.residual_generation_authorization import (
     AUTHORIZATION_DECISION_AUTHORIZE_ONE,
@@ -767,6 +773,46 @@ def build_tactile_residual_candidate_authorization_chain(
     fixture_only: bool = False,
 ):
     chain = build_tactile_residual_work_order_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    assert authorization.payload["accepted"] is True
+    packet_dir = Path(str(authorization.payload["packet_dir"]))
+    if fixture_only:
+        mark_packet_fixture_only(packet_dir)
+    chain["residual_generation_authorization"] = authorization.payload
+    return chain
+
+
+def build_hostile_scaffold_residual_work_order_chain(tmp_path: Path):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert selection.exit_code == 0
+    work_order = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+    assert work_order.exit_code == 0
+    chain["residual_target_selection"] = selection.payload
+    chain["residual_work_order"] = work_order.payload
+    return chain
+
+
+def build_hostile_scaffold_residual_candidate_authorization_chain(
+    tmp_path: Path,
+    *,
+    fixture_only: bool = False,
+):
+    chain = build_hostile_scaffold_residual_work_order_chain(tmp_path)
     authorization = run_residual_generation_authorization(
         chain["config"],
         work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
@@ -8902,13 +8948,19 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     assert hostile_adapter.generation_contract_version == (
         HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION
     )
+    assert hostile_adapter.generation_contract_version != "placeholder_1"
     assert hostile_adapter.work_order_contract_version == (
         HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION
     )
     assert hostile_adapter.adapter_id == "hostile_scaffold_visibility"
     assert object_adapter.materiality_policy.policy_id
     assert tactile_adapter.materiality_policy.policy_id
-    assert hostile_adapter.materiality_policy.policy_id
+    assert hostile_adapter.materiality_policy.policy_id == (
+        HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID
+    )
+    assert hostile_adapter.materiality_policy.policy_id != (
+        HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID
+    )
     assert object_adapter.materiality_policy.primary_materiality_scope == (
         "whole_selected_region"
     )
@@ -8921,6 +8973,15 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     assert tactile_adapter.materiality_policy.overlap_cluster_policy[
         "validate_member_semantics_separately"
     ] is True
+    assert hostile_adapter.materiality_policy.primary_materiality_scope == (
+        "target_bearing_scope"
+    )
+    assert "scaffold_leakage_failures" in (
+        hostile_adapter.materiality_policy.failure_report_fields
+    )
+    assert target_generation_readiness_failures(
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    ) == []
     with pytest.raises(ValueError, match="unsupported selected residual target"):
         require_residual_target_adapter("unsupported_target")
 
@@ -10081,6 +10142,245 @@ def test_tactile_generation_authorization_records_target_contract(tmp_path):
         "target_specific_reader_state_focus"
     ]
     assert all(unit["unit_id"].startswith("tactile_unit_") for unit in contract["authoritative_target_units"])
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_hostile_scaffold_generation_authorization_uses_real_contract(tmp_path):
+    chain = build_hostile_scaffold_residual_work_order_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_generation_authorization(
+        config,
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == (
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    )
+    assert result.payload["generation_contract_version"] != "placeholder_1"
+    assert result.payload["materiality_policy_id"] == (
+        HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID
+    )
+    assert result.payload["generation_authorized"] is True
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["previous_placeholder_authorization_packet_id"] is None
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    contract = read_payload(packet_dir / "residual_generation_contract.json")
+    assert contract["generation_contract_version"] != "placeholder_1"
+    assert contract["materiality_policy_id"] == HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID
+    assert contract["materiality_policy"]["primary_materiality_scope"] == (
+        "target_bearing_scope"
+    )
+    assert "semantic_validation_contract" in contract
+    assert "materially address all five target units" in " ".join(
+        contract["prompt_instructions"]
+    )
+    policy = read_payload(packet_dir / "target_unit_integration_policy.json")
+    assert policy["materiality_policy"]["policy_id"] == (
+        HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID
+    )
+    assert "generic vividness" in " ".join(policy["semantic_validation_contract"])
+    packet = read_payload(packet_dir / "residual_generation_authorization_packet.json")
+    assert packet["generation_contract_version"] != "placeholder_1"
+    assert packet["materiality_policy_id"] == HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID
+    assert payload_has_placeholder_generation_contract(packet) is False
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_hostile_scaffold_placeholder_adapter_refuses_authorization(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_hostile_scaffold_residual_work_order_chain(tmp_path)
+    adapter = require_residual_target_adapter(HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID)
+    placeholder_policy = replace(
+        adapter.materiality_policy,
+        policy_id=HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
+    )
+    monkeypatch.setitem(
+        residual_targets_module.RESIDUAL_TARGET_ADAPTERS,
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        replace(
+            adapter,
+            generation_contract_version="placeholder_1",
+            materiality_policy=placeholder_policy,
+        ),
+    )
+
+    result = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "generation readiness failed" in result.payload["message"]
+    assert "placeholder-only" in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+
+
+def test_hostile_scaffold_placeholder_authorization_is_historical_not_authoritative(
+    tmp_path,
+):
+    chain = build_hostile_scaffold_residual_work_order_chain(tmp_path)
+    config = chain["config"]
+    first = run_residual_generation_authorization(
+        config,
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert first.exit_code == 0
+    first_dir = Path(str(first.payload["packet_dir"]))
+
+    def _make_placeholder(payload):
+        payload["generation_contract_version"] = "placeholder_1"
+        payload["materiality_policy_id"] = (
+            HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID
+        )
+
+    rewrite_payload(first_dir / "residual_generation_authorization_packet.json", _make_placeholder)
+
+    second = run_residual_generation_authorization(
+        config,
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert second.exit_code == 0
+    assert second.payload["accepted"] is True
+    assert second.payload["packet_id"] != first.payload["packet_id"]
+    assert second.payload["previous_placeholder_authorization_packet_id"] == (
+        first.payload["packet_id"]
+    )
+    assert second.payload[
+        "previous_placeholder_authorization_not_generation_authoritative"
+    ] is True
+    assert second.payload["supersedes_placeholder_authorization_for_target"] is True
+    assert second.payload["supersession_reason"] == (
+        "hostile scaffold generation contract was placeholder-only"
+    )
+    second_dir = Path(str(second.payload["packet_dir"]))
+    packet = read_payload(second_dir / "residual_generation_authorization_packet.json")
+    assert packet["previous_placeholder_authorization_packet_id"] == (
+        first.payload["packet_id"]
+    )
+    assert packet["generation_contract_version"] != "placeholder_1"
+    assert packet["materiality_policy_id"] == HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID
+    assert payload_has_placeholder_generation_contract(packet) is False
+
+    refused = run_residual_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=first_dir,
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-hostile-model",
+        client_factory=residual_intervention_stub_factory([]),
+    )
+    assert refused.exit_code == 1
+    assert refused.payload["accepted"] is False
+    assert "placeholder generation contract" in refused.payload["message"]
+    assert refused.payload["authorization_consumed"] is False
+    assert refused.payload["candidate_generated"] is False
+    assert refused.payload["counts"]["model_calls"] == 0
+
+
+def test_hostile_scaffold_residual_candidate_openai_refuses_without_allow_live(
+    tmp_path,
+):
+    chain = build_hostile_scaffold_residual_candidate_authorization_chain(tmp_path)
+    clients = []
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=False,
+        client_factory=residual_intervention_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--allow-live-model" in result.payload["message"]
+    assert clients == []
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+
+
+def test_hostile_scaffold_fake_fixture_generation_validates_semantics_without_model_calls(
+    tmp_path,
+):
+    chain = build_hostile_scaffold_residual_candidate_authorization_chain(
+        tmp_path,
+        fixture_only=True,
+    )
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == (
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    )
+    assert result.payload["counts"]["model_calls"] == 0
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    candidate = read_payload(packet_dir / "macro_recomposed_candidate_text.json")
+    assert candidate["fixture_only"] is True
+    assert candidate["non_final"] is True
+    assert candidate["not_human_validated"] is True
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    report = diff["materiality_report"]
+    assert report["materiality_policy_id"] == HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID
+    assert report["residual_intervention_validation_report"]["passed"] is True
+    mapping = report["target_specific_mapping_report"]
+    assert mapping["hostile_scaffold_visibility_mapping_exists"] is True
+    assert mapping["scaffold_pressure_reduced"] is True
+    assert mapping["proof_no_answer_preserved"] is True
+    assert mapping["object_field_preserved"] is True
 
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)

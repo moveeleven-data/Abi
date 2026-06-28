@@ -31,6 +31,7 @@ from abi.modules.residual_targets import (
     TACTILE_INEVITABILITY_TARGET_ID,
     ResidualTargetSpec,
     compile_tactile_target_units,
+    extract_object_labels,
     get_residual_target_spec,
     semantic_preflight_failures_for_work_order,
     target_adapter_metadata,
@@ -1434,14 +1435,20 @@ def _build_hostile_scaffold_target_unit_map(
             "reader-state evaluation should test scaffold reduction without loss of object pressure",
         ],
         "target_semantic_contract": list(subject.target_spec.operational_definition),
-        "materiality_policy_placeholder": {
-            "policy": "future generation must materially reduce scaffold visibility without deleting embodied pressure",
-            "future_generation_authorized": False,
-        },
-        "ablation_control_plan_placeholder": list(
+        "generation_materiality_policy": target_adapter_metadata(
+            subject.selected_target_id
+        )["materiality_policy_id"],
+        "generation_semantic_validation_contract": [
+            "reduce visible thesis/scaffold/explanatory pressure in selected region",
+            "materially engage every hostile scaffold target unit",
+            "preserve proof/no-answer carry and opening-return/reread gains",
+            "preserve table/dust/spoon/saucer/ring causal field and tactile/object pressure",
+            "reject vague summary, decorative vividness, rival imitation, finality claims, and phase-shift claims",
+        ],
+        "ablation_control_plan": list(
             subject.target_spec.target_specific_ablation_controls
         ),
-        "reader_state_focus_plan_placeholder": list(
+        "reader_state_focus_plan": list(
             subject.target_spec.target_specific_reader_state_focus
         ),
         "stop_test_policy": target_adapter_metadata(subject.selected_target_id).get(
@@ -1474,17 +1481,27 @@ def _hostile_scaffold_unit(
         selected_region_text=selected_region_text,
         before_text=before_text,
     )
+    object_labels = _hostile_scaffold_object_labels(before_text)
     return {
         "unit_id": unit_id,
         "target_unit_id": unit_id,
         "before_text": before_text,
         "before_text_sha256": sha256_text(before_text),
+        "objects": object_labels,
+        "involved_object_labels": object_labels,
         "parent_region_id": selected_region_id,
         "source_region_id": selected_region_id,
         "source_span": source_span,
         "contained_in_selected_region": source_span["contained_in_selected_region"],
         "source_text_packet_id": subject.candidate.packet_id,
         "current_best_candidate_packet_id": subject.candidate.packet_id,
+        "current_motion_action_state": allowed_operation,
+        "current_consequence": target_effect,
+        "current_physical_relation": (
+            "object marks, contact, crossing, pressure, and local consequence "
+            "must carry meaning before explanation"
+        ),
+        "source_unit_role": "hostile_scaffold_visibility_reduction",
         "weakness": weakness,
         "allowed_operation": allowed_operation,
         "forbidden_operation": [
@@ -1509,6 +1526,34 @@ def _hostile_scaffold_unit(
         "semantic_contract": list(subject.target_spec.operational_definition),
         "future_generation_authorized": False,
     }
+
+
+def _hostile_scaffold_object_labels(before_text: str) -> list[str]:
+    preferred = [
+        term
+        for term in (
+            "cup",
+            "ring",
+            "crumb",
+            "grain",
+            "world",
+            "crossings",
+            "table",
+            "ordinary",
+            "things",
+            "kitchen",
+            "mark",
+            "rule",
+        )
+        if term in before_text.lower()
+    ]
+    labels = []
+    for value in [*preferred, *extract_object_labels(before_text)]:
+        if value and value not in labels:
+            labels.append(value)
+        if len(labels) >= 5:
+            break
+    return labels or ["table", "mark", "pressure"]
 
 
 def _hostile_scaffold_protected_reference_units(

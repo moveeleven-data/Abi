@@ -27,17 +27,23 @@ from abi.model_calls import link_model_call_parsed_artifact
 from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
 from abi.model_schemas import (
     ModelValidationError,
+    RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
 )
 from abi.modules.residual_targets import (
+    HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     SELECTED_REGION_ID,
     TACTILE_INEVITABILITY_TARGET_ID,
     ResidualMaterialityPolicy,
+    hostile_scaffold_mapping_failures,
     materiality_policy_payload,
+    payload_has_placeholder_generation_contract,
+    replacement_hostile_scaffold_failures,
     replacement_tactile_failures,
     require_residual_target_adapter,
     semantic_preflight_failures_for_work_order,
     tactile_mapping_failures,
+    target_generation_readiness_failures,
     target_adapter_metadata,
 )
 from abi.packets import (
@@ -894,6 +900,21 @@ def _validate_subject_before_model_call(
     if auth_packet.get("candidate_generated") is True:
         raise ValueError("authorization packet already records generated candidate")
     adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    readiness_failures = target_generation_readiness_failures(
+        subject.selected_residual_target_id
+    )
+    if readiness_failures:
+        raise ValueError(
+            "target generation readiness failed: "
+            + "; ".join(readiness_failures)
+        )
+    for artifact_type, payload in subject.authorization_payloads.items():
+        if payload_has_placeholder_generation_contract(payload):
+            raise ValueError(
+                "authorization packet uses placeholder generation contract and is "
+                "not generation-authoritative: "
+                f"{artifact_type}"
+            )
     if subject.selected_region_id != SELECTED_REGION_ID:
         raise ValueError("selected region is missing or invalid")
     if not subject.selected_region_sha256:
@@ -1099,14 +1120,27 @@ def _validate_model_payload(
         )
         if failures:
             raise ModelValidationError("; ".join(failures))
-    _validate_replacement_text(subject, replacement, validated_mapping)
+    if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        failures = hostile_scaffold_mapping_failures(
+            payload,
+            {unit.unit_id for unit in subject.target_units},
+        )
+        if failures:
+            raise ModelValidationError("; ".join(failures))
+    _validate_replacement_text(
+        subject,
+        replacement,
+        validated_mapping,
+        model_payload=payload,
+    )
 
 
 def _mapping_from_model_payload(
     subject: ResidualCandidateSubject,
     payload: dict[str, object],
 ) -> list[object]:
-    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    if adapter.generation_schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
         mapping = payload.get("target_unit_mappings")
         if not isinstance(mapping, list):
             raise ModelValidationError("target_unit_mappings must be a list")
@@ -1217,6 +1251,7 @@ def _validate_replacement_text(
     subject: ResidualCandidateSubject,
     replacement_region_text: str,
     target_unit_mapping: list[dict[str, object]],
+    model_payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
     replacement = replacement_region_text.strip()
     if not replacement:
@@ -1268,6 +1303,7 @@ def _validate_replacement_text(
         subject=subject,
         replacement=replacement,
         target_unit_mapping=target_unit_mapping,
+        model_payload=model_payload or {},
     )
     if validation_report["passed"] is not True:
         raise ResidualInterventionValidationError(validation_report)
@@ -1279,6 +1315,7 @@ def _collect_residual_intervention_validation(
     subject: ResidualCandidateSubject,
     replacement: str,
     target_unit_mapping: list[dict[str, object]],
+    model_payload: dict[str, object],
 ) -> dict[str, object]:
     adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     policy = adapter.materiality_policy
@@ -1350,36 +1387,55 @@ def _collect_residual_intervention_validation(
                 failures["abstract_inevitability_failures"].append(failure)
             else:
                 failures["tactile_semantic_failures"].append(failure)
+    if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        hostile_failures = replacement_hostile_scaffold_failures(
+            replacement_text=replacement,
+            selected_region_before_text=subject.selected_region_before_text,
+            target_units=[unit_payload(unit) for unit in subject.target_units],
+            model_payload=model_payload,
+        )
+        for category, category_failures in hostile_failures.items():
+            failures.setdefault(category, []).extend(category_failures)
 
     object_terms_present = _terms_present(lower, term_contract["object_terms"])
     motion_terms_present = _terms_present(lower, term_contract["motion_terms"])
     consequence_terms_present = _terms_present(lower, term_contract["consequence_terms"])
     missing_unit_object_terms = _missing_unit_object_terms(subject, lower)
-    if missing_unit_object_terms:
+    if (
+        missing_unit_object_terms
+        and subject.selected_residual_target_id != HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    ):
         failures["object_motion_relabel_failures"].append(
             "replacement_region_text missing artifact-derived object terms for "
             f"target units: {', '.join(missing_unit_object_terms)}"
         )
-    relation_count = _object_motion_relation_count(
-        replacement,
-        object_terms=term_contract["object_terms"],
-        motion_terms=term_contract["motion_terms"],
-        consequence_terms=term_contract["consequence_terms"],
-    )
-    if relation_count < 2:
-        failures["object_motion_relabel_failures"].append(
-            "object motion causal relation missing"
+    if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        relation_count = _hostile_scaffold_relation_count(replacement)
+        if relation_count < 2:
+            failures["object_field_preservation_failures"].append(
+                "object/tactile pressure relation missing"
+            )
+    else:
+        relation_count = _object_motion_relation_count(
+            replacement,
+            object_terms=term_contract["object_terms"],
+            motion_terms=term_contract["motion_terms"],
+            consequence_terms=term_contract["consequence_terms"],
         )
-    if len(object_terms_present) < term_contract["required_object_term_count"] or len(
-        motion_terms_present
-    ) < term_contract["required_motion_term_count"]:
-        failures["object_motion_relabel_failures"].append(
-            "decorative-only replacement lacks object motion"
-        )
-    if len(consequence_terms_present) < term_contract["required_consequence_term_count"]:
-        failures["object_motion_relabel_failures"].append(
-            "visible consequence before explanation is missing"
-        )
+        if relation_count < 2:
+            failures["object_motion_relabel_failures"].append(
+                "object motion causal relation missing"
+            )
+        if len(object_terms_present) < term_contract["required_object_term_count"] or len(
+            motion_terms_present
+        ) < term_contract["required_motion_term_count"]:
+            failures["object_motion_relabel_failures"].append(
+                "decorative-only replacement lacks object motion"
+            )
+        if len(consequence_terms_present) < term_contract["required_consequence_term_count"]:
+            failures["object_motion_relabel_failures"].append(
+                "visible consequence before explanation is missing"
+            )
 
     unit_reports = _target_unit_materiality_reports(
         subject=subject,
@@ -1417,6 +1473,21 @@ def _collect_residual_intervention_validation(
                 ),
                 "distinct_from_object_motion_causality": (
                     not failures["object_motion_relabel_failures"]
+                ),
+            }
+        )
+    if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        target_specific_mapping_report.update(
+            {
+                "hostile_scaffold_visibility_mapping_exists": True,
+                "scaffold_pressure_reduced": (
+                    not failures.get("scaffold_leakage_failures")
+                ),
+                "proof_no_answer_preserved": (
+                    not failures.get("proof_no_answer_deletion_failures")
+                ),
+                "object_field_preserved": (
+                    not failures.get("object_field_preservation_failures")
                 ),
             }
         )
@@ -1511,6 +1582,14 @@ def _empty_failure_buckets() -> dict[str, list[str]]:
         "generic_decorative_vividness_failures": [],
         "abstract_inevitability_failures": [],
         "protected_context_scope_failures": [],
+        "scaffold_leakage_failures": [],
+        "proof_no_answer_deletion_failures": [],
+        "object_field_preservation_failures": [],
+        "tactile_object_pressure_preservation_failures": [],
+        "vagueness_or_summary_failures": [],
+        "decorative_vividness_failures": [],
+        "rival_mimicry_failures": [],
+        "finality_or_phase_shift_claim_failures": [],
     }
 
 
@@ -2172,6 +2251,7 @@ def _build_recomposed_candidate(
         subject,
         replacement,
         _mapping_from_model_payload(subject, model_payload),
+        model_payload=model_payload,
     )
     text = subject.base_text.replace(subject.selected_region_before_text, replacement, 1)
     if text == subject.base_text:
@@ -2356,6 +2436,8 @@ def _model_predicted_reader_effect(
         return model_payload["predicted_reader_effect"]
     if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
         return "reader feels material consequence before interpretation explains it"
+    if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return "reader feels object-field pressure without visible scaffold"
     return ""
 
 
@@ -2363,7 +2445,8 @@ def _model_target_unit_mapping(
     subject: ResidualCandidateSubject,
     model_payload: dict[str, object],
 ) -> list[object]:
-    if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    if adapter.generation_schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
         value = model_payload.get("target_unit_mappings")
         return list(value) if isinstance(value, list) else []
     value = model_payload.get("target_unit_mapping")
@@ -3026,19 +3109,26 @@ def _load_base_candidate_payload(
 
 def _target_units_from_map(unit_map: dict[str, Any]) -> list[TargetUnit]:
     units = []
+    target_id = str(unit_map.get("selected_residual_target_id") or "")
     for item in unit_map.get("target_units", []):
         if not isinstance(item, dict):
             continue
+        before_text = str(item.get("before_text") or "")
+        objects = tuple(str(value) for value in item.get("objects", []) if str(value))
+        if not objects and target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+            objects = tuple(sorted(_significant_terms(before_text))[:5])
         units.append(
             TargetUnit(
                 unit_id=str(item.get("unit_id") or ""),
-                before_text=str(item.get("before_text") or ""),
+                before_text=before_text,
                 before_text_sha256=str(item.get("before_text_sha256") or ""),
-                objects=tuple(str(value) for value in item.get("objects", [])),
+                objects=objects,
                 target_effect=str(item.get("target_effect") or ""),
                 current_motion_action_state=str(
                     item.get("current_motion_action_state")
                     or item.get("current_physical_relation")
+                    or item.get("allowed_operation")
+                    or item.get("weakness")
                     or ""
                 ),
                 current_consequence=str(
@@ -3184,6 +3274,41 @@ def _object_motion_relation_count(
     return count
 
 
+def _hostile_scaffold_relation_count(text: str) -> int:
+    object_terms = (
+        "table",
+        "dust",
+        "spoon",
+        "saucer",
+        "ring",
+        "cup",
+        "crumb",
+        "grain",
+        "surface",
+        "mark",
+    )
+    pressure_terms = (
+        "pressure",
+        "mark",
+        "trace",
+        "contact",
+        "crossing",
+        "crossings",
+        "weight",
+        "carried",
+        "leans",
+        "pulls",
+        "gathers",
+        "turns",
+    )
+    count = 0
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        lower = sentence.lower()
+        if _terms_present(lower, object_terms) and _terms_present(lower, pressure_terms):
+            count += 1
+    return count
+
+
 def _decorative_list_risk(
     text: str,
     *,
@@ -3303,6 +3428,7 @@ def _validation_report_from_model_results(
                 subject=subject,
                 replacement=replacement.strip(),
                 target_unit_mapping=validated_mapping,
+                model_payload=payload,
             )
         except ModelValidationError:
             return {
@@ -3448,6 +3574,8 @@ def _valid_fake_payload_for_subject(subject: ResidualCandidateSubject) -> dict[s
     units = [unit_payload(unit) for unit in subject.target_units]
     if subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID:
         return _valid_tactile_fake_payload(units)
+    if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return _valid_hostile_scaffold_fake_payload(units)
     return _valid_fake_payload(units)
 
 
@@ -3506,6 +3634,95 @@ def _valid_tactile_fake_payload(units: list[dict[str, object]]) -> dict[str, obj
             "no nonselected region edits",
             "no rival mimicry",
             "no abstract inevitability explanation",
+        ],
+        "uncertainty": "fixture output for deterministic tests only",
+    }
+
+
+def _valid_hostile_scaffold_fake_payload(
+    units: list[dict[str, object]],
+) -> dict[str, object]:
+    replacement = (
+        "The cup ring dries at one rim and pulls the crumb deeper into the grain; "
+        "the mark is already on the table before anyone reaches for a name. Dust "
+        "from hand, foot, and air gathers in the same pale run, and the spoon "
+        "turns toward the saucer's broken edge. At first the table is only "
+        "itself. Its surface keeps the crossings as a small pressure: cup to "
+        "ring, ring to crumb, dust to path, spoon to saucer. The kitchen stays "
+        "small, and every mark leans on another mark until the room's weight is "
+        "carried by the things."
+    )
+    mappings = []
+    for unit in units:
+        unit_id = str(unit["unit_id"])
+        labels = " ".join(
+            str(value)
+            for value in unit.get("objects", [])
+            if isinstance(value, str)
+        )
+        mappings.append(
+            {
+                "target_unit_id": unit_id,
+                "before_text_sha256": str(unit.get("before_text_sha256") or ""),
+                "mechanism_operation": (
+                    "reduce visible scaffold by letting material marks and contact "
+                    "carry pressure"
+                ),
+                "material_relation_or_action": (
+                    labels
+                    or str(unit.get("current_motion_action_state") or "object pressure")
+                ),
+                "visible_consequence": (
+                    "the object field carries the local consequence before the line "
+                    "turns explanatory"
+                ),
+                "intended_first_read_effect": (
+                    "reader feels the relation from marks and pressure rather than "
+                    "from visible scaffold"
+                ),
+                "protected_effects_preserved": [
+                    "proof/no-answer pressure remains outside the selected region",
+                    "opening-return and reread gains remain protected",
+                    "table dust spoon saucer ring causal field remains active",
+                ],
+                "covered_target_ids": [
+                    unit_id,
+                    HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+                ],
+            }
+        )
+    return {
+        "replacement_region_text": replacement,
+        "target_unit_mappings": mappings,
+        "intervention_plan": [
+            "replace only the selected middle recurrence region",
+            "reduce visible scaffold without deleting proof/no-answer pressure",
+            "preserve tactile/object gains and protected references outside the region",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "replacement_region_text covers only the selected region",
+                "risk_note": "controller assembles the final candidate",
+            },
+            {
+                "constraint_id": "hostile_scaffold_visibility_generation_materiality_v1",
+                "how_satisfied": "object marks carry pressure before explanation",
+                "risk_note": "requires later ablation and reader-state evaluation",
+            },
+        ],
+        "protected_effects_notes": [
+            "proof/no-answer pressure preserved",
+            "opening-return reread gains preserved",
+            "object/tactile field with table, dust, spoon, saucer, and ring preserved",
+            "strongest-rival pressure remains blocking",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no nonselected region edits",
+            "no rival imitation",
+            "no vague summary compression",
         ],
         "uncertainty": "fixture output for deterministic tests only",
     }

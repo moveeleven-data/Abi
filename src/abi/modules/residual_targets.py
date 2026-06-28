@@ -28,7 +28,17 @@ TACTILE_WORK_ORDER_CONTRACT_VERSION = "2"
 HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION = "1"
 OBJECT_MOTION_GENERATION_CONTRACT_VERSION = "1"
 TACTILE_GENERATION_CONTRACT_VERSION = "1"
-HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION = "placeholder_1"
+HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION = "1"
+PLACEHOLDER_GENERATION_CONTRACT_VERSIONS = ("placeholder_1",)
+HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID = (
+    "hostile_scaffold_visibility_planning_placeholder_v1"
+)
+HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID = (
+    "hostile_scaffold_visibility_generation_materiality_v1"
+)
+PLACEHOLDER_MATERIALITY_POLICY_IDS = (
+    HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
+)
 
 
 @dataclass(frozen=True)
@@ -495,46 +505,74 @@ TACTILE_MATERIALITY_POLICY = ResidualMaterialityPolicy(
 )
 
 HOSTILE_SCAFFOLD_MATERIALITY_POLICY = ResidualMaterialityPolicy(
-    policy_id="hostile_scaffold_visibility_planning_placeholder_v1",
+    policy_id=HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID,
     policy_version="1",
-    primary_materiality_scope="target_unit_scope",
+    primary_materiality_scope="target_bearing_scope",
     whole_region_guard={
-        "scope": "bounded_target_regions",
-        "diagnostic_only_until_generation_authorized": True,
-        "exact_copy_fails_if_generation_is_later_authorized": True,
+        "scope": "whole_selected_region",
+        "near_copy_guard_only": True,
+        "exact_copy_fails": True,
+        "selected_region_copy_fails": True,
+        "do_not_enforce_global_ratio_floor": True,
+        "token_edit_distance_floor": 12,
+        "sequence_similarity_ceiling": 0.96,
     },
     target_bearing_scope={
-        "scope": "sentences_or_paragraphs_containing scaffold/proof/return pressure",
-        "diagnostic_only_until_generation_authorized": True,
+        "scope": "selected-region paragraphs containing hostile scaffold target units",
+        "absolute_change_floor": 8,
+        "ratio_floor": 0.10,
+        "token_edit_distance_floor": 12,
+        "sequence_similarity_ceiling": 0.91,
+        "changed_sentence_floor": 2,
+        "must_reduce_visible_scaffold_pressure": True,
+        "must_preserve_embodied_object_field": True,
     },
     target_unit_scope={
         "scope": "each hostile scaffold visibility target unit",
         "must_reduce_scaffold_without_deleting_pressure": True,
+        "absolute_change_floor": 3,
+        "ratio_floor": 0.08,
+        "token_edit_distance_floor": 4,
+        "sequence_similarity_ceiling": 0.90,
+        "changed_sentence_floor": 1,
     },
     overlap_cluster_policy={
         "detect_shared_before_text_hash": True,
         "evaluate_scaffold_reduction_and_embodiment_preservation_together": True,
+        "evaluate_integrated_replacement_once": True,
+        "validate_member_semantics_separately": True,
+        "require_coherent_replacement_not_duplicate_rewrites": True,
     },
-    absolute_change_floor=0,
-    ratio_floor=0.0,
-    token_edit_distance_floor=0,
-    sequence_similarity_ceiling=1.0,
-    changed_sentence_floor=0,
+    absolute_change_floor=8,
+    ratio_floor=0.10,
+    token_edit_distance_floor=12,
+    sequence_similarity_ceiling=0.91,
+    changed_sentence_floor=2,
     protected_context_exemptions=(
-        "planning-only target; no text change is authorized by the work order",
-        "future generation must preserve embodied proof and object-field pressure",
+        "proof/no-answer pressure outside the selected region is protected and must not be deleted",
+        "opening-return and final-return gains outside the selected region are protected references",
+        "table/dust/spoon/saucer/ring object field must remain causally active",
     ),
     prompt_feedback=(
+        "do not perform a broad rewrite",
         "reduce visible explanation rather than deleting proof/no-answer pressure",
-        "preserve embodied causal objects and current reread gains",
+        "make the object field carry more of the meaning",
+        "materially address all five target units inside the selected region",
+        "preserve packet_0063 tactile/object gains",
+        "preserve protected references outside the selected region",
+        "surrounding protected context may remain stable",
         "do not replace scaffold with vagueness, summary, rival mimicry, or decorative vividness",
     ),
     failure_report_fields=(
+        "target_bearing_selected_region_materiality_failures",
         "scaffold_leakage_failures",
         "proof_no_answer_deletion_failures",
         "object_field_preservation_failures",
+        "tactile_object_pressure_preservation_failures",
         "vagueness_or_summary_failures",
+        "decorative_vividness_failures",
         "rival_mimicry_failures",
+        "finality_or_phase_shift_claim_failures",
     ),
 )
 
@@ -621,9 +659,16 @@ HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER = ResidualTargetAdapter(
         "autonomous.residual_intervention_generation.v1.hostile_scaffold_visibility"
     ),
     prompt_instructions=(
-        "planning target only until a separate generation authorization exists",
+        "replace only the selected region; do not perform a broad rewrite",
         "reduce visible thesis/scaffold/explanatory pressure",
+        "make the object field carry more of the meaning",
+        "materially address all five target units inside the selected region",
         "preserve embodied causal object field, tactile/object pressure, proof/no-answer carry, and opening-return gains",
+        "do not delete proof/no-answer pressure",
+        "do not flatten into summary",
+        "do not imitate the rival",
+        "preserve packet_0063 tactile/object gains and protected references outside the selected region",
+        "surrounding protected context may remain stable",
         "do not make the prose vague, decorative, rival-like, summary-like, final, or phase-shift claiming",
     ),
     mechanism_contract=HOSTILE_SCAFFOLD_VISIBILITY_SPEC.operational_definition,
@@ -714,6 +759,87 @@ TACTILE_ABSTRACT_TERMS = (
     "metaphysical proof",
 )
 
+HOSTILE_SCAFFOLD_EXPLANATION_TERMS = (
+    "thesis",
+    "scaffold",
+    "explanation",
+    "explains",
+    "explained",
+    "symbolic",
+    "metaphysical",
+    "signifies",
+    "meaning",
+    "means",
+    "lesson",
+    "message",
+    "rule",
+    "names it",
+    "named",
+)
+
+HOSTILE_SCAFFOLD_LEAKAGE_TERMS = (
+    "scaffold",
+    "thesis",
+    "final artifact",
+    "finalization",
+    "phase shift",
+    "phase-shift",
+    "human validation",
+    "source manifest",
+    "model_call_id",
+    "artifact-set",
+)
+
+HOSTILE_GENERIC_VIVIDNESS_TERMS = (
+    "luminous",
+    "beautiful",
+    "velvet",
+    "shimmering",
+    "atmospheric",
+    "vivid",
+    "vividness",
+    "glittering",
+)
+
+HOSTILE_SUMMARY_COMPRESSION_TERMS = (
+    "in summary",
+    "this means",
+    "the point is",
+    "the theme is",
+    "the artifact shows",
+    "the text demonstrates",
+)
+
+HOSTILE_OBJECT_FIELD_TERMS = (
+    "table",
+    "dust",
+    "spoon",
+    "saucer",
+    "ring",
+    "cup",
+    "crumb",
+    "grain",
+    "surface",
+)
+
+HOSTILE_TACTILE_PRESSURE_TERMS = (
+    "contact",
+    "pressure",
+    "mark",
+    "marks",
+    "trace",
+    "grain",
+    "surface",
+    "dust",
+    "ring",
+    "crumb",
+    "break",
+    "broken",
+    "crack",
+    "fall",
+    "weight",
+)
+
 
 def get_residual_target_spec(target_id: str) -> ResidualTargetSpec | None:
     return RESIDUAL_TARGET_SPECS.get(target_id)
@@ -768,6 +894,65 @@ def target_adapter_metadata(target_id: str) -> dict[str, object]:
 
 def materiality_policy_payload(target_id: str) -> dict[str, object]:
     return require_residual_target_adapter(target_id).materiality_policy.to_dict()
+
+
+def target_generation_readiness_failures(target_id: str) -> list[str]:
+    adapter = require_residual_target_adapter(target_id)
+    failures: list[str] = []
+    if _is_placeholder_generation_contract(
+        adapter.generation_contract_version,
+        adapter.materiality_policy.policy_id,
+    ):
+        failures.append(
+            "target generation contract is placeholder-only: "
+            f"generation_contract_version={adapter.generation_contract_version}; "
+            f"materiality_policy_id={adapter.materiality_policy.policy_id}"
+        )
+    if adapter.materiality_policy.primary_materiality_scope not in {
+        "whole_selected_region",
+        "target_bearing_scope",
+    }:
+        failures.append(
+            "target materiality policy lacks a generation-enforceable scope: "
+            f"{adapter.materiality_policy.primary_materiality_scope}"
+        )
+    if not adapter.prompt_contract_id.strip():
+        failures.append("target prompt contract is missing")
+    if target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        required_fields = {
+            "scaffold_leakage_failures",
+            "proof_no_answer_deletion_failures",
+            "object_field_preservation_failures",
+            "vagueness_or_summary_failures",
+            "rival_mimicry_failures",
+            "finality_or_phase_shift_claim_failures",
+        }
+        missing = sorted(required_fields - set(adapter.materiality_policy.failure_report_fields))
+        if missing:
+            failures.append(
+                "hostile scaffold semantic validation contract is incomplete: "
+                + ", ".join(missing)
+            )
+    return failures
+
+
+def payload_has_placeholder_generation_contract(payload: dict[str, Any]) -> bool:
+    return _is_placeholder_generation_contract(
+        str(payload.get("generation_contract_version") or ""),
+        str(payload.get("materiality_policy_id") or ""),
+    )
+
+
+def _is_placeholder_generation_contract(
+    generation_contract_version: str,
+    materiality_policy_id: str,
+) -> bool:
+    return (
+        generation_contract_version in PLACEHOLDER_GENERATION_CONTRACT_VERSIONS
+        or materiality_policy_id in PLACEHOLDER_MATERIALITY_POLICY_IDS
+        or generation_contract_version.startswith("placeholder")
+        or "placeholder" in materiality_policy_id
+    )
 
 
 def compile_tactile_target_units(
@@ -1010,6 +1195,197 @@ def validate_single_region_target_unit_alignment(
                     f"{reference_id} protected_reference_units must not require material change"
                 )
     return failures
+
+
+def hostile_scaffold_mapping_failures(
+    payload: dict[str, object],
+    target_unit_ids: set[str],
+) -> list[str]:
+    failures: list[str] = []
+    mappings = payload.get("target_unit_mappings")
+    if not isinstance(mappings, list) or not mappings:
+        return ["target_unit_mappings must not be empty"]
+    seen: set[str] = set()
+    preserved_notes = _joined_model_notes(payload)
+    for index, item in enumerate(mappings):
+        if not isinstance(item, dict):
+            failures.append(f"target_unit_mappings[{index}] must be an object")
+            continue
+        unit_id = str(item.get("target_unit_id") or "")
+        if unit_id not in target_unit_ids:
+            failures.append(f"invented or unsupported target unit: {unit_id}")
+        if unit_id in seen:
+            failures.append(f"duplicate target unit mapping: {unit_id}")
+        seen.add(unit_id)
+        for field in (
+            "before_text_sha256",
+            "mechanism_operation",
+            "material_relation_or_action",
+            "visible_consequence",
+            "intended_first_read_effect",
+        ):
+            if not str(item.get(field) or "").strip():
+                failures.append(f"{unit_id}.{field} must not be empty")
+        covered = {
+            str(value)
+            for value in item.get("covered_target_ids", [])
+            if isinstance(value, str)
+        }
+        if unit_id and unit_id not in covered:
+            failures.append(f"{unit_id}.covered_target_ids must include the unit id")
+        protected = " ".join(
+            str(value)
+            for value in item.get("protected_effects_preserved", [])
+            if isinstance(value, str)
+        ).lower()
+        preserved_notes += " " + protected
+    missing = sorted(target_unit_ids - seen)
+    if missing:
+        failures.append(f"missing target unit IDs: {missing}")
+    if not _contains_any(preserved_notes, ("proof", "answer", "no-answer")):
+        failures.append("proof/no-answer carry is not recorded as preserved")
+    if not _contains_any(preserved_notes, ("opening", "return", "reread", "final")):
+        failures.append("opening-return/reread gains are not recorded as preserved")
+    if not _contains_any(preserved_notes, ("object", "table", "dust", "spoon", "saucer", "ring")):
+        failures.append("object/tactile causal field is not recorded as preserved")
+    return failures
+
+
+def replacement_hostile_scaffold_failures(
+    *,
+    replacement_text: str,
+    selected_region_before_text: str,
+    target_units: list[dict[str, object]],
+    model_payload: dict[str, object],
+) -> dict[str, list[str]]:
+    replacement = replacement_text.strip()
+    lower = replacement.lower()
+    before_lower = selected_region_before_text.lower()
+    failures: dict[str, list[str]] = {
+        "scaffold_leakage_failures": [],
+        "proof_no_answer_deletion_failures": [],
+        "object_field_preservation_failures": [],
+        "tactile_object_pressure_preservation_failures": [],
+        "vagueness_or_summary_failures": [],
+        "decorative_vividness_failures": [],
+        "rival_mimicry_failures": [],
+        "finality_or_phase_shift_claim_failures": [],
+    }
+    explanation_before = _term_count(before_lower, HOSTILE_SCAFFOLD_EXPLANATION_TERMS)
+    explanation_after = _term_count(lower, HOSTILE_SCAFFOLD_EXPLANATION_TERMS)
+    if explanation_before > 0 and explanation_after >= explanation_before:
+        failures["scaffold_leakage_failures"].append(
+            "visible thesis/scaffold/explanatory pressure was not reduced"
+        )
+    if _contains_any(lower, HOSTILE_SCAFFOLD_LEAKAGE_TERMS):
+        failures["scaffold_leakage_failures"].append(
+            "replacement contains explicit scaffold or artifact metadata leakage"
+        )
+    if _contains_any(lower, ("final artifact", "finalization", "phase shift", "phase-shift")):
+        failures["finality_or_phase_shift_claim_failures"].append(
+            "replacement contains finality or phase-shift language"
+        )
+    if "rival" in lower:
+        failures["rival_mimicry_failures"].append(
+            "replacement mentions or risks imitating the rival"
+        )
+    if _contains_any(lower, HOSTILE_GENERIC_VIVIDNESS_TERMS):
+        failures["decorative_vividness_failures"].append(
+            "replacement uses generic decorative vividness"
+        )
+    if _contains_any(lower, HOSTILE_SUMMARY_COMPRESSION_TERMS):
+        failures["vagueness_or_summary_failures"].append(
+            "replacement compresses into abstract summary"
+        )
+    if _word_count_for_validation(replacement) < max(
+        45,
+        int(_word_count_for_validation(selected_region_before_text) * 0.35),
+    ):
+        failures["vagueness_or_summary_failures"].append(
+            "replacement is too short to carry the selected-region pressure"
+        )
+    object_terms_present = _terms_present(lower, HOSTILE_OBJECT_FIELD_TERMS)
+    if len(object_terms_present) < 5:
+        failures["object_field_preservation_failures"].append(
+            "table/dust/spoon/saucer/ring causal field is not sufficiently present"
+        )
+    pressure_terms_present = _terms_present(lower, HOSTILE_TACTILE_PRESSURE_TERMS)
+    if len(pressure_terms_present) < 4:
+        failures["tactile_object_pressure_preservation_failures"].append(
+            "tactile/object pressure is not sufficiently preserved"
+        )
+    unit_engagement_failures = _hostile_unit_engagement_failures(
+        replacement_lower=lower,
+        target_units=target_units,
+    )
+    failures["object_field_preservation_failures"].extend(unit_engagement_failures)
+    notes = _joined_model_notes(model_payload)
+    if not _contains_any(notes, ("proof", "answer", "no-answer")):
+        failures["proof_no_answer_deletion_failures"].append(
+            "model notes do not preserve proof/no-answer pressure"
+        )
+    if not _contains_any(notes, ("opening", "return", "reread", "final")):
+        failures["proof_no_answer_deletion_failures"].append(
+            "model notes do not preserve opening-return/reread gains"
+        )
+    return {key: value for key, value in failures.items() if value}
+
+
+def _hostile_unit_engagement_failures(
+    *,
+    replacement_lower: str,
+    target_units: list[dict[str, object]],
+) -> list[str]:
+    failures: list[str] = []
+    for unit in target_units:
+        if not isinstance(unit, dict):
+            continue
+        unit_id = str(unit.get("unit_id") or unit.get("target_unit_id") or "")
+        terms = {
+            term
+            for term in extract_object_labels(str(unit.get("before_text") or ""))
+            if len(term) >= 3
+        }
+        terms.update(
+            term
+            for value in unit.get("objects", [])
+            if isinstance(value, str)
+            for term in extract_object_labels(value)
+        )
+        if not terms:
+            continue
+        if not _terms_present(replacement_lower, tuple(sorted(terms))):
+            failures.append(f"{unit_id} is not materially engaged in replacement")
+    return failures
+
+
+def _joined_model_notes(payload: dict[str, object]) -> str:
+    values: list[str] = []
+    for key in (
+        "protected_effects_notes",
+        "forbidden_change_self_check",
+        "intervention_plan",
+    ):
+        raw = payload.get(key)
+        if isinstance(raw, list):
+            values.extend(str(value) for value in raw if isinstance(value, str))
+    return " ".join(values).lower()
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _term_count(text: str, terms: tuple[str, ...]) -> int:
+    return sum(text.count(term) for term in terms)
+
+
+def _terms_present(text: str, terms: tuple[str, ...]) -> list[str]:
+    return sorted({term for term in terms if term in text})
+
+
+def _word_count_for_validation(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9']+", text))
 
 
 def _unit_source_region_id(unit: dict[str, Any]) -> str:

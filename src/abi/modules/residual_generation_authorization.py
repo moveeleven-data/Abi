@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import json
 import sqlite3
@@ -25,9 +25,11 @@ from abi.packets import (
 )
 from abi.modules.residual_targets import (
     SELECTED_REGION_ID,
+    payload_has_placeholder_generation_contract,
     require_residual_target_adapter,
     semantic_preflight_failures_for_work_order,
     target_adapter_metadata,
+    target_generation_readiness_failures,
 )
 
 
@@ -110,6 +112,9 @@ class ResidualGenerationAuthorizationSubject:
     target_unit_ids: tuple[str, ...]
     target_unit_count: int
     source_parent_ids: tuple[str, ...]
+    previous_placeholder_authorization_packet_id: str | None = None
+    previous_placeholder_authorization_artifact_id: str | None = None
+    previous_placeholder_authorization_path: str | None = None
 
 
 def run_residual_generation_authorization(
@@ -169,6 +174,9 @@ def run_residual_generation_authorization(
                     f"registered: {subject.run_id}"
                 ),
             )
+        placeholder_context = _placeholder_authorization_context(connection, subject)
+        if placeholder_context:
+            subject = replace(subject, **placeholder_context)
         linked = _linked_later_authorization_or_generation(connection, subject)
         if linked is not None:
             return _refusal(
@@ -488,6 +496,13 @@ def _validate_work_order_payloads(payloads: dict[str, dict[str, Any]]) -> None:
             "is missing."
         )
     adapter = require_residual_target_adapter(selected_target)
+    readiness_failures = target_generation_readiness_failures(selected_target)
+    if readiness_failures:
+        raise ValueError(
+            "Residual generation authorization refused; selected target "
+            "generation readiness failed: "
+            + "; ".join(readiness_failures)
+        )
     semantic_failures = semantic_preflight_failures_for_work_order(payloads)
     if semantic_failures:
         raise ValueError(
@@ -588,6 +603,7 @@ def _build_subject_manifest(
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": list(subject.target_unit_ids),
         "target_unit_count": subject.target_unit_count,
+        **_placeholder_supersession_metadata(subject),
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -622,11 +638,40 @@ def _build_work_order_intake_summary(
         "candidate_generation_authorized_in_work_order": (
             packet.get("candidate_generation_authorized") is True
         ),
+        **_placeholder_supersession_metadata(subject),
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
         "worker": "work_order_intake_summary_v1_controller",
+    }
+
+
+def _placeholder_supersession_metadata(
+    subject: ResidualGenerationAuthorizationSubject,
+) -> dict[str, object]:
+    if not subject.previous_placeholder_authorization_packet_id:
+        return {
+            "previous_placeholder_authorization_packet_id": None,
+            "previous_placeholder_authorization_not_generation_authoritative": False,
+            "supersedes_placeholder_authorization_for_target": False,
+            "supersession_reason": None,
+        }
+    return {
+        "previous_placeholder_authorization_packet_id": (
+            subject.previous_placeholder_authorization_packet_id
+        ),
+        "previous_placeholder_authorization_artifact_id": (
+            subject.previous_placeholder_authorization_artifact_id
+        ),
+        "previous_placeholder_authorization_path": (
+            subject.previous_placeholder_authorization_path
+        ),
+        "previous_placeholder_authorization_not_generation_authoritative": True,
+        "supersedes_placeholder_authorization_for_target": True,
+        "supersession_reason": (
+            "hostile scaffold generation contract was placeholder-only"
+        ),
     }
 
 
@@ -672,6 +717,7 @@ def _build_generation_scope_authorization(
         "authorized_residual_target_id": subject.selected_residual_target_id,
         **target_adapter_metadata(subject.selected_residual_target_id),
         "authorized_target_unit_ids": list(subject.target_unit_ids),
+        **_placeholder_supersession_metadata(subject),
         "may_replace_only": [
             "selected region",
             "selected target units",
@@ -756,6 +802,13 @@ def _build_target_unit_integration_policy(
         ],
         "prompt_instructions": list(adapter.prompt_instructions),
         "mechanism_contract": list(adapter.mechanism_contract),
+        "materiality_policy": adapter.materiality_policy.to_dict(),
+        "semantic_validation_contract": [
+            "model output schema must validate before any artifact registration",
+            "all target units must be materially engaged",
+            "protected proof/no-answer and opening-return pressure must be preserved",
+            "generic vividness, summary compression, rival imitation, finality, and phase-shift claims are refused",
+        ],
         "must_not": [
             "add a new object list",
             "add decorative motion or vividness",
@@ -828,6 +881,16 @@ def _build_residual_generation_contract(
         "prompt_instructions": list(adapter.prompt_instructions),
         "generation_schema_name": adapter.generation_schema.name,
         "generation_schema_version": adapter.generation_schema.version,
+        "materiality_policy": adapter.materiality_policy.to_dict(),
+        "materiality_policy_id": adapter.materiality_policy.policy_id,
+        "materiality_policy_version": adapter.materiality_policy.policy_version,
+        "semantic_validation_contract": [
+            "schema validation before artifact registration",
+            "selected-region materiality validation",
+            "target-unit material engagement validation",
+            "protected-effect preservation validation",
+            "forbidden leakage/finality/phase-shift validation",
+        ],
         "protected_effects": list(
             subject.payloads["protected_effects_and_forbidden_changes"].get(
                 "protected_effects",
@@ -852,6 +915,7 @@ def _build_residual_generation_contract(
             adapter.reader_state_evaluation_focus
         ),
         "stop_test_policy": dict(adapter.stop_test_policy),
+        **_placeholder_supersession_metadata(subject),
         "one_attempt_budget": 1 if generation_authorized else 0,
         "generation_authorized": generation_authorized,
         "authorization_consumed": False,
@@ -880,6 +944,7 @@ def _build_future_generator_contract_ref(
         "selected_residual_target_id": subject.selected_residual_target_id,
         **target_adapter_metadata(subject.selected_residual_target_id),
         "target_unit_ids": list(subject.target_unit_ids),
+        **_placeholder_supersession_metadata(subject),
         "generation_attempt_budget": 1 if generation_authorized else 0,
         "authorization_consumed": False,
         "live_model_call_authorized_for_generation": generation_authorized,
@@ -1001,6 +1066,7 @@ def _build_authorization_gate_report(
         "operator_reviewed": True,
         "generation_authorized": generation_authorized,
         "generation_attempt_budget": budget["generation_attempt_budget"],
+        **_placeholder_supersession_metadata(subject),
         "authorization_consumed": False,
         "candidate_generated": False,
         "model_calls": 0,
@@ -1071,6 +1137,7 @@ def _build_packet_summary(
         "candidate_text_sha256": subject.candidate_text_sha256,
         "target_unit_count": subject.target_unit_count,
         "target_unit_ids": list(subject.target_unit_ids),
+        **_placeholder_supersession_metadata(subject),
         "operator_reviewed": True,
         "decision": decision,
         "generation_authorized": generation_authorized,
@@ -1124,6 +1191,7 @@ def _result_payload(
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_count": subject.target_unit_count,
+        **_placeholder_supersession_metadata(subject),
         "generation_contract_artifact_id": artifacts[
             "residual_generation_contract"
         ].id,
@@ -1185,6 +1253,8 @@ def _linked_later_authorization_or_generation(
                 candidate_link_fields,
             )
         ):
+            if _authorization_artifact_is_placeholder(artifact):
+                continue
             return artifact
         if artifact.type in {
             "macro_recomposed_candidate_text",
@@ -1198,6 +1268,68 @@ def _linked_later_authorization_or_generation(
         ):
             return artifact
     return None
+
+
+def _placeholder_authorization_context(
+    connection: sqlite3.Connection,
+    subject: ResidualGenerationAuthorizationSubject,
+) -> dict[str, str | None]:
+    source_ids = set(subject.source_parent_ids)
+    if subject.work_order_packet_artifact_id:
+        source_ids.add(subject.work_order_packet_artifact_id)
+    candidate_link_fields = (
+        "authorized_work_order_packet_id",
+        "source_work_order_packet_id",
+        "work_order_packet_id",
+    )
+    placeholders: list[tuple[str, ArtifactRecord, dict[str, Any]]] = []
+    for artifact in list_artifacts(connection, subject.run_id):
+        if artifact.type != "residual_generation_authorization_packet":
+            continue
+        if not (
+            source_ids.intersection(artifact.parent_ids)
+            or _artifact_payload_links_work_order(
+                artifact,
+                subject.work_order_packet_id,
+                candidate_link_fields,
+            )
+        ):
+            continue
+        payload = _artifact_payload(artifact)
+        if not isinstance(payload, dict) or not payload_has_placeholder_generation_contract(
+            payload
+        ):
+            continue
+        placeholders.append(
+            (
+                str(payload.get("packet_id") or Path(artifact.path).parent.name),
+                artifact,
+                payload,
+            )
+        )
+    if not placeholders:
+        return {}
+    placeholders.sort(key=lambda item: item[1].created_at)
+    packet_id, artifact, _payload = placeholders[-1]
+    return {
+        "previous_placeholder_authorization_packet_id": packet_id,
+        "previous_placeholder_authorization_artifact_id": artifact.id,
+        "previous_placeholder_authorization_path": artifact.path,
+    }
+
+
+def _authorization_artifact_is_placeholder(artifact: ArtifactRecord) -> bool:
+    payload = _artifact_payload(artifact)
+    return isinstance(payload, dict) and payload_has_placeholder_generation_contract(payload)
+
+
+def _artifact_payload(artifact: ArtifactRecord) -> dict[str, Any] | None:
+    try:
+        envelope = read_json_file(artifact.path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    return payload if isinstance(payload, dict) else None
 
 
 def _artifact_payload_links_work_order(
