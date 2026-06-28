@@ -807,12 +807,120 @@ def build_hostile_scaffold_residual_work_order_chain(tmp_path: Path):
     return chain
 
 
+PACKET_0064_SOURCE_REGION_FIXTURE = (
+    "A room like this teaches by repetition. When a cup is set down and "
+    "lifted again, the ring tightens where the lip meets the wood, and "
+    "the crumb is taken into the table's grain; the change is there before "
+    "anyone names it. Morning does not wipe that away. Dust gathers where "
+    "hand, foot, and air have pressed the same surface, and the spoon lies "
+    "where a hand released it beside the saucer whose break the fall made "
+    "visible. The world holds these crossings in place and makes them "
+    "matter.\n\n"
+    "At first, the table seems only ordinary. But ordinary things are "
+    "strict about what reaches them. The ring keeps the trace of the glass "
+    "because the pressure stays in the wood, the dust marks a passage "
+    "through the window crack because the air and touch have already crossed "
+    "it, the spoon lies where a hand released it too quickly, and the saucer "
+    "shows the break that the fall made visible. Each object stays itself by "
+    "carrying the force that brought it there. The kitchen is small, but it "
+    "makes one rule plain: one thing enters another, leaves a mark, and that "
+    "mark changes how the next thing is read."
+)
+
+
+def _apply_packet_0064_hostile_unit_fixture(work_order_packet: Path) -> None:
+    region_sha = sha256_text(PACKET_0064_SOURCE_REGION_FIXTURE)
+    base_text = (
+        "The room begins with the table still in the morning light.\n\n"
+        f"{PACKET_0064_SOURCE_REGION_FIXTURE}\n\n"
+        "The return remains protected after the selected region."
+    )
+    base_sha = sha256_text(base_text)
+    unit_specs = [
+        (
+            "trace_before_naming_scaffold_reduction",
+            "the change is there before anyone names it.",
+            ["cup", "ring", "crumb", "trace"],
+        ),
+        (
+            "crossings_matter_without_thesis_pressure",
+            "The world holds these crossings in place and makes them matter.",
+            ["dust", "hand", "foot", "air", "surface"],
+        ),
+        (
+            "ordinary_table_no_scaffold_signage",
+            "At first, the table seems only ordinary.",
+            ["table", "ordinary", "first"],
+        ),
+        (
+            "ordinary_things_strict_without_abstraction",
+            "But ordinary things are strict about what reaches them.",
+            ["ordinary", "things", "strict", "reaches"],
+        ),
+        (
+            "small_kitchen_rule_plainness_reduction",
+            (
+                "The kitchen is small, but it makes one rule plain: one thing "
+                "enters another, leaves a mark, and that mark changes how the "
+                "next thing is read."
+            ),
+            ["kitchen", "small", "mark", "read"],
+        ),
+    ]
+
+    def _region(payload):
+        payload["selected_region_before_text"] = PACKET_0064_SOURCE_REGION_FIXTURE
+        payload["selected_region_sha256"] = region_sha
+
+    def _packet(payload):
+        payload["selected_region_sha256"] = region_sha
+
+    def _unit_map(payload):
+        payload["target_unit_count"] = len(unit_specs)
+        payload["target_unit_ids"] = [unit_id for unit_id, _text, _objects in unit_specs]
+        units = payload["target_units"]
+        by_id = {unit["unit_id"]: unit for unit in units}
+        for unit_id, before_text, objects in unit_specs:
+            unit = by_id[unit_id]
+            char_start = PACKET_0064_SOURCE_REGION_FIXTURE.index(before_text)
+            unit["before_text"] = before_text
+            unit["before_text_sha256"] = sha256_text(before_text)
+            unit["objects"] = list(objects)
+            unit["involved_object_labels"] = list(objects)
+            unit["source_span"] = {
+                "before_text_sha256": unit["before_text_sha256"],
+                "char_start": char_start,
+                "char_end": char_start + len(before_text),
+                "contained_in_selected_region": True,
+                "region_id": RESIDUAL_WORK_ORDER_SELECTED_REGION_ID,
+            }
+
+    rewrite_payload(work_order_packet / "selected_intervention_region.json", _region)
+    rewrite_payload(work_order_packet / "residual_work_order_packet.json", _packet)
+    rewrite_payload(work_order_packet / "future_generation_contract.json", _packet)
+    rewrite_payload(work_order_packet / "object_motion_target_unit_map.json", _unit_map)
+    manifest = read_payload(work_order_packet / "residual_work_order_subject_manifest.json")
+    base_packet_dir = Path(str(manifest["current_best_candidate_packet_dir"]))
+
+    def _candidate(payload):
+        payload["text"] = base_text
+        payload["text_sha256"] = base_sha
+        payload["word_count"] = len(base_text.split())
+
+    rewrite_payload(base_packet_dir / "macro_recomposed_candidate_text.json", _candidate)
+
+
 def build_hostile_scaffold_residual_candidate_authorization_chain(
     tmp_path: Path,
     *,
     fixture_only: bool = False,
+    packet_0064_unit_fixture: bool = False,
 ):
     chain = build_hostile_scaffold_residual_work_order_chain(tmp_path)
+    if packet_0064_unit_fixture:
+        _apply_packet_0064_hostile_unit_fixture(
+            Path(str(chain["residual_work_order"]["packet_dir"]))
+        )
     authorization = run_residual_generation_authorization(
         chain["config"],
         work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
@@ -2608,6 +2716,10 @@ class StubResidualInterventionClient:
             return dump_json(payload)
         if self.mode == "packet_0062_like":
             return dump_json(_packet_0062_like_residual_payload(units))
+        if self.mode == "hostile_packet_0064_like":
+            return dump_json(_hostile_packet_0064_like_residual_payload(units))
+        if self.mode == "hostile_strong":
+            return dump_json(_valid_hostile_residual_intervention_payload(units))
         if self.mode == "protected_context_stable":
             prompt = json.loads(request.input_text)
             return dump_json(
@@ -2758,6 +2870,132 @@ def _packet_0062_like_residual_payload(units):
         "protected_effects_notes": ["protected context mostly stable"],
         "forbidden_change_self_check": ["no finality claim", "no phase-shift claim"],
         "uncertainty": "packet 0062-like regression fixture",
+    }
+
+
+def _hostile_intervention_mapping(units):
+    return [
+        {
+            "target_unit_id": str(unit["unit_id"]),
+            "before_text_sha256": str(unit.get("before_text_sha256") or ""),
+            "mechanism_operation": (
+                "shift visible thesis pressure into object relation and residue"
+            ),
+            "material_relation_or_action": str(
+                unit.get("current_physical_relation")
+                or unit.get("current_motion_action_state")
+                or "object contact leaves pressure in the surface"
+            ),
+            "visible_consequence": (
+                "the object sequence carries meaning before explanation names it"
+            ),
+            "intended_first_read_effect": (
+                "reader feels scaffold pressure reduced through the material sequence"
+            ),
+            "protected_effects_preserved": [
+                "proof/no-answer pressure remains protected",
+                "opening-return and reread gains remain protected",
+                "object/tactile causal field remains active",
+            ],
+            "covered_target_ids": [str(unit["unit_id"])],
+        }
+        for unit in units
+    ]
+
+
+def _hostile_packet_0064_like_residual_payload(units):
+    return {
+        "replacement_region_text": (
+            "A room like this teaches by repetition. When a cup is set down and "
+            "lifted again, the wet ring draws tight under the cup's weight, and "
+            "the crumb is pressed into the table's grain; the room has taken "
+            "the trace before anyone names it. Morning does not wipe that away. "
+            "It keeps the spoon on its side and the saucer cracked, while dust "
+            "settles where hand, foot, and air have crossed the same surface "
+            "enough to leave it marked. These crossings stay put in the mark "
+            "they make.\n\n"
+            "At first, the table is only ordinary. Ordinary things do not give "
+            "up what reaches them. The ring keeps the glass's trace because it "
+            "is pressed there; dust holds the path through the window crack "
+            "where movement has disturbed it; the spoon lies where a hand let "
+            "it drop and the side hit hard enough to stay; the saucer shows "
+            "the break the fall forced open. Each object stays itself by "
+            "carrying the pressure that brought it there. In the small kitchen, "
+            "one thing enters another, leaves a mark, and the mark changes how "
+            "the next thing is read."
+        ),
+        "target_unit_mappings": _hostile_intervention_mapping(units),
+        "intervention_plan": [
+            "packet 0064 regression shape",
+            "conservative sentence polishing",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "bounded",
+                "risk_note": "too conservative for hostile scaffold target",
+            }
+        ],
+        "protected_effects_notes": [
+            "proof/no-answer pressure remains protected",
+            "opening-return and object/tactile field remain protected",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no rival imitation",
+        ],
+        "uncertainty": "packet 0064-like regression fixture",
+    }
+
+
+def _valid_hostile_residual_intervention_payload(units):
+    return {
+        "replacement_region_text": (
+            "The cup comes down first, and the table answers before the room "
+            "has time to speak: the rim leaves a dark pressure-ring, the "
+            "crumb catches at the damp edge, and the grain holds both marks as "
+            "one small injury. Morning leaves the arrangement in place. Dust "
+            "does not merely settle; it thickens along the path where a hand "
+            "dragged the chair, where a foot paused, where air from the cracked "
+            "window pushed the loose line sideways. The spoon lies against the "
+            "saucer with its bowl turned toward the fracture, and the chipped "
+            "edge keeps the sound of the fall in its shape. Nothing announces "
+            "itself apart from pressure, residue, and position.\n\n"
+            "The table stays ordinary because it keeps taking these touches "
+            "seriously. The cup-ring darkens where weight met wood. The crumb "
+            "does not stand aside from passage; it lodges where the wet circle caught "
+            "it. Dust gathers in the hand-drag, foot-pause, and window-breath "
+            "until the surface records a route. The spoon points the eye back "
+            "to the saucer's split, and the split keeps the fall from becoming "
+            "talk. By the time the kitchen is noticed, object has already "
+            "entered object, pressure has already become mark, and each mark "
+            "has changed the next thing the reader can trust."
+        ),
+        "target_unit_mappings": _hostile_intervention_mapping(units),
+        "intervention_plan": [
+            "materially re-author each hostile scaffold target unit",
+            "carry meaning through object sequence instead of thesis summary",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "only replacement_region_text is supplied",
+                "risk_note": "controller owns final assembly",
+            }
+        ],
+        "protected_effects_notes": [
+            "proof/no-answer pressure remains protected",
+            "opening-return and reread gains remain protected",
+            "object/tactile causal field remains active",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no rival imitation",
+            "no generic vividness",
+        ],
+        "uncertainty": "strong hostile scaffold stub output for tests only",
     }
 
 
@@ -10390,6 +10628,166 @@ def test_hostile_scaffold_fake_fixture_generation_validates_semantics_without_mo
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
     assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_hostile_scaffold_prompt_exposes_materiality_feedback_and_strong_stub_passes(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_hostile_scaffold_residual_candidate_authorization_chain(
+        tmp_path,
+        packet_0064_unit_fixture=True,
+    )
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(
+            str(chain["residual_generation_authorization"]["packet_dir"])
+        ),
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-hostile-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="hostile_strong",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert len(clients) == 1
+    prompt = json.loads(clients[0].requests[0].input_text)
+    feedback = prompt["hostile_scaffold_generation_feedback"]
+    thresholds = feedback["active_thresholds"]
+    assert thresholds["target_bearing_changed_unique_word_count_floor"] == 8
+    assert thresholds["target_bearing_changed_unique_word_ratio_floor"] == 0.10
+    assert thresholds["per_unit_changed_unique_word_count_floor"] == 3
+    assert thresholds["per_unit_token_edit_distance_floor"] == 4
+    assert len(feedback["required_target_units"]) == 5
+    assert all(
+        unit["target_unit_id"] and unit["before_text"]
+        for unit in feedback["required_target_units"]
+    )
+    model_feedback = " ".join(feedback["model_feedback"])
+    assert "one-word substitutions are insufficient" in model_feedback
+    assert "preserving target sentence architecture is insufficient" in model_feedback
+    assert "object sequence carry meaning" in model_feedback
+    assert "do not rewrite outside the selected region" in model_feedback
+    examples = " ".join(
+        item["example"] for item in feedback["failure_shapes_from_packet_0064_regression"]
+    )
+    assert "At first, the table is only ordinary" in examples
+    assert "In the small kitchen" in examples
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    diff = read_payload(packet_dir / "macro_recomposition_diff_report.json")
+    report = diff["materiality_report"]["target_unit_materiality_report"]
+    assert report["all_required_units_materially_engaged"] is True
+    classifications = {unit["classification"] for unit in report["units"]}
+    assert classifications == {"strong_scaffold_reduction"}
+    assert "strong_tactile_intervention" not in classifications
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+def test_hostile_scaffold_packet_0064_like_failure_reports_under_material_units(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_hostile_scaffold_residual_candidate_authorization_chain(
+        tmp_path,
+        packet_0064_unit_fixture=True,
+    )
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-hostile-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="hostile_packet_0064_like",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_artifact_id"] is None
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+
+    validation = result.payload["residual_intervention_validation_report"]
+    assert validation["passed"] is False
+    categories = result.payload["validation_failure_categories"]
+    assert "target_unit_materiality_failures" in categories
+    unit_report = result.payload["target_unit_materiality_report"]
+    by_unit = {
+        unit["target_unit_id"]: unit
+        for unit in unit_report["units"]
+    }
+    ordinary = by_unit["ordinary_table_no_scaffold_signage"]
+    kitchen = by_unit["small_kitchen_rule_plainness_reduction"]
+    assert ordinary["materiality_passed"] is False
+    assert kitchen["materiality_passed"] is False
+    assert ordinary["classification"] == "valid_direction_but_under_material"
+    assert kitchen["classification"] == "valid_direction_but_under_material"
+    assert ordinary["classification"] != "strong_tactile_intervention"
+    assert kitchen["classification"] != "strong_tactile_intervention"
+    assert "At first, the table is only ordinary" in ordinary["replacement_excerpt"]
+    assert "In the small kitchen" in kitchen["replacement_excerpt"]
+
+    feedback = result.payload["hostile_scaffold_generation_feedback"]
+    labels = set(feedback["diagnostic_labels"])
+    assert "strong_scaffold_reduction" in labels
+    assert "valid_direction_but_under_material" in labels
+    assert "strong_tactile_intervention" not in labels
+
+    budget = read_payload(authorization_packet / "generation_attempt_budget.json")
+    packet = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+    assert budget["authorization_consumed"] is False
+    assert packet["authorization_consumed"] is False
+
+    retry = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-hostile-model",
+        client_factory=residual_intervention_stub_factory([], mode="hostile_strong"),
+    )
+    assert retry.exit_code == 0
+    assert retry.payload["accepted"] is True
+    assert retry.payload["candidate_generated"] is True
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
     assert final_report.refused is True
 
 

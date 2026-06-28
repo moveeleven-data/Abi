@@ -1050,6 +1050,12 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
                 subject.selected_residual_target_id
             ),
             "materiality_requirement": _materiality_requirement_payload(subject),
+            "hostile_scaffold_generation_feedback": (
+                _hostile_scaffold_generation_feedback(subject)
+                if subject.selected_residual_target_id
+                == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+                else None
+            ),
             "target_unit_overlap_feedback": {
                 "overlapping_units_must_be_reconciled": True,
                 "instructions": [
@@ -1076,7 +1082,7 @@ def _materiality_requirement_payload(
 ) -> dict[str, object]:
     adapter = require_residual_target_adapter(subject.selected_residual_target_id)
     policy = adapter.materiality_policy
-    return {
+    payload: dict[str, object] = {
         "selected_region_materiality_required": True,
         "replacement_must_be_genuinely_reauthored": True,
         "preserve_protected_effects_not_sentence_architecture": True,
@@ -1103,6 +1109,122 @@ def _materiality_requirement_payload(
         "remain_bounded_to_selected_region": True,
         "do_not_rewrite_whole_artifact": True,
         "do_not_add_decorative_vividness_or_new_object_lists": True,
+    }
+    if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        payload["hostile_scaffold_generation_feedback"] = (
+            _hostile_scaffold_generation_feedback(subject)
+        )
+    return payload
+
+
+def _hostile_scaffold_generation_feedback(
+    subject: ResidualCandidateSubject,
+) -> dict[str, object]:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    policy = adapter.materiality_policy
+    target_bearing = dict(policy.target_bearing_scope)
+    target_unit = dict(policy.target_unit_scope)
+    target_bearing_unique_floor = int(
+        target_bearing.get("absolute_change_floor", policy.absolute_change_floor)
+    )
+    target_bearing_ratio_floor = float(
+        target_bearing.get("ratio_floor", policy.ratio_floor)
+    )
+    target_unit_unique_floor = int(
+        target_unit.get("absolute_change_floor", policy.absolute_change_floor)
+    )
+    target_unit_token_floor = int(
+        target_unit.get("token_edit_distance_floor", policy.token_edit_distance_floor)
+    )
+    return {
+        "feedback_kind": "hostile_scaffold_generation_materiality_feedback_v1",
+        "selected_residual_target_id": subject.selected_residual_target_id,
+        "active_materiality_policy_id": policy.policy_id,
+        "active_thresholds": {
+            "target_bearing_changed_unique_word_count_floor": (
+                target_bearing_unique_floor
+            ),
+            "target_bearing_changed_unique_word_ratio_floor": (
+                target_bearing_ratio_floor
+            ),
+            "per_unit_changed_unique_word_count_floor": target_unit_unique_floor,
+            "per_unit_changed_unique_word_ratio_floor": float(
+                target_unit.get("ratio_floor", policy.ratio_floor)
+            ),
+            "per_unit_token_edit_distance_floor": target_unit_token_floor,
+        },
+        "ordinary_language_thresholds": [
+            (
+                "The selected target-bearing region must add at least "
+                f"{target_bearing_unique_floor} changed unique words."
+            ),
+            (
+                "The selected target-bearing region must reach a changed unique "
+                f"word ratio of at least {target_bearing_ratio_floor}."
+            ),
+            (
+                "Each hostile-scaffold target unit must add at least "
+                f"{target_unit_unique_floor} changed unique words."
+            ),
+            (
+                "Each hostile-scaffold target unit must move at least "
+                f"{target_unit_token_floor} tokens where that floor applies."
+            ),
+        ],
+        "required_target_units": [
+            {
+                "target_unit_id": unit.unit_id,
+                "before_text": unit.before_text,
+                "before_text_sha256": unit.before_text_sha256,
+            }
+            for unit in subject.target_units
+        ],
+        "failure_shapes_from_packet_0064_regression": [
+            {
+                "shape": "ordinary_table_sentence_polish",
+                "example": "At first, the table is only ordinary.",
+                "why_it_fails": (
+                    "too close to the source sentence; one local substitution "
+                    "does not materially re-author the unit"
+                ),
+            },
+            {
+                "shape": "small_kitchen_rule_reorder",
+                "example": (
+                    "In the small kitchen, one thing enters another, leaves a "
+                    "mark, and the mark changes how the next thing is read."
+                ),
+                "why_it_fails": (
+                    "too close to the source rule sentence; reordering or "
+                    "lexical tightening does not transfer meaning into the "
+                    "object sequence"
+                ),
+            },
+        ],
+        "model_feedback": [
+            "lexical tightening is insufficient",
+            "one-word substitutions are insufficient",
+            "preserving target sentence architecture is insufficient",
+            "every hostile-scaffold target unit must be materially re-authored",
+            "the target-bearing selected region must clear the active materiality policy",
+            "reduce scaffold by making the object sequence carry meaning, not by summarizing the thesis",
+            "preserve packet_0063 object/tactile causal field",
+            "preserve proof/no-answer and opening-return effects as protected references",
+            "do not rewrite outside the selected region",
+            "do not add generic vividness",
+            "do not imitate the rival",
+            "do not make finality or phase-shift claims",
+        ],
+        "diagnostic_labels": [
+            "strong_scaffold_reduction",
+            "valid_direction_but_under_material",
+            "scaffold_reduction_missing",
+            "vague_summary",
+            "object_field_weakened",
+            "protected_reference_damage",
+            "generic_vividness",
+            "rival_imitation",
+        ],
     }
 
 
@@ -1557,6 +1679,12 @@ def _collect_residual_intervention_validation(
         "consequence_terms_present": consequence_terms_present,
         "object_terms_source": "target_units_from_work_order",
         "target_specific_mapping_report": target_specific_mapping_report,
+        "hostile_scaffold_generation_feedback": (
+            _hostile_scaffold_generation_feedback(subject)
+            if subject.selected_residual_target_id
+            == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+            else None
+        ),
         "required_object_term_count": term_contract["required_object_term_count"],
         "required_motion_term_count": term_contract["required_motion_term_count"],
         "required_consequence_term_count": term_contract[
@@ -1850,8 +1978,9 @@ def _target_unit_materiality_reports(
                 "semantic_passed": semantic["passed"],
                 "semantic_failures": semantic["failures"],
                 "classification": _target_unit_classification(
-                    materiality_failures,
-                    semantic["failures"],
+                    selected_residual_target_id=subject.selected_residual_target_id,
+                    materiality_failures=materiality_failures,
+                    semantic_failures=semantic["failures"],
                 ),
             }
         )
@@ -1940,9 +2069,16 @@ def _target_unit_semantic_report(
 
 
 def _target_unit_classification(
+    *,
+    selected_residual_target_id: str,
     materiality_failures: list[str],
     semantic_failures: list[str],
 ) -> str:
+    if selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return _hostile_target_unit_classification(
+            materiality_failures=materiality_failures,
+            semantic_failures=semantic_failures,
+        )
     if semantic_failures:
         if any("object-motion relabel" in failure for failure in semantic_failures):
             return "object_motion_relabel"
@@ -1952,6 +2088,29 @@ def _target_unit_classification(
     if materiality_failures:
         return "valid_direction_but_under_material"
     return "strong_tactile_intervention"
+
+
+def _hostile_target_unit_classification(
+    *,
+    materiality_failures: list[str],
+    semantic_failures: list[str],
+) -> str:
+    joined = " ".join(semantic_failures).lower()
+    if "rival" in joined:
+        return "rival_imitation"
+    if "generic" in joined or "decorative" in joined or "vividness" in joined:
+        return "generic_vividness"
+    if "summary" in joined or "vague" in joined:
+        return "vague_summary"
+    if "proof" in joined or "answer" in joined or "opening" in joined:
+        return "protected_reference_damage"
+    if "object" in joined or "tactile" in joined or "pressure" in joined:
+        return "object_field_weakened"
+    if semantic_failures:
+        return "scaffold_reduction_missing"
+    if materiality_failures:
+        return "valid_direction_but_under_material"
+    return "strong_scaffold_reduction"
 
 
 def _unit_replacement_excerpt(unit: TargetUnit, replacement: str) -> str:
@@ -3033,6 +3192,9 @@ def _failure_result(
             "overlap_cluster_report": validation_payload.get("overlap_cluster_report"),
             "residual_intervention_validation_report": residual_validation,
             "validation_failure_categories": failure_categories,
+            "hostile_scaffold_generation_feedback": validation_payload.get(
+                "hostile_scaffold_generation_feedback"
+            ),
             "failed_materiality_reason": (
                 materiality_payload["failed_materiality_reason"]
                 if materiality_payload
