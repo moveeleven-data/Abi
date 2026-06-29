@@ -66,6 +66,12 @@ RESIDUAL_CANDIDATE_GENERATION_PROMPT_CONTRACT_ID = (
 )
 REQUIRED_CHANGED_UNIQUE_WORD_COUNT = 10
 REQUIRED_CHANGED_RATIO = 0.12
+HOSTILE_ORDINARY_TABLE_UNIT_ID = "ordinary_table_no_scaffold_signage"
+HOSTILE_ORDINARY_TABLE_SENTENCE_POLISH_FAILURE = (
+    "ordinary_table_no_scaffold_signage remained sentence-polishing / near-synonym; "
+    'materially re-author the ordinary-table moment rather than swapping '
+    '"seems ordinary" for "is just there"'
+)
 
 NEXT_RECOMMENDED_ACTION = "review_object_motion_causality_candidate_before_ablation"
 
@@ -1176,8 +1182,46 @@ def _hostile_scaffold_generation_feedback(
                 "target_unit_id": unit.unit_id,
                 "before_text": unit.before_text,
                 "before_text_sha256": unit.before_text_sha256,
+                "unit_specific_feedback": (
+                    [
+                        (
+                            "Do not satisfy this unit by changing "
+                            '"seems only ordinary" to "is just there" '
+                            "or any similarly small sentence-polish variant."
+                        ),
+                        (
+                            "Make the ordinary-table moment carry hostile-scaffold "
+                            "reduction through object relation, local pressure, "
+                            "or reader encounter."
+                        ),
+                        (
+                            "Keep the intervention bounded to the selected region "
+                            "and do not add generic vividness."
+                        ),
+                    ]
+                    if unit.unit_id == HOSTILE_ORDINARY_TABLE_UNIT_ID
+                    else []
+                ),
             }
             for unit in subject.target_units
+        ],
+        "unit_specific_feedback": [
+            {
+                "target_unit_id": HOSTILE_ORDINARY_TABLE_UNIT_ID,
+                "failure_to_avoid": (
+                    'near-synonym sentence polishing such as "At first, the '
+                    'table is just there."'
+                ),
+                "required_operation": (
+                    "materially re-author the ordinary-table moment through "
+                    "object relation, local pressure, or reader encounter"
+                ),
+                "protected_bounds": [
+                    "do not rewrite outside the selected region",
+                    "do not add generic vividness",
+                    "do not imitate the rival",
+                ],
+            }
         ],
         "failure_shapes_from_packet_0064_regression": [
             {
@@ -1205,6 +1249,7 @@ def _hostile_scaffold_generation_feedback(
             "lexical tightening is insufficient",
             "one-word substitutions are insufficient",
             "preserving target sentence architecture is insufficient",
+            'ordinary_table_no_scaffold_signage must not be satisfied by changing "seems only ordinary" to "is just there"',
             "every hostile-scaffold target unit must be materially re-authored",
             "the target-bearing selected region must clear the active materiality policy",
             "reduce scaffold by making the object sequence carry meaning, not by summarizing the thesis",
@@ -1952,6 +1997,15 @@ def _target_unit_materiality_reports(
                 enforce_primary=True,
                 enforce_ratio=True,
             )
+            materiality_failures.extend(
+                _hostile_unit_specific_materiality_failures(
+                    selected_residual_target_id=subject.selected_residual_target_id,
+                    unit=unit,
+                    replacement_excerpt=excerpt,
+                    measurement=measurement,
+                    policy=policy,
+                )
+            )
             failures["target_unit_materiality_failures"].extend(
                 f"{unit.unit_id}: {failure}" for failure in materiality_failures
             )
@@ -1985,6 +2039,44 @@ def _target_unit_materiality_reports(
             }
         )
     return reports
+
+
+def _hostile_unit_specific_materiality_failures(
+    *,
+    selected_residual_target_id: str,
+    unit: TargetUnit,
+    replacement_excerpt: str,
+    measurement: dict[str, object],
+    policy: ResidualMaterialityPolicy,
+) -> list[str]:
+    if selected_residual_target_id != HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return []
+    if unit.unit_id != HOSTILE_ORDINARY_TABLE_UNIT_ID:
+        return []
+    before = _canonical_space(unit.before_text)
+    after = _canonical_space(replacement_excerpt)
+    token_floor = int(
+        policy.target_unit_scope.get(
+            "token_edit_distance_floor",
+            policy.token_edit_distance_floor,
+        )
+    )
+    token_distance = int(measurement["token_edit_distance"])
+    sentence_polish = (
+        "seems only ordinary" in before
+        and (
+            "table is just there" in after
+            or ("table" in after and "just there" in after)
+            or (
+                token_distance < token_floor
+                and "table" in after
+                and ("ordinary" in after or "just" in after)
+            )
+        )
+    )
+    if not sentence_polish:
+        return []
+    return [HOSTILE_ORDINARY_TABLE_SENTENCE_POLISH_FAILURE]
 
 
 def _overlap_cluster_reports(
