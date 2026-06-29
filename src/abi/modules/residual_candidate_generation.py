@@ -1645,6 +1645,14 @@ def _collect_residual_intervention_validation(
         hostile_semantic_leakage_report = _hostile_scaffold_semantic_leakage_report(
             replacement,
         )
+        hostile_semantic_leakage_report = _hostile_scaffold_consistent_leakage_report(
+            hostile_semantic_leakage_report,
+            replacement=replacement,
+            controller_scaffold_failures=failures.get(
+                "scaffold_leakage_failures", []
+            ),
+            target_bearing_failures=target_bearing_failures,
+        )
         failures["scaffold_leakage_failures"].extend(
             str(failure)
             for failure in hostile_semantic_leakage_report.get("failures", [])
@@ -2302,6 +2310,7 @@ def _hostile_scaffold_semantic_leakage_report(
     unique_diagnostics = _unique_diagnostics(diagnostics)
     return {
         "failed": bool(unique_diagnostics),
+        "failure_modes": ["semantic_leakage"] if unique_diagnostics else [],
         "leakage_classes": sorted(
             {str(item["leakage_class"]) for item in unique_diagnostics}
         ),
@@ -2317,6 +2326,90 @@ def _hostile_scaffold_semantic_leakage_report(
             for item in unique_diagnostics
         ],
     }
+
+
+def _hostile_scaffold_consistent_leakage_report(
+    report: dict[str, object],
+    *,
+    replacement: str,
+    controller_scaffold_failures: list[str],
+    target_bearing_failures: list[str],
+) -> dict[str, object]:
+    diagnostics = [
+        item
+        for item in report.get("diagnostics", [])
+        if isinstance(item, dict)
+    ]
+    failure_modes = {
+        str(mode)
+        for mode in report.get("failure_modes", [])
+        if isinstance(mode, str)
+    }
+    if report.get("failed"):
+        failure_modes.add("semantic_leakage")
+    if target_bearing_failures:
+        failure_modes.add("target_bearing_under_materiality")
+    if controller_scaffold_failures:
+        failure_modes.add("semantic_leakage")
+        leakage_class = (
+            "semantic_leakage_and_target_bearing_under_materiality"
+            if target_bearing_failures
+            else "controller_final_scaffold_failure"
+        )
+        diagnostics.append(
+            _hostile_leakage_diagnostic(
+                leakage_class=leakage_class,
+                sentence=_hostile_scaffold_fallback_offending_span(replacement),
+                reason=(
+                    "controller final validation reported scaffold/explanatory "
+                    "pressure that the local phrase detector did not fully classify: "
+                    + "; ".join(controller_scaffold_failures[:2])
+                ),
+            )
+        )
+    unique_diagnostics = _unique_diagnostics(diagnostics)
+    leakage_classes = sorted(
+        {str(item["leakage_class"]) for item in unique_diagnostics}
+    )
+    failures = [
+        (
+            f"{item['leakage_class']}: {item['reason']}; "
+            f"offending_span={item['offending_span']!r}"
+        )
+        for item in unique_diagnostics
+    ]
+    return {
+        "failed": bool(unique_diagnostics),
+        "failure_modes": sorted(failure_modes),
+        "leakage_classes": leakage_classes,
+        "likely_offending_spans": [
+            str(item["offending_span"]) for item in unique_diagnostics
+        ],
+        "diagnostics": unique_diagnostics,
+        "failures": failures,
+        "controller_final_validation_failures": list(controller_scaffold_failures),
+        "target_bearing_under_materiality_failures": list(target_bearing_failures),
+    }
+
+
+def _hostile_scaffold_fallback_offending_span(replacement: str) -> str:
+    trigger_terms = (
+        "explain",
+        "explanation",
+        "pressure",
+        "rule",
+        "meaning",
+        "matter",
+        "counts",
+        "names",
+        "announces",
+        "before any rule",
+    )
+    for sentence in _sentences(replacement):
+        lower = sentence.lower()
+        if any(term in lower for term in trigger_terms):
+            return " ".join(sentence.split())
+    return " ".join(replacement.split())[:360]
 
 
 def _hostile_leakage_diagnostic(

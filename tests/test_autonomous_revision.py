@@ -2722,6 +2722,8 @@ class StubResidualInterventionClient:
             return dump_json(_hostile_packet_0065_like_residual_payload(units))
         if self.mode == "hostile_packet_0066_like":
             return dump_json(_hostile_packet_0066_like_residual_payload(units))
+        if self.mode == "hostile_packet_0067_like":
+            return dump_json(_hostile_packet_0067_like_residual_payload(units))
         if self.mode == "hostile_strong":
             return dump_json(_valid_hostile_residual_intervention_payload(units))
         if self.mode == "protected_context_stable":
@@ -3038,6 +3040,53 @@ def _hostile_packet_0066_like_residual_payload(units):
             "no rival imitation",
         ],
         "uncertainty": "packet 0066-like regression fixture",
+    }
+
+
+def _hostile_packet_0067_like_residual_payload(units):
+    return {
+        "replacement_region_text": (
+            "A room like this teaches by repetition. When a cup is set down and "
+            "lifted again, the ring tightens where the lip meets the wood, and "
+            "the crumb is taken into the table's grain; the change is there "
+            "before anyone names it. Morning does not wipe that away. Dust "
+            "gathers where hand, foot, and air have pressed the same surface, "
+            "and the spoon lies where a hand released it beside the saucer "
+            "whose break the fall made visible. The room keeps those crossings "
+            "in its grain.\n\n"
+            "At first, the table seems only ordinary. But ordinary things are "
+            "strict about what reaches them. The ring keeps the trace of the "
+            "glass because the pressure stays in the wood, the dust marks a "
+            "passage through the window crack because the air and touch have "
+            "already crossed it, the spoon lies where a hand released it too "
+            "quickly, and the saucer shows the break that the fall made visible. "
+            "Each object stays itself by carrying the force that brought it "
+            "there. The kitchen is small, but it makes one rule plain: one thing "
+            "enters another, leaves a mark, and that mark changes how the next "
+            "thing is read."
+        ),
+        "target_unit_mappings": _hostile_intervention_mapping(units),
+        "intervention_plan": [
+            "packet 0067 regression shape",
+            "low target-bearing ratio with scaffold pressure still unresolved",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "bounded",
+                "risk_note": "target-bearing materiality ratio remains too low",
+            }
+        ],
+        "protected_effects_notes": [
+            "proof/no-answer pressure remains protected",
+            "opening-return and object/tactile field remain protected",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no rival imitation",
+        ],
+        "uncertainty": "packet 0067-like regression fixture",
     }
 
 
@@ -10935,6 +10984,76 @@ def test_hostile_scaffold_packet_0066_like_semantic_leakage_and_collapse_fails(
     assert final_report.refused is True
 
 
+def test_hostile_scaffold_packet_0067_like_aligns_scaffold_leakage_report(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_hostile_scaffold_residual_candidate_authorization_chain(
+        tmp_path,
+        packet_0064_unit_fixture=True,
+    )
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-hostile-model",
+        client_factory=residual_intervention_stub_factory(
+            [],
+            mode="hostile_packet_0067_like",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_artifact_id"] is None
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+
+    categories = result.payload["validation_failure_categories"]
+    assert "target_bearing_materiality_failures" in categories
+    assert "scaffold_leakage_failures" in categories
+    assert categories["target_bearing_materiality_failures"]
+    leakage_report = result.payload["hostile_scaffold_semantic_leakage_report"]
+    assert leakage_report["failed"] is True
+    assert "semantic_leakage" in leakage_report["failure_modes"]
+    assert "target_bearing_under_materiality" in leakage_report["failure_modes"]
+    assert "controller_final_validation_failures" in leakage_report
+    assert leakage_report["controller_final_validation_failures"]
+    assert set(leakage_report["leakage_classes"]) >= {
+        "semantic_leakage_and_target_bearing_under_materiality",
+    }
+    assert any(
+        "controller final validation reported scaffold" in diagnostic["reason"]
+        for diagnostic in leakage_report["diagnostics"]
+    )
+    assert leakage_report["likely_offending_spans"]
+
+    budget = read_payload(authorization_packet / "generation_attempt_budget.json")
+    packet = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+    assert budget["authorization_consumed"] is False
+    assert packet["authorization_consumed"] is False
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
 def test_hostile_scaffold_packet_0065_like_ordinary_table_sentence_polish_fails(
     tmp_path,
     monkeypatch,
@@ -11112,6 +11231,200 @@ def test_hostile_scaffold_packet_0064_like_failure_reports_under_material_units(
             run_id=chain["run_id"],
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
+    assert final_report.refused is True
+
+
+def test_autonomous_evidence_synthesis_pauses_failed_hostile_scaffold_path(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_hostile_scaffold_residual_candidate_authorization_chain(
+        tmp_path,
+        packet_0064_unit_fixture=True,
+    )
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    failed_results = []
+    for mode in (
+        "hostile_packet_0064_like",
+        "hostile_packet_0065_like",
+        "hostile_packet_0066_like",
+        "hostile_packet_0067_like",
+    ):
+        result = run_residual_candidate_generation(
+            chain["config"],
+            client_name="openai",
+            authorization_packet=authorization_packet,
+            allow_live_model=True,
+            max_model_calls=1,
+            model="stub-hostile-model",
+            client_factory=residual_intervention_stub_factory([], mode=mode),
+        )
+        assert result.exit_code == 1
+        assert result.payload["accepted"] is False
+        assert result.payload["authorization_consumed"] is False
+        assert result.payload["candidate_generated"] is False
+        assert result.payload["candidate_artifact_id"] is None
+        assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+        failed_results.append(result)
+
+    with connect(chain["config"].db_path) as connection:
+        before_calls = list_model_calls(connection, run_id=chain["run_id"])
+
+    synthesis = run_autonomous_evidence_synthesis(
+        chain["config"],
+        run_id=chain["run_id"],
+    )
+
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["accepted"] is True
+    packet_dir = Path(str(synthesis.payload["packet_dir"]))
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    failed_rows = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "failed_residual_generation"
+    ]
+    assert len(failed_rows) == 4
+    assert all(
+        row["selected_residual_target_id"] == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+        for row in failed_rows
+    )
+    assert all(row["authorization_consumed"] is False for row in failed_rows)
+    assert all(row["candidate_generated"] is False for row in failed_rows)
+    assert all(row["candidate_artifact_id"] is None for row in failed_rows)
+    assert all(row["not_candidate_evidence"] is True for row in failed_rows)
+    assert all(row["ablation_authorized"] is False for row in failed_rows)
+    assert all(row["reader_state_evaluation_authorized"] is False for row in failed_rows)
+    failure_sets = {
+        row["packet_id"]: set(row["failure_classes"])
+        for row in failed_rows
+    }
+    assert any("broad_materiality_failure" in classes for classes in failure_sets.values())
+    assert any(
+        "ordinary_table_unit_under_material_failure" in classes
+        for classes in failure_sets.values()
+    )
+    assert any("scaffold_leakage_persisted" in classes for classes in failure_sets.values())
+    assert any(
+        "target_bearing_ratio_failure" in classes
+        for classes in failure_sets.values()
+    )
+
+    failed = read_payload(packet_dir / "failed_or_rejected_repairs.json")
+    summary = failed["hostile_scaffold_failed_generation_path"]
+    assert summary["attempted"] is True
+    assert summary["failed_attempt_count"] == 4
+    assert summary["stop_test_triggered"] is True
+    assert summary["target_status"] == "paused_or_exhausted_pending_strategy_review"
+    assert summary["next_recommended_action"] == (
+        "synthesize_failed_hostile_scaffold_path_before_new_strategy"
+    )
+    assert summary["no_accepted_hostile_scaffold_candidate_exists"] is True
+    assert summary["authorization_still_technically_unconsumed"] is True
+    assert summary["should_not_reuse_authorization_without_strategy_review"] is True
+    assert summary["source_authorization_packet_id"] == chain[
+        "residual_generation_authorization"
+    ]["packet_id"]
+    assert summary["source_work_order_packet_id"] == chain["residual_work_order"][
+        "packet_id"
+    ]
+
+    graph = read_payload(packet_dir / "candidate_evidence_graph.json")
+    failed_packet_ids = {
+        Path(str(result.payload["packet_dir"])).name for result in failed_results
+    }
+    assert failed_packet_ids.issubset(
+        set(graph["failed_residual_generation_packet_ids"])
+    )
+    assert failed_packet_ids.isdisjoint(set(graph["candidate_packet_ids"]))
+    assert all(
+        node["not_candidate_evidence"] is True
+        for node in graph["failed_residual_generation_nodes"]
+    )
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == summary["base_candidate_packet_id"]
+    assert selected["packet_id"] not in failed_packet_ids
+    assert selected["selected_candidate_is_final"] is False
+    assert selected["selected_candidate_requires_further_testing"] is True
+    assert selected.get("no_phase_shift_claim", True) is True
+
+    exhausted = read_payload(packet_dir / "exhausted_handle_report.json")
+    hostile_handle = [
+        handle
+        for handle in exhausted["handles"]
+        if handle["handle"] == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    ][0]
+    assert hostile_handle["status"] == "paused_or_exhausted_pending_strategy_review"
+    assert hostile_handle["stop_test_triggered"] is True
+
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    assert blockers["hostile_scaffold_stop_test_triggered"] is True
+    assert blockers["hostile_scaffold_visibility_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert blockers["hostile_scaffold_next_recommended_action"] == (
+        "synthesize_failed_hostile_scaffold_path_before_new_strategy"
+    )
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["recommendation"] == (
+        "pause_hostile_scaffold_generation_path_for_strategy_review"
+    )
+    assert decision["next_recommended_action"] == (
+        "synthesize_failed_hostile_scaffold_path_before_new_strategy"
+    )
+    assert decision["hostile_scaffold_retry_recommended"] is False
+    assert decision["hostile_scaffold_generation_authorization_reuse_recommended"] is False
+    decision_text = json.dumps(decision)
+    assert "run_one_bounded_residual_intervention_generation" not in decision_text
+    assert "authorize another hostile scaffold generation" not in decision_text
+    assert "reader-state evaluate" not in decision_text
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    assert gate["hostile_scaffold_failed_generation_path_adjudicated"] is True
+    assert gate["hostile_scaffold_visibility_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    packet = read_payload(packet_dir / "autonomous_evidence_synthesis_packet.json")
+    assert packet["best_current_candidate"]["packet_id"] == summary[
+        "base_candidate_packet_id"
+    ]
+    assert packet["hostile_scaffold_failed_attempt_count"] == 4
+    assert packet["hostile_scaffold_visibility_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert packet["next_recommended_action"] == (
+        "synthesize_failed_hostile_scaffold_path_before_new_strategy"
+    )
+    assert packet["finalization_eligible"] is False
+    assert packet["no_phase_shift_claim"] is True
+
+    budget = read_payload(authorization_packet / "generation_attempt_budget.json")
+    auth_packet = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+    assert budget["authorization_consumed"] is False
+    assert auth_packet["authorization_consumed"] is False
+
+    with connect(chain["config"].db_path) as connection:
+        after_calls = list_model_calls(connection, run_id=chain["run_id"])
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
 
 

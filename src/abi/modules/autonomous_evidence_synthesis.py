@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -110,6 +111,12 @@ OBJECT_EVENT_SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
 RESIDUAL_OBJECT_MOTION_TARGET_ID = "object_motion_causality_specificity"
 TACTILE_RESIDUAL_TARGET_ID = "tactile_inevitability_gap"
 TACTILE_TARGET_ADAPTER_ID = "tactile_inevitability"
+HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
+FAILED_RESIDUAL_GENERATION_PACKET_KIND = "failed_residual_generation"
+HOSTILE_SCAFFOLD_PAUSED_STATUS = "paused_or_exhausted_pending_strategy_review"
+HOSTILE_SCAFFOLD_STRATEGY_ACTION = (
+    "synthesize_failed_hostile_scaffold_path_before_new_strategy"
+)
 USEFUL_OR_STRONGER_CAUSAL_STATUSES = {
     "useful_but_insufficient",
     "causal",
@@ -218,7 +225,7 @@ def run_autonomous_evidence_synthesis(
             parent_ids=source_parent_ids,
         )
 
-        history = _build_repair_history(sources)
+        history = _build_repair_history(sources, run_dir=run_dir)
         payloads["repair_history_table"] = history
         artifacts["repair_history_table"] = writer.write_artifact(
             "repair_history_table",
@@ -852,7 +859,11 @@ def _build_subject_manifest(
     }
 
 
-def _build_repair_history(sources: list[SourcePacket]) -> dict[str, object]:
+def _build_repair_history(
+    sources: list[SourcePacket],
+    *,
+    run_dir: Path | None = None,
+) -> dict[str, object]:
     rows: list[dict[str, object]] = []
     for source in sources:
         if source.packet_kind == "autonomous_revision":
@@ -865,6 +876,8 @@ def _build_repair_history(sources: list[SourcePacket]) -> dict[str, object]:
             rows.append(_bounded_macro_history_row(source))
         elif source.packet_kind == "internal_reader_state_evaluation":
             rows.append(_internal_reader_state_history_row(source))
+    if run_dir is not None:
+        rows.extend(_failed_residual_generation_history_rows(run_dir))
     rows.sort(key=lambda row: (str(row["created_at"]), str(row["packet_kind"]), str(row["packet_id"])))
     _annotate_candidate_evidence_links(rows)
     for index, row in enumerate(rows, start=1):
@@ -909,6 +922,11 @@ def _build_repair_history(sources: list[SourcePacket]) -> dict[str, object]:
         ),
         "reader_state_evaluation_event_count": sum(
             1 for row in rows if row["packet_kind"] == "internal_reader_state_evaluation"
+        ),
+        "failed_residual_generation_event_count": sum(
+            1
+            for row in rows
+            if row["packet_kind"] == FAILED_RESIDUAL_GENERATION_PACKET_KIND
         ),
         "worker": "repair_history_table_v1_controller",
     }
@@ -1288,6 +1306,214 @@ def _bounded_macro_history_row(source: SourcePacket) -> dict[str, object]:
         "gate_failed_gates": list(gate_report.get("failed_gates", [])),
         "classification": "macro_candidate",
     }
+
+
+def _failed_residual_generation_history_rows(run_dir: Path) -> list[dict[str, object]]:
+    packet_base = run_dir / "bounded_macro_recomposition"
+    if not packet_base.exists():
+        return []
+    rows: list[dict[str, object]] = []
+    for packet_dir in sorted(packet_base.glob("packet_*"), key=_packet_sort_key):
+        if not packet_dir.is_dir() or (packet_dir / "macro_recomposition_packet.json").exists():
+            continue
+        subject = _optional_payload(packet_dir, "macro_recomposition_subject_manifest.json")
+        work_order = _optional_payload(packet_dir, "macro_recomposition_work_order.json")
+        if not subject and not work_order:
+            continue
+        target_id = str(
+            subject.get("selected_residual_target_id")
+            or subject.get("target_adapter_id")
+            or work_order.get("selected_residual_target_id")
+            or work_order.get("target_adapter_id")
+            or ""
+        )
+        if target_id != HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+            continue
+        raw_outputs = _failed_generation_raw_outputs(packet_dir)
+        replacement = _replacement_region_text_from_raw_outputs(raw_outputs)
+        failure_classes = _classify_failed_hostile_scaffold_attempt(
+            replacement_text=replacement,
+            subject_manifest=subject,
+            work_order=work_order,
+        )
+        packet_created_at = ""
+        manifest_path = packet_dir / "macro_recomposition_subject_manifest.json"
+        if manifest_path.exists():
+            packet_created_at = str(manifest_path.stat().st_mtime)
+        model_call_ids = [
+            path.parent.name
+            for path in sorted((packet_dir / "model_calls").glob("*/raw_output.txt"))
+        ]
+        return_row: dict[str, object] = {
+            "packet_dir": str(packet_dir),
+            "packet_kind": FAILED_RESIDUAL_GENERATION_PACKET_KIND,
+            "packet_id": packet_dir.name,
+            "packet_artifact_id": None,
+            "created_at": packet_created_at,
+            "accepted": False,
+            "client": subject.get("client"),
+            "finalization_eligible": False,
+            "non_final": True,
+            "not_finalization_eligible": True,
+            "no_phase_shift_claim": True,
+            "model_backed": bool(model_call_ids),
+            "model_call_ids": model_call_ids,
+            "fixture_only": False,
+            "source_packet": subject.get("source_authorization_packet_id"),
+            "source_revision_packet_id": None,
+            "selected_handle": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+            "target_handle": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+            "target_scope": subject.get("target_scope") or work_order.get("target_scope"),
+            "target_movement": subject.get("target_movement")
+            or work_order.get("target_movement"),
+            "selected_region_id": subject.get("selected_region_id")
+            or work_order.get("selected_region_id"),
+            "selected_residual_target_id": target_id,
+            "target_adapter_id": subject.get("target_adapter_id")
+            or work_order.get("target_adapter_id"),
+            "residual_candidate_generation": True,
+            "target_unit_count": int(
+                subject.get("target_unit_count") or work_order.get("target_unit_count") or 0
+            ),
+            "target_unit_ids": _unique(
+                [
+                    *_string_list(subject.get("target_unit_ids")),
+                    *_string_list(work_order.get("target_unit_ids")),
+                ]
+            ),
+            "source_authorization_packet_id": subject.get(
+                "source_authorization_packet_id"
+            )
+            or work_order.get("source_authorization_packet_id"),
+            "source_authorization_packet_dir": subject.get(
+                "source_authorization_packet_dir"
+            ),
+            "source_work_order_packet_id": subject.get("source_work_order_packet_id")
+            or work_order.get("source_work_order_packet_id"),
+            "source_work_order_packet_dir": subject.get("source_work_order_packet_dir"),
+            "base_candidate_packet_id": subject.get("base_candidate_packet_id")
+            or work_order.get("base_candidate_packet_id"),
+            "base_candidate_packet_dir": subject.get("base_candidate_packet_dir"),
+            "proof_packet_id": subject.get("proof_packet_id"),
+            "reader_state_packet_id": subject.get("reader_state_packet_id"),
+            "authorization_consumed": bool(subject.get("authorization_consumed")),
+            "candidate_generated": bool(subject.get("candidate_generated")),
+            "candidate_artifact_id": None,
+            "candidate_text_sha256": None,
+            "candidate_word_count": 0,
+            "causal_status": "failed_residual_generation_attempt",
+            "classification": "failed",
+            "attempt_failed": True,
+            "not_candidate_evidence": True,
+            "ablation_authorized": False,
+            "reader_state_evaluation_authorized": False,
+            "strongest_rival_pressure_remains_blocking": True,
+            "failure_classes": failure_classes,
+            "failure_summary": _failed_hostile_scaffold_failure_summary(
+                failure_classes
+            ),
+            "raw_replacement_excerpt": replacement[:360],
+        }
+        rows.append(return_row)
+    return rows
+
+
+def _failed_generation_raw_outputs(packet_dir: Path) -> list[str]:
+    model_calls = packet_dir / "model_calls"
+    if not model_calls.exists():
+        return []
+    return [
+        path.read_text(encoding="utf-8")
+        for path in sorted(model_calls.glob("*/raw_output.txt"))
+        if path.is_file()
+    ]
+
+
+def _replacement_region_text_from_raw_outputs(raw_outputs: list[str]) -> str:
+    for raw in raw_outputs:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and isinstance(
+            payload.get("replacement_region_text"), str
+        ):
+            return str(payload["replacement_region_text"])
+    return raw_outputs[-1] if raw_outputs else ""
+
+
+def _classify_failed_hostile_scaffold_attempt(
+    *,
+    replacement_text: str,
+    subject_manifest: dict[str, object],
+    work_order: dict[str, object],
+) -> list[str]:
+    lower = replacement_text.lower()
+    classes: list[str] = []
+    if not replacement_text:
+        classes.append("missing_model_replacement_output")
+    if "at first, the table is only ordinary" in lower:
+        classes.append("broad_materiality_failure")
+    if "at first, the table is just there" in lower:
+        classes.append("ordinary_table_unit_under_material_failure")
+    if (
+        "keep their own pressure" in lower
+        or "that is the rule" in lower
+        or "rule the marks carry" in lower
+        or "the marks keep their hold" in lower
+        or "the room keeps those crossings" in lower
+        or "before any rule is said" in lower
+        or "nothing explains itself first" in lower
+    ):
+        classes.append("scaffold_leakage_persisted")
+    before_text = str(
+        work_order.get("before_section_text")
+        or subject_manifest.get("selected_region_before_text")
+        or ""
+    )
+    if before_text and replacement_text:
+        changed_count, changed_ratio = _changed_unique_word_stats(
+            before_text,
+            replacement_text,
+        )
+        if changed_ratio < 0.1:
+            classes.append("target_bearing_ratio_failure")
+        if changed_count < 8:
+            classes.append("target_bearing_changed_word_floor_failure")
+    if not classes:
+        classes.append("failed_residual_generation_validation")
+    return _unique(classes)
+
+
+def _failed_hostile_scaffold_failure_summary(failure_classes: list[str]) -> str:
+    if "ordinary_table_unit_under_material_failure" in failure_classes:
+        return "ordinary-table unit remained under-material sentence polish"
+    if (
+        "target_bearing_ratio_failure" in failure_classes
+        and "scaffold_leakage_persisted" in failure_classes
+    ):
+        return "target-bearing materiality remained too low and scaffold leakage persisted"
+    if "scaffold_leakage_persisted" in failure_classes:
+        return "materiality/unit coverage improved but semantic scaffold leakage persisted"
+    if "broad_materiality_failure" in failure_classes:
+        return "broad selected-region materiality remained insufficient"
+    return "failed residual generation validation"
+
+
+def _changed_unique_word_stats(before_text: str, after_text: str) -> tuple[int, float]:
+    before = set(_word_tokens(before_text))
+    after = set(_word_tokens(after_text))
+    changed = after.symmetric_difference(before)
+    base_count = max(1, len(before | after))
+    return len(changed), len(changed) / base_count
+
+
+def _word_tokens(text: str) -> list[str]:
+    cleaned = "".join(
+        char.lower() if char.isalnum() else " "
+        for char in text
+    )
+    return [part for part in cleaned.split() if part]
 
 
 def _internal_reader_state_history_row(source: SourcePacket) -> dict[str, object]:
@@ -1957,11 +2183,30 @@ def _build_causal_status_summary(history: dict[str, object]) -> dict[str, object
             ),
         },
     ]
+    hostile_scaffold_failed_path = _hostile_scaffold_failed_path_summary(
+        {"repair_events": rows}
+    )
+    if hostile_scaffold_failed_path["attempted"]:
+        findings.append(
+            {
+                "finding_id": "hostile_scaffold_failed_generation_path",
+                "status": hostile_scaffold_failed_path["target_status"],
+                "evidence_packet_ids": list(
+                    hostile_scaffold_failed_path["attempt_packet_ids"]
+                ),
+                "summary": (
+                    "Hostile scaffold visibility has failed across residual "
+                    "generation attempts and should pause for strategy review "
+                    "instead of another retry."
+                ),
+            }
+        )
     return {
         "trajectory": rows,
         "classifications_present": classifications,
         "finding_count": len(findings),
         "findings": findings,
+        "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
         "candidate_proof_pairs": _build_candidate_proof_pairs(rows),
         "macro2_candidate_packet_ids": [
             str(row["packet_id"])
@@ -3155,6 +3400,30 @@ def _build_candidate_evidence_graph(
         for node in nodes
         if _is_residual_candidate_graph_node(node)
     ]
+    failed_residual_nodes = [
+        {
+            "packet_id": row["packet_id"],
+            "packet_kind": row["packet_kind"],
+            "packet_dir": row["packet_dir"],
+            "selected_residual_target_id": row.get("selected_residual_target_id"),
+            "base_candidate_packet_id": row.get("base_candidate_packet_id"),
+            "source_authorization_packet_id": row.get(
+                "source_authorization_packet_id"
+            ),
+            "source_work_order_packet_id": row.get("source_work_order_packet_id"),
+            "failure_classes": list(
+                row.get("failure_classes", [])
+                if isinstance(row.get("failure_classes"), list)
+                else []
+            ),
+            "candidate_generated": False,
+            "not_candidate_evidence": True,
+            "ablation_authorized": False,
+            "reader_state_evaluation_authorized": False,
+        }
+        for row in rows
+        if row["packet_kind"] == FAILED_RESIDUAL_GENERATION_PACKET_KIND
+    ]
     return {
         "nodes": nodes,
         "node_count": len(nodes),
@@ -3173,11 +3442,113 @@ def _build_candidate_evidence_graph(
             for node in residual_nodes
             if node.get("proof_backed") and not node.get("reader_state_evaluated")
         ],
+        "failed_residual_generation_nodes": failed_residual_nodes,
+        "failed_residual_generation_packet_ids": [
+            str(node["packet_id"]) for node in failed_residual_nodes
+        ],
         "candidate_evidence_graph_created": True,
         "not_human_validated": True,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
         "worker": "candidate_evidence_graph_v1_controller",
+    }
+
+
+def _hostile_scaffold_failed_path_summary(
+    history: dict[str, object],
+) -> dict[str, object]:
+    rows = _rows(history)
+    attempts = [
+        row
+        for row in rows
+        if row["packet_kind"] == FAILED_RESIDUAL_GENERATION_PACKET_KIND
+        and row.get("selected_residual_target_id") == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    ]
+    accepted_candidates = [
+        row
+        for row in rows
+        if row["packet_kind"] == "bounded_macro_recomposition"
+        and row.get("selected_residual_target_id") == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+        and row.get("candidate_generated")
+        and row.get("accepted")
+    ]
+    attempt_summaries = [
+        {
+            "packet_id": row["packet_id"],
+            "packet_dir": row["packet_dir"],
+            "source_authorization_packet_id": row.get(
+                "source_authorization_packet_id"
+            ),
+            "source_work_order_packet_id": row.get("source_work_order_packet_id"),
+            "base_candidate_packet_id": row.get("base_candidate_packet_id"),
+            "failure_classes": list(
+                row.get("failure_classes", [])
+                if isinstance(row.get("failure_classes"), list)
+                else []
+            ),
+            "failure_summary": row.get("failure_summary"),
+            "authorization_consumed": bool(row.get("authorization_consumed")),
+            "candidate_generated": bool(row.get("candidate_generated")),
+            "candidate_artifact_id": row.get("candidate_artifact_id"),
+            "ablation_authorized": bool(row.get("ablation_authorized")),
+            "reader_state_evaluation_authorized": bool(
+                row.get("reader_state_evaluation_authorized")
+            ),
+            "not_candidate_evidence": True,
+        }
+        for row in attempts
+    ]
+    semantic_leak_attempts = [
+        row
+        for row in attempts
+        if "scaffold_leakage_persisted" in row.get("failure_classes", [])
+    ]
+    stop_test_triggered = len(attempts) >= 3 and not accepted_candidates
+    return {
+        "target_id": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        "attempted": bool(attempts),
+        "failed_attempt_count": len(attempts),
+        "attempts": attempt_summaries,
+        "attempt_packet_ids": [str(row["packet_id"]) for row in attempts],
+        "failure_classes_by_attempt": {
+            str(row["packet_id"]): list(
+                row.get("failure_classes", [])
+                if isinstance(row.get("failure_classes"), list)
+                else []
+            )
+            for row in attempts
+        },
+        "repeated_semantic_leakage_after_feedback": len(semantic_leak_attempts) >= 2,
+        "no_accepted_hostile_scaffold_candidate_exists": not accepted_candidates,
+        "accepted_candidate_packet_ids": [
+            str(row["packet_id"]) for row in accepted_candidates
+        ],
+        "source_authorization_packet_id": attempts[-1].get(
+            "source_authorization_packet_id"
+        )
+        if attempts
+        else None,
+        "source_work_order_packet_id": attempts[-1].get("source_work_order_packet_id")
+        if attempts
+        else None,
+        "base_candidate_packet_id": attempts[-1].get("base_candidate_packet_id")
+        if attempts
+        else None,
+        "authorization_still_technically_unconsumed": bool(attempts)
+        and not any(row.get("authorization_consumed") for row in attempts),
+        "should_not_reuse_authorization_without_strategy_review": bool(attempts),
+        "stop_test_triggered": stop_test_triggered,
+        "target_status": HOSTILE_SCAFFOLD_PAUSED_STATUS
+        if stop_test_triggered
+        else ("failed_attempts_observed" if attempts else "not_observed"),
+        "next_recommended_action": HOSTILE_SCAFFOLD_STRATEGY_ACTION
+        if stop_test_triggered
+        else None,
+        "failed_packets_are_not_candidate_evidence": True,
+        "ablation_authorized_on_failed_packets": False,
+        "reader_state_evaluation_authorized_on_failed_packets": False,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
     }
 
 
@@ -3505,6 +3876,21 @@ def _build_failed_or_rejected_repairs(history: dict[str, object]) -> dict[str, o
                     "causal_status": row.get("causal_status"),
                     "classification": classification,
                     "rejection_reason": _repair_rejection_reason(row),
+                    "failure_classes": list(
+                        row.get("failure_classes", [])
+                        if isinstance(row.get("failure_classes"), list)
+                        else []
+                    ),
+                    "authorization_consumed": bool(row.get("authorization_consumed")),
+                    "candidate_generated": bool(row.get("candidate_generated")),
+                    "candidate_artifact_id": row.get("candidate_artifact_id"),
+                    "not_candidate_evidence": bool(
+                        row.get("not_candidate_evidence", False)
+                    ),
+                    "ablation_authorized": bool(row.get("ablation_authorized")),
+                    "reader_state_evaluation_authorized": bool(
+                        row.get("reader_state_evaluation_authorized")
+                    ),
                     "source_evidence": [
                         str(row.get("packet_id")),
                         str(
@@ -3576,9 +3962,11 @@ def _build_failed_or_rejected_repairs(history: dict[str, object]) -> dict[str, o
                         ],
                     }
                 )
+    hostile_scaffold_failed_path = _hostile_scaffold_failed_path_summary(history)
     return {
         "failed_or_rejected_repairs": repairs,
         "failed_or_rejected_count": len(repairs),
+        "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
         "mechanically_invalid_prior_packets": [],
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
@@ -3588,6 +3976,7 @@ def _build_failed_or_rejected_repairs(history: dict[str, object]) -> dict[str, o
 
 def _build_exhausted_handle_report(history: dict[str, object]) -> dict[str, object]:
     rows = _rows(history)
+    hostile_scaffold_failed_path = _hostile_scaffold_failed_path_summary(history)
     record_rows = [
         row
         for row in rows
@@ -3692,13 +4081,54 @@ def _build_exhausted_handle_report(history: dict[str, object]) -> dict[str, obje
             "allowed_to_revisit_only_if": "macro ablation or internal readers show the proof/no-answer span is the remaining causal blocker",
         },
     ]
+    if hostile_scaffold_failed_path["attempted"]:
+        handles.append(
+            {
+                "handle": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+                "status": hostile_scaffold_failed_path["target_status"],
+                "evidence_packet_ids": list(
+                    hostile_scaffold_failed_path["attempt_packet_ids"]
+                ),
+                "reason": (
+                    "Hostile scaffold visibility has failed across bounded "
+                    "residual-generation attempts; do not reuse the unconsumed "
+                    "authorization without strategy review."
+                ),
+                "allowed_to_revisit_only_if": (
+                    "operator strategy review chooses a non-retry move or a new "
+                    "target contract"
+                ),
+                "source_authorization_packet_id": hostile_scaffold_failed_path[
+                    "source_authorization_packet_id"
+                ],
+                "source_work_order_packet_id": hostile_scaffold_failed_path[
+                    "source_work_order_packet_id"
+                ],
+                "failed_attempt_count": hostile_scaffold_failed_path[
+                    "failed_attempt_count"
+                ],
+                "stop_test_triggered": hostile_scaffold_failed_path[
+                    "stop_test_triggered"
+                ],
+                "next_recommended_action": hostile_scaffold_failed_path[
+                    "next_recommended_action"
+                ],
+            }
+        )
     return {
         "handles": handles,
         "exhausted_or_failed_count": sum(
             1
             for handle in handles
-            if handle["status"] in {"exhausted_for_now", "failed", "weak_noncausal_or_unproven"}
+            if handle["status"]
+            in {
+                "exhausted_for_now",
+                "failed",
+                "weak_noncausal_or_unproven",
+                HOSTILE_SCAFFOLD_PAUSED_STATUS,
+            }
         ),
+        "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
         "worker": "exhausted_handle_report_v1_controller",
@@ -4313,6 +4743,9 @@ def _build_residual_blocker_map(
     handles = {
         str(handle["handle"]): handle for handle in exhausted_handle_report["handles"]
     }
+    hostile_scaffold_failed_path = _as_dict(
+        exhausted_handle_report.get("hostile_scaffold_failed_generation_path")
+    )
     rival_failed = handles["rival_informed_object_event_pressure"]["status"] == "failed"
     macro_active = str(
         handles.get("bounded_macro_recomposition", {}).get("status", "")
@@ -4684,6 +5117,25 @@ def _build_residual_blocker_map(
                     ),
                 ]
             )
+    if hostile_scaffold_failed_path.get("stop_test_triggered"):
+        blockers.extend(
+            [
+                _blocker(
+                    "hostile_scaffold_visibility_generation_path_paused",
+                    "high",
+                    "hostile scaffold visibility failed across repeated residual-generation attempts and requires strategy review",
+                    False,
+                    status=HOSTILE_SCAFFOLD_PAUSED_STATUS,
+                ),
+                _blocker(
+                    "hostile_scaffold_authorization_unconsumed_but_not_reusable",
+                    "high",
+                    "the authorization remains technically unconsumed but should not be reused without a new operator strategy review",
+                    False,
+                    status="strategy_review_required_before_reuse",
+                ),
+            ]
+        )
     return {
         "residual_blockers": blockers,
         "blocker_count": len(blockers),
@@ -4716,6 +5168,18 @@ def _build_residual_blocker_map(
         ),
         "residual_candidate_next_required_evidence": (
             "internal_reader_state_evaluation" if pending_candidates else None
+        ),
+        "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
+        "hostile_scaffold_visibility_target_status": hostile_scaffold_failed_path.get(
+            "target_status"
+        )
+        if hostile_scaffold_failed_path.get("attempted")
+        else None,
+        "hostile_scaffold_stop_test_triggered": bool(
+            hostile_scaffold_failed_path.get("stop_test_triggered")
+        ),
+        "hostile_scaffold_next_recommended_action": hostile_scaffold_failed_path.get(
+            "next_recommended_action"
         ),
         "residual_candidate_may_supersede_current_best_after_reader_state": bool(
             pending_candidates or evaluated_contenders
@@ -5022,7 +5486,28 @@ def _build_strategic_decision_report(
         for candidate in provisional_candidate_queue.get("pending_candidates", [])
         if isinstance(candidate, dict)
     ]
-    if pending_candidates:
+    hostile_scaffold_failed_path = _as_dict(
+        exhausted_handle_report.get("hostile_scaffold_failed_generation_path")
+    )
+    if hostile_scaffold_failed_path.get("stop_test_triggered"):
+        recommendation = "pause_hostile_scaffold_generation_path_for_strategy_review"
+        next_action = HOSTILE_SCAFFOLD_STRATEGY_ACTION
+        do_not_patch = True
+        basis = [
+            "hostile_scaffold_visibility has repeated failed residual-generation attempts",
+            "no accepted hostile scaffold candidate exists",
+            (
+                f"{hostile_scaffold_failed_path.get('base_candidate_packet_id')} remains "
+                "the current candidate base rather than a failed attempt"
+            ),
+            (
+                f"{hostile_scaffold_failed_path.get('source_authorization_packet_id')} "
+                "is technically unconsumed but should not be reused without strategy review"
+            ),
+            "failed packets are diagnostic evidence only and do not authorize ablation or reader-state evaluation",
+            "the next move is loop/strategy review, not another hostile scaffold retry",
+        ]
+    elif pending_candidates:
         pending = pending_candidates[-1]
         pending_packet_id = str(pending.get("packet_id"))
         recommendation = (
@@ -5169,6 +5654,9 @@ def _build_strategic_decision_report(
             )
         ),
         "provisional_candidate_queue_reference": provisional_candidate_queue,
+        "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
+        "hostile_scaffold_retry_recommended": False,
+        "hostile_scaffold_generation_authorization_reuse_recommended": False,
         "reader_state_evidence_consumed": reader_state_present,
         "reader_state_informed_recomposition_recommended": reader_state_present
         and reader_state_partial
@@ -5893,6 +6381,14 @@ def _build_gate_report(
         or reader_state_adjudication.get("selected_candidate_text_sha256")
         == selected.get("text_sha256")
     )
+    hostile_scaffold_failed_path = _as_dict(
+        failed_repairs.get("hostile_scaffold_failed_generation_path")
+        or exhausted_handles.get("hostile_scaffold_failed_generation_path")
+    )
+    hostile_attempted = bool(hostile_scaffold_failed_path.get("attempted"))
+    hostile_stop_test_triggered = bool(
+        hostile_scaffold_failed_path.get("stop_test_triggered")
+    )
     gate_results = [
         _gate_result("synthesis_packet_exists", True),
         _gate_result("source_chain_complete", bool(subject_manifest["source_chain_complete"])),
@@ -6014,6 +6510,13 @@ def _build_gate_report(
             bool(candidate_evidence_graph.get("candidate_evidence_graph_created")),
         ),
         _gate_result(
+            "hostile_scaffold_failed_generation_path_adjudicated",
+            hostile_stop_test_triggered if hostile_attempted else True,
+            []
+            if (hostile_stop_test_triggered or not hostile_attempted)
+            else ["hostile scaffold failed attempts observed without stop-test adjudication"],
+        ),
+        _gate_result(
             "residual_candidate_supersession_adjudicated",
             residual_candidate_supersession_adjudicated
             if residual_candidate_reader_state_consumed
@@ -6090,6 +6593,10 @@ def _build_gate_report(
         blockers.append(
             "proof-backed residual candidate still requires internal reader-state evaluation"
         )
+    if hostile_stop_test_triggered:
+        blockers.append(
+            "hostile scaffold generation path is paused pending strategy review"
+        )
     return {
         "passed": False,
         "eligible": False,
@@ -6133,6 +6640,18 @@ def _build_gate_report(
         "candidate_evidence_graph_created": bool(
             candidate_evidence_graph.get("candidate_evidence_graph_created")
         ),
+        "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
+        "hostile_scaffold_failed_generation_path_adjudicated": (
+            hostile_stop_test_triggered if hostile_attempted else True
+        ),
+        "hostile_scaffold_visibility_target_status": hostile_scaffold_failed_path.get(
+            "target_status"
+        )
+        if hostile_attempted
+        else None,
+        "hostile_scaffold_next_recommended_action": hostile_scaffold_failed_path.get(
+            "next_recommended_action"
+        ),
         "residual_candidate_supersession_adjudicated": (
             residual_candidate_supersession_adjudicated
         ),
@@ -6164,6 +6683,11 @@ def _build_packet_summary(
     sources: list[SourcePacket],
 ) -> dict[str, object]:
     decision = payloads["strategic_decision_report"]
+    hostile_scaffold_failed_path = _as_dict(
+        payloads["failed_or_rejected_repairs"].get(
+            "hostile_scaffold_failed_generation_path"
+        )
+    )
     artifact_counts = packet_artifact_count_summary(
         required_artifact_types=AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES,
         produced_artifact_types=list(artifacts),
@@ -6266,6 +6790,18 @@ def _build_packet_summary(
         "failed_repairs_identified": payloads["failed_or_rejected_repairs"][
             "failed_or_rejected_repairs"
         ],
+        "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
+        "hostile_scaffold_visibility_target_status": hostile_scaffold_failed_path.get(
+            "target_status"
+        )
+        if hostile_scaffold_failed_path.get("attempted")
+        else None,
+        "hostile_scaffold_failed_attempt_count": hostile_scaffold_failed_path.get(
+            "failed_attempt_count", 0
+        ),
+        "hostile_scaffold_next_recommended_action": hostile_scaffold_failed_path.get(
+            "next_recommended_action"
+        ),
         "exhausted_handles_identified": payloads["exhausted_handle_report"]["handles"],
         "strategic_decision": decision["recommendation"],
         "next_recommended_action": decision["next_recommended_action"],
@@ -6507,6 +7043,11 @@ def _classify_causal_status(
 
 
 def _repair_rejection_reason(row: dict[str, object]) -> str:
+    if row["packet_kind"] == FAILED_RESIDUAL_GENERATION_PACKET_KIND:
+        return str(
+            row.get("failure_summary")
+            or "failed residual generation attempt is diagnostic only"
+        )
     if row.get("causal_status") == "noncausal_or_cosmetic":
         return "executed ablation reports the repair as noncausal/cosmetic"
     if row.get("revert_performs_same_or_better") is True:
