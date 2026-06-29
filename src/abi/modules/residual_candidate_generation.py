@@ -1260,8 +1260,29 @@ def _hostile_scaffold_generation_feedback(
             "do not imitate the rival",
             "do not make finality or phase-shift claims",
         ],
+        "semantic_leakage_feedback": [
+            "Do not replace one visible thesis with another.",
+            (
+                "Do not introduce object lists with explanatory labels such as "
+                '"their pressure is what counts" or '
+                '"ordinary things keep their own pressure."'
+            ),
+            "Avoid colon-led thesis sentences that announce what the objects mean.",
+            "The object sequence must make the relation legible without naming the rule.",
+            "Each target unit must solve a distinct local scaffold problem.",
+            "Do not reuse one long object-list sentence as the answer to multiple target units.",
+            (
+                "Physical/object pressure may remain when embodied in object "
+                "relations, but abstract pressure as a thesis label is not sufficient."
+            ),
+        ],
         "diagnostic_labels": [
             "strong_scaffold_reduction",
+            "scaffold_reduction_with_leakage",
+            "material_but_scaffolded",
+            "target_unit_collapsed_into_neighbor",
+            "abstract_pressure_label",
+            "thesis_before_object_sequence",
             "valid_direction_but_under_material",
             "scaffold_reduction_missing",
             "vague_summary",
@@ -1618,6 +1639,24 @@ def _collect_residual_intervention_validation(
         policy=policy,
         failures=failures,
     )
+    hostile_semantic_leakage_report: dict[str, object] | None = None
+    unit_collapse_report: dict[str, object] | None = None
+    if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        hostile_semantic_leakage_report = _hostile_scaffold_semantic_leakage_report(
+            replacement,
+        )
+        failures["scaffold_leakage_failures"].extend(
+            str(failure)
+            for failure in hostile_semantic_leakage_report.get("failures", [])
+        )
+        unit_collapse_report = _hostile_unit_collapse_report(unit_reports)
+        failures["unit_collapse_failures"].extend(
+            str(failure) for failure in unit_collapse_report.get("failures", [])
+        )
+        _apply_hostile_unit_collapse_classifications(
+            unit_reports=unit_reports,
+            unit_collapse_report=unit_collapse_report,
+        )
     if (
         subject.selected_residual_target_id == TACTILE_INEVITABILITY_TARGET_ID
         and protected_context["scope_failure"]
@@ -1724,6 +1763,8 @@ def _collect_residual_intervention_validation(
         "consequence_terms_present": consequence_terms_present,
         "object_terms_source": "target_units_from_work_order",
         "target_specific_mapping_report": target_specific_mapping_report,
+        "hostile_scaffold_semantic_leakage_report": hostile_semantic_leakage_report,
+        "unit_collapse_report": unit_collapse_report,
         "hostile_scaffold_generation_feedback": (
             _hostile_scaffold_generation_feedback(subject)
             if subject.selected_residual_target_id
@@ -1763,6 +1804,7 @@ def _empty_failure_buckets() -> dict[str, list[str]]:
         "decorative_vividness_failures": [],
         "rival_mimicry_failures": [],
         "finality_or_phase_shift_claim_failures": [],
+        "unit_collapse_failures": [],
     }
 
 
@@ -2017,7 +2059,9 @@ def _target_unit_materiality_reports(
         )
         for failure in semantic["failures"]:
             bucket = "tactile_semantic_failures"
-            if "object-motion relabel" in failure:
+            if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+                bucket = "scaffold_leakage_failures"
+            elif "object-motion relabel" in failure:
                 bucket = "object_motion_relabel_failures"
             failures[bucket].append(f"{unit.unit_id}: {failure}")
         reports.append(
@@ -2146,6 +2190,11 @@ def _target_unit_semantic_report(
     mapping: dict[str, object],
     selected_residual_target_id: str,
 ) -> dict[str, object]:
+    if selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return _hostile_target_unit_semantic_report(
+            unit=unit,
+            replacement_excerpt=replacement_excerpt,
+        )
     if selected_residual_target_id != TACTILE_INEVITABILITY_TARGET_ID:
         return {"passed": True, "failures": []}
     replacement_lower = replacement_excerpt.lower()
@@ -2158,6 +2207,330 @@ def _target_unit_semantic_report(
     if any(term in replacement_lower for term in ("inevitability", "inevitable", "non-optional")):
         failures.append("abstract inevitability explanation")
     return {"passed": not failures, "failures": failures}
+
+
+def _hostile_target_unit_semantic_report(
+    *,
+    unit: TargetUnit,
+    replacement_excerpt: str,
+) -> dict[str, object]:
+    failures: list[str] = []
+    lower = replacement_excerpt.lower()
+    if _hostile_abstract_pressure_label(lower):
+        failures.append(
+            "abstract_pressure_label: ordinary/object pressure is named as an "
+            "interpretive label instead of carried by object relation"
+        )
+    if _hostile_thesis_before_object_sequence(replacement_excerpt):
+        failures.append(
+            "thesis_before_object_sequence: object list follows an explanatory "
+            "lead-in instead of making the relation legible first"
+        )
+    if _hostile_interpretive_label(lower):
+        failures.append(
+            "scaffold_reduction_with_leakage: interpretive label remains visible "
+            "where the object sequence should carry the relation"
+        )
+    if failures and not any("abstract_pressure_label" in failure for failure in failures):
+        failures.append(
+            "material_but_scaffolded: target unit is materially re-authored but "
+            "still names the relation too explicitly"
+        )
+    return {"passed": not failures, "failures": failures}
+
+
+def _hostile_scaffold_semantic_leakage_report(
+    replacement: str,
+) -> dict[str, object]:
+    diagnostics: list[dict[str, object]] = []
+    for sentence in _sentences(replacement):
+        lower = sentence.lower()
+        if _hostile_abstract_pressure_label(lower):
+            diagnostics.append(
+                _hostile_leakage_diagnostic(
+                    leakage_class="abstract_pressure_label",
+                    sentence=sentence,
+                    reason=(
+                        "pressure is used as an interpretive label rather than "
+                        "being embodied in object relation"
+                    ),
+                )
+            )
+        if _hostile_interpretive_label(lower):
+            diagnostics.append(
+                _hostile_leakage_diagnostic(
+                    leakage_class="interpretive_label",
+                    sentence=sentence,
+                    reason=(
+                        "the sentence names what counts, matters, or carries a "
+                        "rule before the object sequence earns it"
+                    ),
+                )
+            )
+        if _hostile_colon_introduced_explanation(sentence):
+            diagnostics.append(
+                _hostile_leakage_diagnostic(
+                    leakage_class="colon_introduced_explanation",
+                    sentence=sentence,
+                    reason=(
+                        "colon-led lead-in announces an explanation for the "
+                        "object list"
+                    ),
+                )
+            )
+        if _hostile_thesis_before_object_sequence(sentence):
+            diagnostics.append(
+                _hostile_leakage_diagnostic(
+                    leakage_class="thesis_before_object_sequence",
+                    sentence=sentence,
+                    reason=(
+                        "an explanatory thesis appears before the objects carry "
+                        "the relation"
+                    ),
+                )
+            )
+        if _hostile_object_list_after_explanatory_lead_in(sentence):
+            diagnostics.append(
+                _hostile_leakage_diagnostic(
+                    leakage_class="object_list_used_as_proof_after_explanatory_lead_in",
+                    sentence=sentence,
+                    reason=(
+                        "object list is used as proof after a scaffolded lead-in"
+                    ),
+                )
+            )
+    unique_diagnostics = _unique_diagnostics(diagnostics)
+    return {
+        "failed": bool(unique_diagnostics),
+        "leakage_classes": sorted(
+            {str(item["leakage_class"]) for item in unique_diagnostics}
+        ),
+        "likely_offending_spans": [
+            str(item["offending_span"]) for item in unique_diagnostics
+        ],
+        "diagnostics": unique_diagnostics,
+        "failures": [
+            (
+                f"{item['leakage_class']}: {item['reason']}; "
+                f"offending_span={item['offending_span']!r}"
+            )
+            for item in unique_diagnostics
+        ],
+    }
+
+
+def _hostile_leakage_diagnostic(
+    *,
+    leakage_class: str,
+    sentence: str,
+    reason: str,
+) -> dict[str, object]:
+    return {
+        "leakage_class": leakage_class,
+        "offending_span": " ".join(sentence.split()),
+        "reason": reason,
+    }
+
+
+def _unique_diagnostics(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    seen: set[tuple[str, str]] = set()
+    unique_items: list[dict[str, object]] = []
+    for item in items:
+        key = (str(item.get("leakage_class")), str(item.get("offending_span")))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_items.append(item)
+    return unique_items
+
+
+def _hostile_abstract_pressure_label(text: str) -> bool:
+    return any(
+        phrase in text
+        for phrase in (
+            "keep their own pressure",
+            "keeps its own pressure",
+            "pressure is what counts",
+            "their pressure is what counts",
+            "pressure field",
+        )
+    )
+
+
+def _hostile_interpretive_label(text: str) -> bool:
+    return any(
+        phrase in text
+        for phrase in (
+            "what counts",
+            "makes them matter",
+            "make them matter",
+            "matter because",
+            "that is the rule",
+            "rule the marks carry",
+            "the rule the marks carry",
+        )
+    )
+
+
+def _hostile_colon_introduced_explanation(sentence: str) -> bool:
+    if ":" not in sentence:
+        return False
+    lead, _sep, body = sentence.partition(":")
+    lead_lower = lead.lower()
+    body_lower = body.lower()
+    if not _hostile_explanatory_lead_in(lead_lower):
+        return False
+    return len(_terms_present(body_lower, _hostile_object_sequence_terms())) >= 2
+
+
+def _hostile_thesis_before_object_sequence(sentence: str) -> bool:
+    lower = sentence.lower()
+    if not _hostile_explanatory_lead_in(lower):
+        return False
+    object_count = len(_terms_present(lower, _hostile_object_sequence_terms()))
+    return object_count >= 3 and (
+        ":" in sentence
+        or any(
+            phrase in lower
+            for phrase in (
+                "because",
+                "so the",
+                "therefore",
+                "what counts",
+                "that is the rule",
+            )
+        )
+    )
+
+
+def _hostile_object_list_after_explanatory_lead_in(sentence: str) -> bool:
+    if ":" not in sentence:
+        return False
+    lead, _sep, body = sentence.partition(":")
+    return _hostile_explanatory_lead_in(lead.lower()) and len(
+        _terms_present(body.lower(), _hostile_object_sequence_terms())
+    ) >= 4
+
+
+def _hostile_explanatory_lead_in(text: str) -> bool:
+    return any(
+        phrase in text
+        for phrase in (
+            "ordinary things keep",
+            "ordinary things",
+            "their own pressure",
+            "what counts",
+            "rule",
+            "means",
+            "matter because",
+            "makes them matter",
+            "the marks carry",
+        )
+    )
+
+
+def _hostile_object_sequence_terms() -> tuple[str, ...]:
+    return (
+        "table",
+        "ring",
+        "glass",
+        "trace",
+        "dust",
+        "window",
+        "spoon",
+        "saucer",
+        "mark",
+        "marks",
+        "surface",
+        "contact",
+        "fall",
+        "break",
+    )
+
+
+def _hostile_unit_collapse_report(
+    unit_reports: list[dict[str, object]],
+) -> dict[str, object]:
+    groups: list[dict[str, object]] = []
+    for index, report in enumerate(unit_reports):
+        excerpt = str(report.get("replacement_excerpt") or "")
+        normalized = _canonical_space(excerpt)
+        if _word_count(normalized) < 8:
+            continue
+        unit_id = str(report.get("target_unit_id") or "")
+        matches = [unit_id]
+        for other in unit_reports[index + 1 :]:
+            other_excerpt = str(other.get("replacement_excerpt") or "")
+            other_normalized = _canonical_space(other_excerpt)
+            if _word_count(other_normalized) < 8:
+                continue
+            if (
+                normalized == other_normalized
+                or difflib.SequenceMatcher(
+                    a=normalized,
+                    b=other_normalized,
+                ).ratio()
+                >= 0.97
+            ):
+                matches.append(str(other.get("target_unit_id") or ""))
+        if len(matches) >= 2:
+            leakage = _hostile_scaffold_semantic_leakage_report(excerpt)
+            severity = "failure" if leakage["failed"] is True else "warning"
+            groups.append(
+                {
+                    "collapsed_target_unit_ids": matches,
+                    "shared_replacement_excerpt": excerpt,
+                    "severity": severity,
+                    "semantic_leakage_classes": leakage["leakage_classes"],
+                }
+            )
+    failed_collapsed_ids = sorted(
+        {
+            unit_id
+            for group in groups
+            if group["severity"] == "failure"
+            for unit_id in group["collapsed_target_unit_ids"]
+            if unit_id
+        }
+    )
+    return {
+        "unit_collapse_detected": bool(groups),
+        "unit_collapse_failure_detected": bool(failed_collapsed_ids),
+        "collapsed_target_unit_ids": failed_collapsed_ids,
+        "collapse_groups": groups,
+        "failures": [
+            (
+                "duplicate replacement sentence reused for distinct hostile "
+                f"target units: {', '.join(group['collapsed_target_unit_ids'])}"
+            )
+            for group in groups
+            if group["severity"] == "failure"
+        ],
+    }
+
+
+def _apply_hostile_unit_collapse_classifications(
+    *,
+    unit_reports: list[dict[str, object]],
+    unit_collapse_report: dict[str, object],
+) -> None:
+    collapsed = {
+        str(unit_id)
+        for unit_id in unit_collapse_report.get("collapsed_target_unit_ids", [])
+    }
+    if not collapsed:
+        return
+    for report in unit_reports:
+        if str(report.get("target_unit_id")) not in collapsed:
+            continue
+        failures = report.setdefault("semantic_failures", [])
+        if isinstance(failures, list):
+            failures.append(
+                "target_unit_collapsed_into_neighbor: duplicate replacement "
+                "sentence reused for distinct hostile target units"
+            )
+        report["semantic_passed"] = False
+        report["classification"] = "target_unit_collapsed_into_neighbor"
 
 
 def _target_unit_classification(
@@ -2188,6 +2561,16 @@ def _hostile_target_unit_classification(
     semantic_failures: list[str],
 ) -> str:
     joined = " ".join(semantic_failures).lower()
+    if "target_unit_collapsed_into_neighbor" in joined:
+        return "target_unit_collapsed_into_neighbor"
+    if "abstract_pressure_label" in joined:
+        return "abstract_pressure_label"
+    if "thesis_before_object_sequence" in joined:
+        return "thesis_before_object_sequence"
+    if "scaffold_reduction_with_leakage" in joined:
+        return "scaffold_reduction_with_leakage"
+    if "material_but_scaffolded" in joined:
+        return "material_but_scaffolded"
     if "rival" in joined:
         return "rival_imitation"
     if "generic" in joined or "decorative" in joined or "vividness" in joined:
@@ -3282,6 +3665,10 @@ def _failure_result(
                 "target_unit_materiality_report"
             ),
             "overlap_cluster_report": validation_payload.get("overlap_cluster_report"),
+            "hostile_scaffold_semantic_leakage_report": validation_payload.get(
+                "hostile_scaffold_semantic_leakage_report"
+            ),
+            "unit_collapse_report": validation_payload.get("unit_collapse_report"),
             "residual_intervention_validation_report": residual_validation,
             "validation_failure_categories": failure_categories,
             "hostile_scaffold_generation_feedback": validation_payload.get(

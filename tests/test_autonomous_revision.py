@@ -2720,6 +2720,8 @@ class StubResidualInterventionClient:
             return dump_json(_hostile_packet_0064_like_residual_payload(units))
         if self.mode == "hostile_packet_0065_like":
             return dump_json(_hostile_packet_0065_like_residual_payload(units))
+        if self.mode == "hostile_packet_0066_like":
+            return dump_json(_hostile_packet_0066_like_residual_payload(units))
         if self.mode == "hostile_strong":
             return dump_json(_valid_hostile_residual_intervention_payload(units))
         if self.mode == "protected_context_stable":
@@ -2993,6 +2995,49 @@ def _hostile_packet_0065_like_residual_payload(units):
             "no rival imitation",
         ],
         "uncertainty": "packet 0065-like regression fixture",
+    }
+
+
+def _hostile_packet_0066_like_residual_payload(units):
+    return {
+        "replacement_region_text": (
+            "A room like this teaches by repetition. When a cup is set down and "
+            "lifted again, the wet ring draws tight under the cup's weight, and "
+            "the crumb is pressed into the table's grain; the room has already "
+            "taken the trace before anyone names it. Morning does not wipe that "
+            "away. It keeps the spoon on its side and the saucer cracked, while "
+            "dust settles because hand, foot, and air have crossed and rubbed "
+            "the same surface enough to leave it marked. The crossings stay "
+            "where they were made, and the marks keep their hold.\n\n"
+            "At first, the table only meets the room's use. But ordinary things "
+            "in the small kitchen keep their own pressure: the ring holds the "
+            "glass's trace, dust hangs in the window crack, the spoon lies where "
+            "a hand let it drop, the saucer carries the opened break, and each "
+            "mark changes the next reading after contact. Each thing keeps what "
+            "reached it."
+        ),
+        "target_unit_mappings": _hostile_intervention_mapping(units),
+        "intervention_plan": [
+            "packet 0066 regression shape",
+            "material rewrite still carries semantic scaffold leakage",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "bounded",
+                "risk_note": "semantic scaffold leakage remains",
+            }
+        ],
+        "protected_effects_notes": [
+            "proof/no-answer pressure remains protected",
+            "opening-return and object/tactile field remain protected",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no rival imitation",
+        ],
+        "uncertainty": "packet 0066-like regression fixture",
     }
 
 
@@ -10737,6 +10782,11 @@ def test_hostile_scaffold_prompt_exposes_materiality_feedback_and_strong_stub_pa
     assert '"seems only ordinary" to "is just there"' in model_feedback
     assert "object sequence carry meaning" in model_feedback
     assert "do not rewrite outside the selected region" in model_feedback
+    semantic_feedback = " ".join(feedback["semantic_leakage_feedback"])
+    assert "Do not replace one visible thesis with another" in semantic_feedback
+    assert "colon-led thesis sentences" in semantic_feedback
+    assert "Do not reuse one long object-list sentence" in semantic_feedback
+    assert "abstract pressure as a thesis label is not sufficient" in semantic_feedback
     examples = " ".join(
         item["example"] for item in feedback["failure_shapes_from_packet_0064_regression"]
     )
@@ -10758,6 +10808,123 @@ def test_hostile_scaffold_prompt_exposes_materiality_feedback_and_strong_stub_pa
     assert ordinary["materiality"]["token_edit_distance"] >= 4
     assert ordinary["materiality"]["changed_unique_word_count"] >= 3
     assert ordinary["semantic_passed"] is True
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+def test_hostile_scaffold_packet_0066_like_semantic_leakage_and_collapse_fails(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_hostile_scaffold_residual_candidate_authorization_chain(
+        tmp_path,
+        packet_0064_unit_fixture=True,
+    )
+    authorization_packet = Path(
+        str(chain["residual_generation_authorization"]["packet_dir"])
+    )
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-hostile-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="hostile_packet_0066_like",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_artifact_id"] is None
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+
+    validation = result.payload["residual_intervention_validation_report"]
+    assert validation["passed"] is False
+    categories = result.payload["validation_failure_categories"]
+    assert "target_unit_materiality_failures" not in categories
+    assert "scaffold_leakage_failures" in categories
+    assert "unit_collapse_failures" in categories
+    leakage_text = " ".join(categories["scaffold_leakage_failures"])
+    assert "abstract_pressure_label" in leakage_text
+    assert "thesis_before_object_sequence" in leakage_text
+    assert "colon_introduced_explanation" in leakage_text
+    assert "object_list_used_as_proof_after_explanatory_lead_in" in leakage_text
+    assert "keep their own pressure" in leakage_text
+
+    residual = result.payload["residual_materiality_report"]
+    assert residual["whole_region_guard"]["passed"] is True
+    assert residual["target_bearing_scope"]["passed"] is True
+    unit_report = result.payload["target_unit_materiality_report"]
+    assert all(unit["materiality_passed"] for unit in unit_report["units"])
+    by_unit = {
+        unit["target_unit_id"]: unit
+        for unit in unit_report["units"]
+    }
+    assert by_unit["ordinary_things_strict_without_abstraction"]["classification"] == (
+        "target_unit_collapsed_into_neighbor"
+    )
+    assert by_unit["small_kitchen_rule_plainness_reduction"]["classification"] == (
+        "target_unit_collapsed_into_neighbor"
+    )
+    assert by_unit["ordinary_things_strict_without_abstraction"]["semantic_passed"] is False
+    assert by_unit["small_kitchen_rule_plainness_reduction"]["semantic_passed"] is False
+
+    leakage_report = result.payload[
+        "hostile_scaffold_semantic_leakage_report"
+    ]
+    assert leakage_report["failed"] is True
+    assert set(leakage_report["leakage_classes"]) >= {
+        "abstract_pressure_label",
+        "colon_introduced_explanation",
+        "thesis_before_object_sequence",
+        "object_list_used_as_proof_after_explanatory_lead_in",
+    }
+    assert any(
+        "keep their own pressure" in span
+        for span in leakage_report["likely_offending_spans"]
+    )
+    collapse_report = result.payload["unit_collapse_report"]
+    assert collapse_report["unit_collapse_detected"] is True
+    assert set(collapse_report["collapsed_target_unit_ids"]) >= {
+        "ordinary_things_strict_without_abstraction",
+        "small_kitchen_rule_plainness_reduction",
+    }
+
+    budget = read_payload(authorization_packet / "generation_attempt_budget.json")
+    packet = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+    assert budget["authorization_consumed"] is False
+    assert packet["authorization_consumed"] is False
+
+    retry = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-hostile-model",
+        client_factory=residual_intervention_stub_factory([], mode="hostile_strong"),
+    )
+    assert retry.exit_code == 0
+    assert retry.payload["accepted"] is True
+    assert retry.payload["candidate_generated"] is True
 
     with connect(chain["config"].db_path) as connection:
         final_report = check_finalization(
