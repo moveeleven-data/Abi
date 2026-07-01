@@ -39,6 +39,9 @@ from abi.modules.executed_ablation import (
     run_executed_ablation,
 )
 from abi.modules.autonomous_evidence_synthesis import run_autonomous_evidence_synthesis
+from abi.modules.architecture_evidence_risk_checkpoint import (
+    run_architecture_evidence_risk_checkpoint,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -543,6 +546,21 @@ def build_parser() -> argparse.ArgumentParser:
         choices=SUPERVISED_CYCLE_AUTHORIZATION_DECISIONS,
         help="Supervised decision for the next cycle.",
     )
+    autonomous_architecture_risk_checkpoint_parser = autonomous_subparsers.add_parser(
+        "architecture-risk-checkpoint",
+        help="Create a deterministic architecture/evidence-risk checkpoint",
+    )
+    autonomous_architecture_risk_checkpoint_parser.add_argument(
+        "--authorization-packet",
+        type=Path,
+        required=True,
+        help="Strategy-only supervised cycle authorization packet directory to consume.",
+    )
+    autonomous_architecture_risk_checkpoint_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the current loop state.",
+    )
     autonomous_select_residual_target_parser = autonomous_subparsers.add_parser(
         "select-residual-target",
         help="Record operator selection of a narrow residual target without generation",
@@ -850,6 +868,15 @@ def main(argv: list[str] | None = None) -> int:
             loop_cleanup_packet=args.loop_cleanup_packet,
             operator_reviewed=args.operator_reviewed,
             decision=args.decision,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "architecture-risk-checkpoint"
+    ):
+        return _cmd_autonomous_architecture_risk_checkpoint(
+            config,
+            authorization_packet=args.authorization_packet,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "select-residual-target":
         return _cmd_autonomous_select_residual_target(
@@ -1292,6 +1319,21 @@ def _cmd_autonomous_authorize_next_cycle(
         loop_cleanup_packet=loop_cleanup_packet,
         operator_reviewed=operator_reviewed,
         decision=decision,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_architecture_risk_checkpoint(
+    config: AbiConfig,
+    *,
+    authorization_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code

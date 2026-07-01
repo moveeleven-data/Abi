@@ -34,6 +34,9 @@ AUTONOMOUS_LOOP_INTEGRITY_CLEANUP_ACTIVE_PHASE = "loop_integrity_cleanup_v1"
 AUTONOMOUS_SUPERVISED_CYCLE_AUTHORIZATION_ACTIVE_PHASE = (
     "supervised_cycle_authorization_v1"
 )
+AUTONOMOUS_ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ACTIVE_PHASE = (
+    "architecture_evidence_risk_checkpoint_v1"
+)
 AUTONOMOUS_BOUNDED_MACRO_RECOMPOSITION_ACTIVE_PHASE = "bounded_macro_recomposition_v1"
 AUTONOMOUS_NEXT_TARGET_STRATEGY_ACTIVE_PHASE = "autonomous_next_target_strategy_v1"
 AUTONOMOUS_RESIDUAL_TARGET_SELECTION_ACTIVE_PHASE = "residual_target_selection_v1"

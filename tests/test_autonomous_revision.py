@@ -12,8 +12,12 @@ from abi.artifacts import list_artifacts
 from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
 from abi.controller.policy import GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE
-from abi.controller.state import AUTONOMOUS_CLOSED_LOOP_REVISION_ACTIVE_PHASE, get_latest_run
-from abi.db import connect
+from abi.controller.state import (
+    AUTONOMOUS_CLOSED_LOOP_REVISION_ACTIVE_PHASE,
+    create_run,
+    get_latest_run,
+)
+from abi.db import connect, initialize_database
 from abi.hashing import sha256_text
 from abi.model_calls import MODEL_CALL_SUCCESS, MODEL_CALL_VALIDATION_FAILED, list_model_calls
 from abi.model_driver import WorkerRequest
@@ -82,6 +86,12 @@ from abi.modules.ablation_informed_revision import (
     PIVOT_REPAIR_PRESERVING_BASE_CHOICES,
     RESIDUAL_BLOCKER_CANDIDATES,
     run_ablation_informed_revision,
+)
+from abi.modules.architecture_evidence_risk_checkpoint import (
+    ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ARTIFACT_TYPES,
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID as CHECKPOINT_ENDING_TARGET_ID,
+    HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID as CHECKPOINT_HOSTILE_TARGET_ID,
+    run_architecture_evidence_risk_checkpoint,
 )
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
@@ -1674,6 +1684,338 @@ def rewrite_envelope(path: str | Path, mutator) -> None:
     envelope = json.loads(artifact_path.read_text(encoding="utf-8"))
     mutator(envelope)
     artifact_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+
+def write_test_packet_artifact(
+    packet_dir: Path,
+    *,
+    run_id: str,
+    artifact_type: str,
+    payload: dict[str, object],
+) -> Path:
+    packet_dir.mkdir(parents=True, exist_ok=True)
+    path = packet_dir / f"{artifact_type}.json"
+    envelope = {
+        "schema_version": "1",
+        "artifact_type": artifact_type,
+        "run_id": run_id,
+        "lineage_id": "architecture_checkpoint_test_fixture",
+        "parent_ids": [],
+        "created_by": "test_fixture",
+        "fixture_only": False,
+        "model_call_id": None,
+        "payload": payload,
+    }
+    path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+    return path
+
+
+def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Path, str]:
+    config = config_for(tmp_path)
+    initialize_database(config)
+    with connect(config.db_path) as connection:
+        run = create_run(connection, config, created_at="2026-06-01T00:00:00+00:00")
+    run_id = run.id
+    run_dir = config.run_dir(run_id)
+
+    production_dir = tmp_path / "src" / "abi"
+    production_dir.mkdir(parents=True)
+    (production_dir / "history.py").write_text(
+        "KNOWN_PACKET_CHAIN = ('packet_0063', 'packet_0037')\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (production_dir / "suspicious.py").write_text(
+        "CURRENT_PACKET = 'packet_0070'\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_packet_fixture.py").write_text(
+        "assert 'packet_0063'\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    synthesis_dir = run_dir / "autonomous_evidence_synthesis" / "packet_0037"
+    loop_review_dir = run_dir / "evidence_loop_review" / "packet_0009"
+    cleanup_dir = run_dir / "loop_integrity_cleanup" / "packet_0006"
+    authorization_dir = run_dir / "supervised_cycle_authorization" / "packet_0006"
+    legacy_dir = run_dir / "residual_work_order" / "packet_0012"
+
+    failed_target_status_map = {
+        CHECKPOINT_HOSTILE_TARGET_ID: {
+            "target_id": CHECKPOINT_HOSTILE_TARGET_ID,
+            "target_status": "paused_or_exhausted_pending_strategy_review",
+            "failed_packet_ids": ["packet_0064", "packet_0065"],
+            "failure_classes": ["semantic_leakage", "sentence_polish"],
+            "source_authorization_packet_id": "packet_0004",
+            "source_work_order_packet_id": "packet_0012",
+            "stop_test_triggered": True,
+        },
+        CHECKPOINT_ENDING_TARGET_ID: {
+            "target_id": CHECKPOINT_ENDING_TARGET_ID,
+            "target_status": "paused_or_exhausted_pending_strategy_review",
+            "failed_packet_ids": ["packet_0068", "packet_0069", "packet_0070"],
+            "failure_classes": ["global_relation_drift", "reset_semantics"],
+            "source_authorization_packet_id": "packet_0005",
+            "source_work_order_packet_id": "packet_0013",
+            "stop_test_triggered": True,
+        },
+    }
+    selected_best_candidate = {
+        "packet_id": "packet_0063",
+        "packet_dir": str(run_dir / "bounded_macro_recomposition" / "packet_0063"),
+        "packet_kind": "bounded_macro_recomposition",
+        "proof_packet_id": "packet_0034",
+        "proof_packet_dir": str(run_dir / "executed_ablation" / "packet_0034"),
+        "reader_state_packet_id": "packet_0013",
+        "reader_state_packet_dir": str(
+            run_dir / "internal_reader_state_evaluation" / "packet_0013"
+        ),
+        "reader_state_evaluated": True,
+        "strongest_rival_still_blocks": True,
+        "selected_candidate_is_final": False,
+        "no_phase_shift_claim": True,
+    }
+    synthesis_packet = {
+        "accepted": True,
+        "run_id": run_id,
+        "packet_id": "packet_0037",
+        "packet_dir": str(synthesis_dir),
+        "artifact_ids": {},
+        "best_current_candidate": selected_best_candidate,
+        "best_current_candidate_packet_id": "packet_0063",
+        "proof_packet_id": "packet_0034",
+        "reader_state_packet_id": "packet_0013",
+        "failed_target_status_map": failed_target_status_map,
+        "strategic_decision": "pause_generation_for_strategy_review",
+        "next_recommended_action": "prepare_loop_integrity_cleanup_before_more_generation",
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+    }
+    synthesis_payloads = {
+        "autonomous_evidence_synthesis_packet": synthesis_packet,
+        "best_current_candidate_selection": {
+            "selected_best_candidate": selected_best_candidate,
+            "current_best_candidate_packet_id": "packet_0063",
+            "proof_packet_id": "packet_0034",
+            "reader_state_packet_id": "packet_0013",
+        },
+        "candidate_evidence_graph": {
+            "nodes": [
+                {"packet_id": "packet_0063", "role": "current_best_candidate"},
+                {"packet_id": "packet_0034", "role": "proof_packet"},
+                {"packet_id": "packet_0013", "role": "reader_state_packet"},
+            ]
+        },
+        "failed_or_rejected_repairs": {
+            "failed_target_status_map": failed_target_status_map,
+            "hostile_scaffold_failed_generation_path": {
+                "attempted": True,
+                "target_status": "paused_or_exhausted_pending_strategy_review",
+                "attempt_packet_ids": ["packet_0064", "packet_0065"],
+                "failure_classes": ["semantic_leakage", "sentence_polish"],
+                "source_authorization_packet_id": "packet_0004",
+                "source_work_order_packet_id": "packet_0012",
+                "stop_test_triggered": True,
+            },
+            "ending_return_failed_generation_path": {
+                "attempted": True,
+                "target_status": "paused_or_exhausted_pending_strategy_review",
+                "attempt_packet_ids": ["packet_0068", "packet_0069", "packet_0070"],
+                "failure_classes": ["global_relation_drift", "reset_semantics"],
+                "source_authorization_packet_id": "packet_0005",
+                "source_work_order_packet_id": "packet_0013",
+                "stop_test_triggered": True,
+            },
+        },
+        "reader_state_evidence_adjudication": {
+            "reread_transformation_strength": "partial",
+            "reader_state_packet_id": "packet_0013",
+        },
+        "residual_blocker_map": {
+            "failed_target_status_map": failed_target_status_map,
+            "strongest_rival_still_blocks": True,
+        },
+        "rival_pressure_summary": {
+            "strongest_rival_present": True,
+            "strongest_rival_still_blocks": True,
+        },
+        "strategic_decision_report": {
+            "failed_target_status_map": failed_target_status_map,
+            "next_generation_authorized": False,
+        },
+        "synthesis_gate_report": {
+            "passed": True,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+        },
+    }
+    for artifact_type, payload in synthesis_payloads.items():
+        write_test_packet_artifact(
+            synthesis_dir,
+            run_id=run_id,
+            artifact_type=artifact_type,
+            payload=payload,
+        )
+
+    loop_review_packet = {
+        "accepted": True,
+        "run_id": run_id,
+        "packet_id": "packet_0009",
+        "packet_dir": str(loop_review_dir),
+        "source_synthesis_packet_id": "packet_0037",
+        "source_synthesis_packet_dir": str(synthesis_dir),
+        "artifact_ids": {},
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+    }
+    loop_review_payloads = {
+        "evidence_loop_review_subject_manifest": {
+            "run_id": run_id,
+            "source_synthesis_packet_id": "packet_0037",
+            "source_synthesis_packet_dir": str(synthesis_dir),
+        },
+        "evidence_loop_review_packet": loop_review_packet,
+        "current_best_candidate_review": {
+            "current_best_candidate_packet_id": "packet_0063",
+            "proof_packet_id": "packet_0034",
+            "reader_state_packet_id": "packet_0013",
+        },
+        "reader_state_progress_review": {"reader_state_packet_id": "packet_0013"},
+        "strongest_rival_status_review": {"strongest_rival_still_blocks": True},
+        "residual_blocker_taxonomy": {
+            "failed_target_status_map": failed_target_status_map,
+        },
+        "next_action_decision": {
+            "generation_allowed": False,
+            "next_recommended_action": (
+                "prepare_loop_integrity_cleanup_before_more_generation"
+            ),
+        },
+    }
+    for artifact_type, payload in loop_review_payloads.items():
+        write_test_packet_artifact(
+            loop_review_dir,
+            run_id=run_id,
+            artifact_type=artifact_type,
+            payload=payload,
+        )
+
+    cleanup_packet = {
+        "accepted": True,
+        "run_id": run_id,
+        "packet_id": "packet_0006",
+        "packet_dir": str(cleanup_dir),
+        "source_synthesis_packet_id": "packet_0037",
+        "source_synthesis_packet_dir": str(synthesis_dir),
+        "source_loop_review_packet_id": "packet_0009",
+        "source_loop_review_packet_dir": str(loop_review_dir),
+        "loop_integrity_cleanup_completed": True,
+        "ready_for_supervised_strategy_authorization": True,
+        "ready_for_supervised_candidate_generation": False,
+        "artifact_ids": {},
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+    }
+    cleanup_payloads = {
+        "active_evidence_state_checkpoint": {
+            "run_id": run_id,
+            "source_synthesis_packet_id": "packet_0037",
+            "source_synthesis_packet_dir": str(synthesis_dir),
+            "source_loop_review_packet_id": "packet_0009",
+            "source_loop_review_packet_dir": str(loop_review_dir),
+            "current_best_candidate_packet_id": "packet_0063",
+            "proof_packet_id": "packet_0034",
+            "reader_state_packet_id": "packet_0013",
+        },
+        "generation_lock_report": {
+            "next_strategy_authorized": True,
+            "next_generation_authorized": False,
+            "candidate_generated": False,
+            "model_calls": 0,
+        },
+        "loop_integrity_cleanup_packet": cleanup_packet,
+    }
+    for artifact_type, payload in cleanup_payloads.items():
+        write_test_packet_artifact(
+            cleanup_dir,
+            run_id=run_id,
+            artifact_type=artifact_type,
+            payload=payload,
+        )
+
+    authorization_packet = {
+        "accepted": True,
+        "run_id": run_id,
+        "packet_id": "packet_0006",
+        "packet_dir": str(authorization_dir),
+        "decision": "authorize_next_strategy_only",
+        "source_loop_cleanup_packet_id": "packet_0006",
+        "source_loop_cleanup_packet_dir": str(cleanup_dir),
+        "source_loop_review_packet_id": "packet_0009",
+        "source_loop_review_packet_dir": str(loop_review_dir),
+        "source_synthesis_packet_id": "packet_0037",
+        "source_synthesis_packet_dir": str(synthesis_dir),
+        "current_best_candidate_packet_id": "packet_0063",
+        "proof_packet_id": "packet_0034",
+        "reader_state_packet_id": "packet_0013",
+        "next_strategy_authorized": True,
+        "next_generation_authorized": False,
+        "candidate_generated": False,
+        "model_calls": 0,
+        "artifact_ids": {},
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+    }
+    authorization_payloads = {
+        "supervised_cycle_authorization_subject_manifest": {
+            "run_id": run_id,
+            "source_loop_cleanup_packet_id": "packet_0006",
+            "source_loop_cleanup_packet_dir": str(cleanup_dir),
+            "source_loop_review_packet_id": "packet_0009",
+            "source_loop_review_packet_dir": str(loop_review_dir),
+            "source_synthesis_packet_id": "packet_0037",
+            "source_synthesis_packet_dir": str(synthesis_dir),
+        },
+        "supervised_cycle_authorization_packet": authorization_packet,
+    }
+    for artifact_type, payload in authorization_payloads.items():
+        write_test_packet_artifact(
+            authorization_dir,
+            run_id=run_id,
+            artifact_type=artifact_type,
+            payload=payload,
+        )
+
+    write_test_packet_artifact(
+        legacy_dir,
+        run_id=run_id,
+        artifact_type="object_motion_target_unit_map",
+        payload={
+            "selected_residual_target_id": CHECKPOINT_ENDING_TARGET_ID,
+            "target_adapter_id": "ending_explains_return_risk",
+            "artifact_name_compatibility_reason": (
+                "legacy object_motion filename retained for compatibility"
+            ),
+        },
+    )
+    write_test_packet_artifact(
+        legacy_dir,
+        run_id=run_id,
+        artifact_type="object_motion_causality_diagnostic",
+        payload={
+            "selected_residual_target_id": CHECKPOINT_HOSTILE_TARGET_ID,
+            "target_adapter_id": "hostile_scaffold_visibility",
+            "artifact_name_compatibility_reason": (
+                "legacy object_motion filename retained for compatibility"
+            ),
+        },
+    )
+
+    return config, authorization_dir, run_id
 
 
 def mark_packet_fixture_only(packet_dir: Path) -> None:
@@ -16232,6 +16574,201 @@ def test_loop_integrity_cleanup_accepts_completed_residual_cycle(tmp_path):
 
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
+    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(tmp_path)
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["source_synthesis_packet_id"] == "packet_0037"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0009"
+    assert result.payload["source_cleanup_packet_id"] == "packet_0006"
+    assert result.payload["source_authorization_packet_id"] == "packet_0006"
+    assert result.payload["next_strategy_authorized"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["counts"]["candidate_artifacts_created"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        "review_architecture_evidence_risk_checkpoint_before_next_target_strategy"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert set(result.payload["artifact_paths"]) == set(
+        ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ARTIFACT_TYPES
+    )
+    for artifact_type in ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    chain = read_payload(packet_dir / "active_evidence_chain_summary.json")
+    assert chain["current_best_candidate_packet_id"] == "packet_0063"
+    assert chain["proof_packet_id"] == "packet_0034"
+    assert chain["reader_state_packet_id"] == "packet_0013"
+    assert chain["source_synthesis_packet_id"] == "packet_0037"
+    assert chain["source_loop_review_packet_id"] == "packet_0009"
+    assert chain["source_cleanup_packet_id"] == "packet_0006"
+    assert chain["source_authorization_packet_id"] == "packet_0006"
+    assert chain["next_strategy_authorized"] is True
+    assert chain["next_generation_authorized"] is False
+    assert chain["candidate_generated"] is False
+    assert chain["model_calls"] == 0
+
+    failed_memory = read_payload(packet_dir / "failed_target_memory_report.json")
+    hostile = failed_memory["failed_targets"][CHECKPOINT_HOSTILE_TARGET_ID]
+    ending = failed_memory["failed_targets"][CHECKPOINT_ENDING_TARGET_ID]
+    assert hostile["paused_or_exhausted"] is True
+    assert hostile["generation_retry_recommended"] is False
+    assert hostile["candidate_generation_authorized"] is False
+    assert hostile["failed_packets_are_not_candidate_evidence"] is True
+    assert ending["paused_or_exhausted"] is True
+    assert ending["generation_retry_recommended"] is False
+    assert failed_memory["hostile_scaffold_retry_recommended"] is False
+    assert failed_memory["ending_return_retry_recommended"] is False
+
+    inventory = read_payload(packet_dir / "target_adapter_inventory.json")
+    target_rows = {row["target_id"]: row for row in inventory["targets"]}
+    assert CHECKPOINT_HOSTILE_TARGET_ID in target_rows
+    assert CHECKPOINT_ENDING_TARGET_ID in target_rows
+    assert "object_motion_causality_specificity" in target_rows
+    assert target_rows[CHECKPOINT_HOSTILE_TARGET_ID][
+        "failed_or_paused_in_current_run"
+    ] is True
+    assert target_rows[CHECKPOINT_ENDING_TARGET_ID][
+        "failed_or_paused_in_current_run"
+    ] is True
+    assert all(row["available_for_generation"] is False for row in target_rows.values())
+
+    legacy_audit = read_payload(packet_dir / "legacy_artifact_name_audit.json")
+    assert legacy_audit["passed"] is True
+    assert legacy_audit["warning_count"] == 2
+    assert all(finding["blocking"] is False for finding in legacy_audit["findings"])
+
+    hardcoded_audit = read_payload(packet_dir / "hardcoded_packet_id_audit.json")
+    assert hardcoded_audit["passed"] is True
+    assert hardcoded_audit["suspicious_production_finding_count"] >= 1
+    assert hardcoded_audit["test_fixture_finding_count"] >= 1
+    assert hardcoded_audit["tests_classified_separately"] is True
+    assert {
+        finding["classification"] for finding in hardcoded_audit["production_findings"]
+    } >= {"allowed_history_discovery", "suspicious_run_specific_logic"}
+
+    lock = read_payload(packet_dir / "generation_lock_and_authorization_audit.json")
+    assert lock["source_authorization_packet_id"] == "packet_0006"
+    assert lock["next_strategy_authorized"] is True
+    assert lock["next_generation_authorized"] is False
+    assert lock["candidate_generated"] is False
+    assert lock["model_calls"] == 0
+    assert lock["generation_requires_separate_authorization"] is True
+
+    blockers = read_payload(packet_dir / "unresolved_creative_blocker_summary.json")
+    assert blockers["current_best_candidate_packet_id"] == "packet_0063"
+    assert blockers["current_best_is_final"] is False
+    assert blockers["finalization_eligible"] is False
+    assert "strongest_rival_still_blocks" in {
+        blocker["blocker_id"] for blocker in blockers["blockers"]
+    }
+
+    readiness = read_payload(packet_dir / "next_strategy_readiness_report.json")
+    assert readiness["ready_for_next_target_strategy_review"] is True
+    assert readiness["generation_authorized"] is False
+    assert readiness["candidate_generated"] is False
+    assert readiness["target_selected"] is False
+    assert "do_not_generate" in readiness["recommendations"]
+
+    gate = read_payload(packet_dir / "architecture_risk_gate_report.json")
+    assert gate["passed"] is True
+    assert gate["eligible"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["legacy_artifact_name_warnings"] == 2
+    assert gate["suspicious_hardcoded_packet_id_warnings"] >= 1
+
+    packet = read_payload(packet_dir / "architecture_evidence_risk_checkpoint_packet.json")
+    assert packet["accepted"] is True
+    assert packet["counts"]["artifact_count_consistent"] is True
+    assert packet["counts"]["model_calls"] == 0
+    assert packet["counts"]["candidate_artifacts_created"] == 0
+    assert packet["current_best_candidate_packet_id"] == "packet_0063"
+    assert packet["not_finalization_eligible"] is True
+
+    for artifact_type in ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ARTIFACT_TYPES:
+        envelope = json.loads(
+            (packet_dir / f"{artifact_type}.json").read_text(encoding="utf-8")
+        )
+        assert envelope["artifact_type"] == artifact_type
+        if artifact_type != "active_evidence_chain_summary":
+            assert envelope["parent_ids"]
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        artifacts = list_artifacts(connection, run_id)
+        default_finalization = check_finalization(connection, run_id=run_id)
+        autonomous_finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    checkpoint_artifact_types = {
+        artifact.type
+        for artifact in artifacts
+        if artifact.path.startswith(str(packet_dir))
+    }
+    assert checkpoint_artifact_types == set(
+        ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ARTIFACT_TYPES
+    )
+    assert default_finalization.refused is True
+    assert autonomous_finalization.refused is True
+
+
+def test_architecture_evidence_risk_checkpoint_refuses_without_operator_review(
+    tmp_path,
+):
+    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(tmp_path)
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert not (config.run_dir(run_id) / "architecture_evidence_risk_checkpoint").exists()
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
 
 
 def test_loop_integrity_cleanup_accepts_target_aware_residual_cycle(tmp_path):
