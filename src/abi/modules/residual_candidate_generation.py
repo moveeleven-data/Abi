@@ -49,6 +49,7 @@ from abi.modules.residual_targets import (
     tactile_mapping_failures,
     target_generation_readiness_failures,
     target_adapter_metadata,
+    ending_return_reset_diagnostic,
 )
 from abi.packets import (
     PacketWriter,
@@ -1167,8 +1168,17 @@ def _ending_return_generation_feedback(
             "explaining what the return means",
             "announcing the opening structure as a thesis",
             "resetting the artifact at the ending",
+            "clearing, wiping clean, restarting, making new, or repeating without carry",
+            "phrases that make return sound like erasure rather than pressure carried by objects",
             "summarizing the same object field",
             "claiming finality, phase shift, or strongest-rival defeat",
+        ],
+        "no_reset_language_feedback": [
+            'The word "return" is allowed and expected.',
+            'The phrase "opening is altered" is allowed if object relation carries the alteration.',
+            'Negated reset language such as "nothing resets" is allowed.',
+            "Do not make the scene cleared, wiped clean, restarted, made new, or merely repeated.",
+            "If clearing language appears, it must clearly preserve prior pressure and object-field carry.",
         ],
     }
 
@@ -1748,6 +1758,20 @@ def _collect_residual_intervention_validation(
         failures["protected_context_scope_failures"].append(
             str(protected_context["scope_failure"])
         )
+    ending_return_reset_report: dict[str, object] | None = None
+    if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        ending_return_reset_report = ending_return_reset_diagnostic(
+            replacement_text=replacement,
+            object_field_return_preserved=(
+                not failures.get("object_field_preservation_failures")
+            ),
+            proof_no_answer_carry_preserved=(
+                not failures.get("proof_no_answer_carry_failures")
+            ),
+            opening_return_relation_preserved=(
+                not failures.get("opening_return_relation_failures")
+            ),
+        )
 
     target_specific_mapping_report: dict[str, object] = {
         "selected_residual_target_id": subject.selected_residual_target_id,
@@ -1806,6 +1830,26 @@ def _collect_residual_intervention_validation(
         for failure in bucket
     ]
     passed = not all_failures
+    unit_semantics_passed = all(
+        bool(item.get("semantic_passed")) for item in unit_reports
+    )
+    global_failure_keys = {
+        key: list(value)
+        for key, value in failures.items()
+        if value
+        and key
+        not in {
+            "target_unit_materiality_failures",
+            "overlap_cluster_failures",
+            "whole_region_guard_failures",
+            "target_bearing_materiality_failures",
+        }
+    }
+    global_semantic_failure = bool(global_failure_keys)
+    global_failure_reason = "; ".join(
+        f"{key}: {'; '.join(str(item) for item in value)}"
+        for key, value in global_failure_keys.items()
+    )
     compatibility = _compatibility_materiality_report(
         subject=subject,
         whole=whole,
@@ -1857,6 +1901,12 @@ def _collect_residual_intervention_validation(
                 key: list(value) for key, value in failures.items() if value
             },
             "failures": all_failures,
+            "unit_semantics_passed": unit_semantics_passed,
+            "global_semantic_failure": global_semantic_failure,
+            "global_failure_reason": global_failure_reason,
+            "final_validation_failure_not_captured_by_unit_semantics": (
+                (not passed) and unit_semantics_passed and global_semantic_failure
+            ),
             "controller_final_validation_result": "passed" if passed else "refused",
         },
         "object_motion_relation_count": relation_count,
@@ -1867,6 +1917,7 @@ def _collect_residual_intervention_validation(
         "target_specific_mapping_report": target_specific_mapping_report,
         "hostile_scaffold_semantic_leakage_report": hostile_semantic_leakage_report,
         "unit_collapse_report": unit_collapse_report,
+        "ending_return_reset_diagnostic": ending_return_reset_report,
         "hostile_scaffold_generation_feedback": (
             _hostile_scaffold_generation_feedback(subject)
             if subject.selected_residual_target_id
@@ -2185,6 +2236,7 @@ def _target_unit_materiality_reports(
                 "semantic_failures": semantic["failures"],
                 "classification": _target_unit_classification(
                     selected_residual_target_id=subject.selected_residual_target_id,
+                    target_unit_id=unit.unit_id,
                     materiality_failures=materiality_failures,
                     semantic_failures=semantic["failures"],
                 ),
@@ -2729,11 +2781,18 @@ def _apply_hostile_unit_collapse_classifications(
 def _target_unit_classification(
     *,
     selected_residual_target_id: str,
+    target_unit_id: str,
     materiality_failures: list[str],
     semantic_failures: list[str],
 ) -> str:
     if selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
         return _hostile_target_unit_classification(
+            materiality_failures=materiality_failures,
+            semantic_failures=semantic_failures,
+        )
+    if selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return _ending_return_target_unit_classification(
+            target_unit_id=target_unit_id,
             materiality_failures=materiality_failures,
             semantic_failures=semantic_failures,
         )
@@ -2746,6 +2805,38 @@ def _target_unit_classification(
     if materiality_failures:
         return "valid_direction_but_under_material"
     return "strong_tactile_intervention"
+
+
+def _ending_return_target_unit_classification(
+    *,
+    target_unit_id: str,
+    materiality_failures: list[str],
+    semantic_failures: list[str],
+) -> str:
+    joined = " ".join([*materiality_failures, *semantic_failures]).lower()
+    if "reset" in joined or "clearing" in joined or "restart" in joined:
+        return "material_but_reset_language"
+    if "explains" in joined or "thesis" in joined:
+        return "return_explained_not_enacted"
+    if "summary" in joined or "vague" in joined:
+        return "generic_summary"
+    if "rival" in joined:
+        return "rival_imitation"
+    if "proof" in joined or "answer" in joined or "opening" in joined or "object" in joined:
+        return "protected_reference_damage"
+    if semantic_failures:
+        return "return_explained_not_enacted"
+    if materiality_failures:
+        return "material_but_under_authored"
+    if target_unit_id == "no_reset_return_pressure":
+        return "no_reset_pressure_preserved"
+    if target_unit_id == "same_object_field_returns_without_summary":
+        return "object_field_return_preserved"
+    if target_unit_id == "proof_no_answer_carry_preserved":
+        return "proof_no_answer_carry_preserved"
+    if target_unit_id == "opening_return_relation_without_thesis":
+        return "opening_return_relation_preserved"
+    return "strong_return_enactment"
 
 
 def _hostile_target_unit_classification(
@@ -3862,6 +3953,9 @@ def _failure_result(
                 "hostile_scaffold_semantic_leakage_report"
             ),
             "unit_collapse_report": validation_payload.get("unit_collapse_report"),
+            "ending_return_reset_diagnostic": validation_payload.get(
+                "ending_return_reset_diagnostic"
+            ),
             "residual_intervention_validation_report": residual_validation,
             "validation_failure_categories": failure_categories,
             "hostile_scaffold_generation_feedback": validation_payload.get(

@@ -136,6 +136,7 @@ from abi.modules.residual_targets import (
     TACTILE_GENERATION_CONTRACT_VERSION,
     TACTILE_INEVITABILITY_TARGET_ID,
     TACTILE_WORK_ORDER_CONTRACT_VERSION,
+    ending_return_reset_diagnostic,
     payload_has_placeholder_generation_contract,
     require_residual_target_adapter,
     semantic_preflight_failures_for_work_order,
@@ -2753,6 +2754,12 @@ class StubResidualInterventionClient:
             return dump_json(_hostile_packet_0067_like_residual_payload(units))
         if self.mode == "hostile_strong":
             return dump_json(_valid_hostile_residual_intervention_payload(units))
+        if self.mode == "ending_packet_0068_like":
+            return dump_json(_ending_packet_0068_like_residual_payload(units))
+        if self.mode == "ending_clearing_reset":
+            return dump_json(_ending_clearing_reset_residual_payload(units))
+        if self.mode == "ending_strong":
+            return dump_json(_valid_ending_residual_intervention_payload(units))
         if self.mode == "protected_context_stable":
             prompt = json.loads(request.input_text)
             return dump_json(
@@ -3165,6 +3172,128 @@ def _valid_hostile_residual_intervention_payload(units):
         ],
         "uncertainty": "strong hostile scaffold stub output for tests only",
     }
+
+
+def _ending_intervention_mapping(units):
+    return [
+        {
+            "target_unit_id": str(unit["unit_id"]),
+            "before_text_sha256": str(unit.get("before_text_sha256") or ""),
+            "mechanism_operation": (
+                "make final return happen through object relation and reader encounter"
+            ),
+            "material_relation_or_action": str(
+                unit.get("current_physical_relation")
+                or unit.get("current_motion_action_state")
+                or "same table object field carries return pressure"
+            ),
+            "visible_consequence": (
+                "the returned object field keeps proof/no-answer pressure without solving it"
+            ),
+            "intended_first_read_effect": (
+                "reader feels final return as altered relation before explanation"
+            ),
+            "protected_effects_preserved": [
+                "opening-return relation remains active",
+                "proof/no-answer pressure remains pressure",
+                "object table dust spoon saucer ring field returns",
+            ],
+            "covered_target_ids": [str(unit["unit_id"])],
+        }
+        for unit in units
+    ]
+
+
+def _valid_ending_residual_intervention_payload(units):
+    return {
+        "replacement_region_text": (
+            "Morning returns to the same table, and the table keeps the pressure "
+            "inside its objects: cup ring, crumb in grain, dust along the mark a "
+            "hand and foot left before the room could name it. The opening comes "
+            "back altered by the record on the surface. The spoon leans toward the "
+            "saucer's split; the split keeps the fall present without answer.\n\n"
+            "Nothing resets when light reaches wood again. Table, dust, spoon, "
+            "saucer, ring, and crumb carry proof as pressure, not solution. The "
+            "return is the same place holding a different relation, mark pressing mark."
+        ),
+        "target_unit_mappings": _ending_intervention_mapping(units),
+        "intervention_plan": [
+            "replace only the selected final-return region",
+            "make return happen through the same object field",
+            "preserve proof/no-answer carry without explaining the return",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "bounded replacement region only",
+                "risk_note": "controller owns final assembly",
+            }
+        ],
+        "protected_effects_notes": [
+            "opening-return reread gains preserved",
+            "proof/no-answer pressure preserved as pressure",
+            "object/tactile field with table dust spoon saucer ring preserved",
+            "strongest-rival pressure remains blocking",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no nonselected region edits",
+            "no rival imitation",
+            "no return explanation",
+        ],
+        "uncertainty": "strong ending-return stub output for tests only",
+    }
+
+
+def _ending_packet_0068_like_residual_payload(units):
+    payload = _valid_ending_residual_intervention_payload(units)
+    payload["replacement_region_text"] = (
+        "If it comes, the return passes through the table and the dust, through "
+        "the spoon on its side and the saucer with its crack, and the room takes "
+        "it in without clearing. The ring stays a ring, the dust stays dust; "
+        "the grain holds the morning, the gray under the edge keeps the day "
+        "before, and the opening is altered by what has crossed the table, not "
+        "told over again. Nothing here settles into a reset; the same table "
+        "field remains under pressure, and the return leaves proof asking "
+        "without answering."
+    )
+    payload["intervention_plan"] = [
+        "packet 0068-like ending-return regression shape",
+        "uses negated clearing/reset language that should not fail by itself",
+    ]
+    payload["constraint_mapping"] = [
+        {
+            "constraint_id": "no_reset_or_finality",
+            "how_satisfied": "explicitly rejects reset and preserves carried pressure",
+            "risk_note": "negated reset wording must not be treated as reset semantics",
+        }
+    ]
+    return payload
+
+
+def _ending_clearing_reset_residual_payload(units):
+    payload = _valid_ending_residual_intervention_payload(units)
+    payload["replacement_region_text"] = (
+        "The return clears the table, dust, spoon, saucer, and ring into a reset, "
+        "and the room restarts the pressure as if the earlier marks had been made "
+        "new. The opening comes back as the same table wiped clean, and the proof "
+        "now answers itself instead of remaining a pressure in the objects. The "
+        "return repeats the morning without carry, with the scene restarted and "
+        "the record erased."
+    )
+    payload["intervention_plan"] = [
+        "invalid ending-return reset regression shape",
+        "turns return into clearing, restart, repetition, and answer",
+    ]
+    payload["constraint_mapping"] = [
+        {
+            "constraint_id": "no_reset_or_finality",
+            "how_satisfied": "not satisfied",
+            "risk_note": "contains reset and clearing language",
+        }
+    ]
+    return payload
 
 
 def _protected_context_stable_residual_payload(units, selected_region):
@@ -11271,6 +11400,234 @@ def test_ending_return_residual_candidate_openai_refuses_without_allow_live(
     assert result.payload["counts"]["model_calls"] == 0
     assert result.payload["authorization_consumed"] is False
     assert result.payload["candidate_generated"] is False
+
+
+def test_ending_return_reset_diagnostic_distinguishes_negated_reset_language():
+    valid = (
+        "Morning returns to the same table. The opening is altered by the "
+        "record on the surface, and nothing resets when the dust and ring carry "
+        "proof as pressure."
+    )
+    diagnostic = ending_return_reset_diagnostic(replacement_text=valid)
+    assert diagnostic["failed"] is False
+
+    invalid_examples = [
+        ("The scene is cleared and reset.", "explicit_reset_wording"),
+        ("The table is wiped clean before the return.", "erase_clearing_semantics"),
+        ("The room restarted as if made new.", "explicit_reset_wording"),
+        ("The return leaves everything same as before.", "return_as_repeat_semantics"),
+        ("The proof now answers itself.", "controller_overreach"),
+    ]
+    for text, failure_class in invalid_examples:
+        diagnostic = ending_return_reset_diagnostic(replacement_text=text)
+        assert diagnostic["failed"] is True
+        assert diagnostic["reset_failure_class"] == failure_class
+        assert diagnostic["likely_offending_span"]
+        assert diagnostic["likely_offending_phrase"]
+
+
+def test_ending_return_packet_0068_like_uses_ending_labels_and_valid_no_reset_language(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_ending_return_residual_work_order_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    authorization_packet = Path(str(authorization.payload["packet_dir"]))
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-ending-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="ending_packet_0068_like",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == (
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    )
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["candidate_generated"] is True
+    diff_payload = read_payload(
+        Path(str(result.payload["packet_dir"])) / "macro_recomposition_diff_report.json"
+    )
+    materiality_report = diff_payload["materiality_report"]
+    validation = materiality_report["residual_intervention_validation_report"]
+    assert validation["passed"] is True
+    assert validation["unit_semantics_passed"] is True
+    assert validation["global_semantic_failure"] is False
+    reset_report = materiality_report["ending_return_reset_diagnostic"]
+    assert reset_report["failed"] is False
+
+    unit_report = materiality_report["target_unit_materiality_report"]
+    classifications = {unit["classification"] for unit in unit_report["units"]}
+    assert "strong_tactile_intervention" not in classifications
+    assert all("tactile" not in label for label in classifications)
+    assert classifications <= {
+        "strong_return_enactment",
+        "no_reset_pressure_preserved",
+        "object_field_return_preserved",
+        "proof_no_answer_carry_preserved",
+        "opening_return_relation_preserved",
+    }
+    assert "no_reset_pressure_preserved" in classifications
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+def test_ending_return_clearing_reset_language_fails_with_global_diagnostic(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_ending_return_residual_work_order_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    authorization_packet = Path(str(authorization.payload["packet_dir"]))
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-ending-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="ending_clearing_reset",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+
+    categories = result.payload["validation_failure_categories"]
+    assert "no_reset_return_pressure_failures" in categories
+    failure_text = " ".join(categories["no_reset_return_pressure_failures"])
+    assert "reset_failure_class=explicit_reset_wording" in failure_text
+    assert "likely_offending_span=" in failure_text
+    reset_report = result.payload["ending_return_reset_diagnostic"]
+    assert reset_report["failed"] is True
+    assert reset_report["reset_failure_class"] == "explicit_reset_wording"
+    assert reset_report["likely_offending_span"]
+    assert reset_report["object_field_return_preserved"] is True
+    assert reset_report["opening_return_relation_preserved"] is True
+
+    validation = result.payload["residual_intervention_validation_report"]
+    assert validation["passed"] is False
+    assert validation["unit_semantics_passed"] is True
+    assert validation["global_semantic_failure"] is True
+    assert validation["final_validation_failure_not_captured_by_unit_semantics"] is True
+    assert "no_reset_return_pressure_failures" in validation["global_failure_reason"]
+
+    unit_report = result.payload["target_unit_materiality_report"]
+    classifications = {unit["classification"] for unit in unit_report["units"]}
+    assert "strong_tactile_intervention" not in classifications
+    assert all("tactile" not in label for label in classifications)
+
+    budget = read_payload(authorization_packet / "generation_attempt_budget.json")
+    packet = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+    assert budget["authorization_consumed"] is False
+    assert packet["authorization_consumed"] is False
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
+
+
+def test_ending_return_strong_stub_passes_with_return_and_altered_opening(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_ending_return_residual_work_order_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    authorization_packet = Path(str(authorization.payload["packet_dir"]))
+    clients = []
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        model="stub-ending-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="ending_strong",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["candidate_generated"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+    prompt = json.loads(clients[0].requests[0].input_text)
+    feedback = prompt["ending_return_generation_feedback"]
+    assert 'The word "return" is allowed and expected.' in feedback[
+        "no_reset_language_feedback"
+    ]
+    assert any("opening is altered" in item for item in feedback["no_reset_language_feedback"])
+    assert any("wiped clean" in item for item in feedback["no_reset_language_feedback"])
+
+    diff_payload = read_payload(
+        Path(str(result.payload["packet_dir"])) / "macro_recomposition_diff_report.json"
+    )
+    materiality_report = diff_payload["materiality_report"]
+    validation = materiality_report["residual_intervention_validation_report"]
+    assert validation["passed"] is True
+    assert validation["unit_semantics_passed"] is True
+    assert validation["global_semantic_failure"] is False
+    classifications = {
+        unit["classification"]
+        for unit in materiality_report["target_unit_materiality_report"]["units"]
+    }
+    assert "strong_tactile_intervention" not in classifications
+    assert "strong_return_enactment" in classifications
+    assert "opening_return_relation_preserved" in classifications
 
 
 def test_hostile_scaffold_fake_fixture_generation_validates_semantics_without_model_calls(

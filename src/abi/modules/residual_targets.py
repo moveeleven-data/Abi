@@ -1575,6 +1575,122 @@ def ending_return_mapping_failures(
     return failures
 
 
+ENDING_RETURN_RESET_FAILURE_TYPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "explicit_reset_wording",
+        (
+            "reset",
+            "resets",
+            "restart",
+            "restarts",
+            "restarted",
+            "start over",
+            "starts over",
+            "made new",
+            "made anew",
+        ),
+        "ending turns return into explicit reset or restart wording",
+    ),
+    (
+        "erase_clearing_semantics",
+        (
+            "clear away",
+            "clears away",
+            "cleared away",
+            "clearing away",
+            "cleared",
+            "clears",
+            "wiped clean",
+            "wipe clean",
+            "wipes clean",
+            "wiped away",
+            "wipe away",
+            "wipes away",
+            "erased",
+            "erase",
+            "erases",
+        ),
+        "ending turns return into erasure, clearing, or a clean slate",
+    ),
+    (
+        "return_as_repeat_semantics",
+        (
+            "back where it started",
+            "back to the start",
+            "same as before",
+            "only repeats",
+            "merely repeats",
+            "unchanged again",
+            "begins again unchanged",
+        ),
+        "ending turns return into repetition without carried pressure",
+    ),
+    (
+        "controller_overreach",
+        (
+            "now answers",
+            "finally answers",
+            "proves the answer",
+            "settles the proof",
+            "solves the proof",
+            "solution from outside",
+        ),
+        "ending lets controller-like explanation or answer replace return pressure",
+    ),
+)
+
+
+def ending_return_reset_diagnostic(
+    *,
+    replacement_text: str,
+    object_field_return_preserved: bool | None = None,
+    proof_no_answer_carry_preserved: bool | None = None,
+    opening_return_relation_preserved: bool | None = None,
+) -> dict[str, object]:
+    """Detect reset semantics without penalizing explicit no-reset negation."""
+    normalized = " ".join(replacement_text.split())
+    findings: list[dict[str, object]] = []
+    for failure_class, terms, reason in ENDING_RETURN_RESET_FAILURE_TYPES:
+        for term in terms:
+            span = _sentence_matching_any(normalized, (term,))
+            if not span:
+                continue
+            if _ending_return_term_is_negated(span, term):
+                continue
+            findings.append(
+                {
+                    "reset_failure_class": failure_class,
+                    "likely_offending_span": span,
+                    "likely_offending_phrase": term,
+                    "reason": reason,
+                    "caused_by_explicit_reset_wording": (
+                        failure_class == "explicit_reset_wording"
+                    ),
+                    "caused_by_erase_or_clearing_semantics": (
+                        failure_class == "erase_clearing_semantics"
+                    ),
+                    "caused_by_return_as_repeat_semantics": (
+                        failure_class == "return_as_repeat_semantics"
+                    ),
+                    "caused_by_controller_overreach": (
+                        failure_class == "controller_overreach"
+                    ),
+                }
+            )
+            break
+    first = findings[0] if findings else {}
+    return {
+        "failed": bool(findings),
+        "reset_failure_class": first.get("reset_failure_class"),
+        "likely_offending_span": first.get("likely_offending_span"),
+        "likely_offending_phrase": first.get("likely_offending_phrase"),
+        "diagnostics": findings,
+        "object_field_return_preserved": object_field_return_preserved,
+        "proof_no_answer_carry_preserved": proof_no_answer_carry_preserved,
+        "opening_return_relation_preserved": opening_return_relation_preserved,
+    }
+
+
 def replacement_ending_return_failures(
     *,
     replacement_text: str,
@@ -1620,9 +1736,27 @@ def replacement_ending_return_failures(
         failures["ending_return_explanation_leakage_failures"].append(
             "replacement increases explanatory return language"
         )
-    if "reset" in lower and not _contains_any(lower, ("not a reset", "does not reset", "no reset")):
+    reset_diagnostic = ending_return_reset_diagnostic(
+        replacement_text=replacement,
+        object_field_return_preserved=(
+            len(_terms_present(lower, HOSTILE_OBJECT_FIELD_TERMS)) >= 3
+        ),
+        proof_no_answer_carry_preserved=_contains_any(
+            lower,
+            ("proof", "answer", "no answer", "no-answer", "outside", "asking"),
+        ),
+        opening_return_relation_preserved=_contains_any(
+            lower,
+            ("return", "again", "same table", "morning", "opening", "comes back"),
+        ),
+    )
+    if reset_diagnostic["failed"] is True:
         failures["no_reset_return_pressure_failures"].append(
-            "ending lets return become reset language"
+            "ending lets return become reset language; "
+            f"reset_failure_class={reset_diagnostic['reset_failure_class']}; "
+            f"likely_offending_span={reset_diagnostic['likely_offending_span']!r}; "
+            "materially re-author the return as carried pressure rather than "
+            "clearing, restarting, repeating without carry, or answering the proof"
         )
     if not _contains_any(lower, ("return", "again", "same table", "morning", "opening")):
         failures["opening_return_relation_failures"].append(
@@ -1861,6 +1995,55 @@ def _term_count(text: str, terms: tuple[str, ...]) -> int:
 
 def _terms_present(text: str, terms: tuple[str, ...]) -> list[str]:
     return sorted({term for term in terms if term in text})
+
+
+def _ending_return_term_is_negated(sentence: str, term: str) -> bool:
+    lower = sentence.lower()
+    term_lower = term.lower()
+    protected_phrases = (
+        "not a reset",
+        "not reset",
+        "does not reset",
+        "do not reset",
+        "no reset",
+        "nothing resets",
+        "never resets",
+        "without resetting",
+        "without a reset",
+        "without clearing",
+        "without clearing away",
+        "not clearing",
+        "does not clear",
+        "do not clear",
+        "not cleared",
+        "without erasing",
+        "not erasing",
+        "does not erase",
+        "do not erase",
+        "not erased",
+        "does not wipe",
+        "do not wipe",
+        "not wiped",
+        "not wipe",
+        "without wiping",
+        "does not restart",
+        "do not restart",
+        "not restart",
+        "not restarted",
+        "not made new",
+        "not made anew",
+    )
+    if any(phrase in lower for phrase in protected_phrases):
+        return True
+    index = lower.find(term_lower)
+    if index < 0:
+        return False
+    before = lower[:index]
+    previous_words = re.findall(r"[a-z']+", before)[-5:]
+    return any(
+        word in {"not", "no", "nothing", "never", "without", "resists", "refuses"}
+        for word in previous_words
+    )
 
 
 def _word_count_for_validation(text: str) -> int:
