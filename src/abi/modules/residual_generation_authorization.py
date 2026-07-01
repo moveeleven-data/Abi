@@ -23,6 +23,7 @@ from abi.packets import (
     packet_artifact_count_summary,
     read_json_file,
 )
+from abi.target_artifacts import read_target_diagnostic, read_target_unit_map
 from abi.modules.residual_targets import (
     ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
     ENDING_RETURN_REGION_ID,
@@ -481,7 +482,22 @@ def _load_required_payloads(packet_dir: Path) -> dict[str, dict[str, Any]]:
                 f"artifact: {path.name}."
             )
         payloads[artifact_type] = envelope["payload"]
+    _apply_preferred_target_artifacts(packet_dir, payloads)
     return payloads
+
+
+def _apply_preferred_target_artifacts(
+    packet_dir: Path,
+    payloads: dict[str, dict[str, Any]],
+) -> None:
+    unit_map = read_target_unit_map(packet_dir)
+    diagnostic = read_target_diagnostic(packet_dir)
+    payloads["object_motion_target_unit_map"] = unit_map.payload
+    payloads["target_unit_map"] = unit_map.payload
+    payloads["target_unit_map_loader_metadata"] = unit_map.metadata()
+    payloads["object_motion_causality_diagnostic"] = diagnostic.payload
+    payloads["target_diagnostic"] = diagnostic.payload
+    payloads["target_diagnostic_loader_metadata"] = diagnostic.metadata()
 
 
 def _expected_selected_region_id(target_id: str) -> str:
@@ -687,6 +703,12 @@ def _build_subject_manifest(
         "reader_state_packet_id": subject.reader_state_packet_id,
         "selected_residual_target_id": subject.selected_residual_target_id,
         **target_adapter_metadata(subject.selected_residual_target_id),
+        "target_unit_map_loader_metadata": dict(
+            subject.payloads.get("target_unit_map_loader_metadata", {})
+        ),
+        "target_diagnostic_loader_metadata": dict(
+            subject.payloads.get("target_diagnostic_loader_metadata", {})
+        ),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": list(subject.target_unit_ids),
@@ -716,6 +738,12 @@ def _build_work_order_intake_summary(
         "candidate_text_sha256": subject.candidate_text_sha256,
         "selected_residual_target_id": subject.selected_residual_target_id,
         **target_adapter_metadata(subject.selected_residual_target_id),
+        "target_unit_map_loader_metadata": dict(
+            subject.payloads.get("target_unit_map_loader_metadata", {})
+        ),
+        "target_diagnostic_loader_metadata": dict(
+            subject.payloads.get("target_diagnostic_loader_metadata", {})
+        ),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_ids": list(subject.target_unit_ids),
@@ -1236,6 +1264,12 @@ def _build_packet_summary(
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "selected_residual_target_id": subject.selected_residual_target_id,
         **target_adapter_metadata(subject.selected_residual_target_id),
+        "target_unit_map_loader_metadata": dict(
+            subject.payloads.get("target_unit_map_loader_metadata", {})
+        ),
+        "target_diagnostic_loader_metadata": dict(
+            subject.payloads.get("target_diagnostic_loader_metadata", {})
+        ),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "candidate_text_sha256": subject.candidate_text_sha256,
@@ -1292,6 +1326,12 @@ def _result_payload(
         "current_best_candidate_packet_id": subject.current_best_candidate_packet_id,
         "selected_residual_target_id": subject.selected_residual_target_id,
         **target_adapter_metadata(subject.selected_residual_target_id),
+        "target_unit_map_loader_metadata": dict(
+            subject.payloads.get("target_unit_map_loader_metadata", {})
+        ),
+        "target_diagnostic_loader_metadata": dict(
+            subject.payloads.get("target_diagnostic_loader_metadata", {})
+        ),
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "target_unit_count": subject.target_unit_count,

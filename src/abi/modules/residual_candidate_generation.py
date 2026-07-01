@@ -57,6 +57,7 @@ from abi.packets import (
     packet_artifact_count_summary,
     read_json_file,
 )
+from abi.target_artifacts import read_target_diagnostic, read_target_unit_map
 
 
 RESIDUAL_CANDIDATE_GENERATION_LINEAGE_ID = "residual_candidate_generation_v1"
@@ -791,6 +792,7 @@ def _load_subject(
         REQUIRED_WORK_ORDER_ARTIFACTS,
         "work-order packet",
     )
+    _apply_preferred_target_artifacts(work_order_dir, work_payloads)
     semantic_failures = semantic_preflight_failures_for_work_order(work_payloads)
     if semantic_failures:
         raise ValueError(
@@ -4056,6 +4058,20 @@ def _load_required_payloads(
         envelopes[artifact_type] = envelope
         payloads[artifact_type] = envelope["payload"]
     return envelopes, payloads
+
+
+def _apply_preferred_target_artifacts(
+    packet_dir: Path,
+    payloads: dict[str, dict[str, Any]],
+) -> None:
+    unit_map = read_target_unit_map(packet_dir)
+    diagnostic = read_target_diagnostic(packet_dir)
+    payloads["object_motion_target_unit_map"] = unit_map.payload
+    payloads["target_unit_map"] = unit_map.payload
+    payloads["target_unit_map_loader_metadata"] = unit_map.metadata()
+    payloads["object_motion_causality_diagnostic"] = diagnostic.payload
+    payloads["target_diagnostic"] = diagnostic.payload
+    payloads["target_diagnostic_loader_metadata"] = diagnostic.metadata()
 
 
 def _load_base_candidate_payload(

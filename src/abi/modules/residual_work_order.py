@@ -24,6 +24,13 @@ from abi.packets import (
     packet_artifact_count_summary,
     read_json_file,
 )
+from abi.target_artifacts import (
+    GENERIC_TARGET_DIAGNOSTIC_ARTIFACT,
+    GENERIC_TARGET_UNIT_MAP_ARTIFACT,
+    LEGACY_TARGET_DIAGNOSTIC_ARTIFACT,
+    LEGACY_TARGET_UNIT_MAP_ARTIFACT,
+    read_target_unit_map,
+)
 from abi.modules.residual_targets import (
     ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
     ENDING_RETURN_REGION_ID,
@@ -53,8 +60,10 @@ RESIDUAL_WORK_ORDER_ARTIFACT_TYPES = (
     "residual_target_selection_intake",
     "current_candidate_region_inventory",
     "object_motion_causality_diagnostic",
+    "target_diagnostic",
     "selected_intervention_region",
     "object_motion_target_unit_map",
+    "target_unit_map",
     "target_novelty_distinctness_report",
     "protected_effects_and_forbidden_changes",
     "future_generation_contract",
@@ -203,6 +212,14 @@ def run_residual_work_order_planning(
             payloads["object_motion_causality_diagnostic"],
             parent_ids=[artifacts["current_candidate_region_inventory"].id],
         )
+        payloads["target_diagnostic"] = _build_generic_target_diagnostic(
+            payloads["object_motion_causality_diagnostic"]
+        )
+        artifacts["target_diagnostic"] = writer.write_artifact(
+            "target_diagnostic",
+            payloads["target_diagnostic"],
+            parent_ids=[artifacts["object_motion_causality_diagnostic"].id],
+        )
 
         payloads["selected_intervention_region"] = _build_selected_region(
             subject,
@@ -214,6 +231,7 @@ def run_residual_work_order_planning(
             parent_ids=[
                 artifacts["current_candidate_region_inventory"].id,
                 artifacts["object_motion_causality_diagnostic"].id,
+                artifacts["target_diagnostic"].id,
             ],
         )
 
@@ -226,12 +244,20 @@ def run_residual_work_order_planning(
             payloads["object_motion_target_unit_map"],
             parent_ids=[artifacts["selected_intervention_region"].id],
         )
+        payloads["target_unit_map"] = _build_generic_target_unit_map(
+            payloads["object_motion_target_unit_map"]
+        )
+        artifacts["target_unit_map"] = writer.write_artifact(
+            "target_unit_map",
+            payloads["target_unit_map"],
+            parent_ids=[artifacts["object_motion_target_unit_map"].id],
+        )
 
         payloads["target_novelty_distinctness_report"] = (
             _build_target_novelty_distinctness_report(
                 subject,
                 payloads["selected_intervention_region"],
-                payloads["object_motion_target_unit_map"],
+                payloads["target_unit_map"],
             )
         )
         artifacts["target_novelty_distinctness_report"] = writer.write_artifact(
@@ -240,6 +266,7 @@ def run_residual_work_order_planning(
             parent_ids=[
                 artifacts["selected_intervention_region"].id,
                 artifacts["object_motion_target_unit_map"].id,
+                artifacts["target_unit_map"].id,
             ],
         )
 
@@ -252,6 +279,7 @@ def run_residual_work_order_planning(
             parent_ids=[
                 artifacts["residual_target_selection_intake"].id,
                 artifacts["object_motion_target_unit_map"].id,
+                artifacts["target_unit_map"].id,
                 artifacts["target_novelty_distinctness_report"].id,
             ],
         )
@@ -259,7 +287,7 @@ def run_residual_work_order_planning(
         payloads["future_generation_contract"] = _build_future_generation_contract(
             subject,
             payloads["selected_intervention_region"],
-            payloads["object_motion_target_unit_map"],
+            payloads["target_unit_map"],
         )
         artifacts["future_generation_contract"] = writer.write_artifact(
             "future_generation_contract",
@@ -267,6 +295,7 @@ def run_residual_work_order_planning(
             parent_ids=[
                 artifacts["selected_intervention_region"].id,
                 artifacts["object_motion_target_unit_map"].id,
+                artifacts["target_unit_map"].id,
                 artifacts["target_novelty_distinctness_report"].id,
                 artifacts["protected_effects_and_forbidden_changes"].id,
             ],
@@ -281,6 +310,7 @@ def run_residual_work_order_planning(
             parent_ids=[
                 artifacts["future_generation_contract"].id,
                 artifacts["object_motion_target_unit_map"].id,
+                artifacts["target_unit_map"].id,
                 artifacts["target_novelty_distinctness_report"].id,
             ],
         )
@@ -779,17 +809,19 @@ def _generation_handoff_metadata_failures(
             failures.append(f"{artifact_type} uses placeholder generation metadata")
     packet = payloads.get("residual_work_order_packet", {})
     contract = payloads.get("future_generation_contract", {})
-    unit_map = payloads.get("object_motion_target_unit_map", {})
+    unit_map = payloads.get("target_unit_map") or payloads.get(
+        "object_motion_target_unit_map", {}
+    )
     plan = payloads.get("ablation_and_reader_eval_plan", {})
     for name, payload in (
         ("residual_work_order_packet", packet),
         ("future_generation_contract", contract),
-        ("object_motion_target_unit_map", unit_map),
+        ("target_unit_map", unit_map),
     ):
         if payload.get("future_generation_authorized") is not False:
             failures.append(f"{name} missing future_generation_authorized false")
     if not isinstance(unit_map.get("target_unit_overlap_cluster_report"), dict):
-        failures.append("object_motion_target_unit_map missing overlap cluster report")
+        failures.append("target_unit_map missing overlap cluster report")
     if not isinstance(contract.get("target_unit_overlap_cluster_report"), dict):
         failures.append("future_generation_contract missing overlap cluster report")
     required_controls = {
@@ -1281,6 +1313,76 @@ def _build_diagnostic(
         "no_phase_shift_claim": True,
         "worker": "object_motion_causality_diagnostic_v1_controller",
     }
+
+
+def _build_generic_target_diagnostic(
+    legacy_payload: dict[str, object],
+) -> dict[str, object]:
+    target_adapter_id = legacy_payload.get("target_adapter_id") or _target_adapter_id_for_target(
+        legacy_payload
+    )
+    return {
+        **legacy_payload,
+        "artifact_type": GENERIC_TARGET_DIAGNOSTIC_ARTIFACT,
+        "selected_residual_target_id": legacy_payload.get(
+            "selected_residual_target_id"
+        ),
+        "target_adapter_id": target_adapter_id,
+        "diagnostic_kind": legacy_payload.get("diagnostic_kind")
+        or (
+            f"{target_adapter_id}_diagnostic"
+            if target_adapter_id
+            else "object_motion_causality_diagnostic"
+        ),
+        "source_legacy_artifact_name": LEGACY_TARGET_DIAGNOSTIC_ARTIFACT,
+        "legacy_alias_written": True,
+        "consumer_should_prefer_generic_artifact": True,
+        "no_phase_shift_claim": True,
+        "finalization_eligible": False,
+    }
+
+
+def _build_generic_target_unit_map(
+    legacy_payload: dict[str, object],
+) -> dict[str, object]:
+    target_adapter_id = legacy_payload.get("target_adapter_id") or _target_adapter_id_for_target(
+        legacy_payload
+    )
+    generic: dict[str, object] = {
+        **legacy_payload,
+        "artifact_type": GENERIC_TARGET_UNIT_MAP_ARTIFACT,
+        "selected_residual_target_id": legacy_payload.get(
+            "selected_residual_target_id"
+        ),
+        "target_adapter_id": target_adapter_id,
+        "unit_map_kind": legacy_payload.get("unit_map_kind")
+        or target_adapter_id
+        or "object_motion_causality",
+        "source_legacy_artifact_name": LEGACY_TARGET_UNIT_MAP_ARTIFACT,
+        "legacy_alias_written": True,
+        "consumer_should_prefer_generic_artifact": True,
+        "target_units": list(legacy_payload.get("target_units", []))
+        if isinstance(legacy_payload.get("target_units"), list)
+        else [],
+        "protected_reference_units": list(
+            legacy_payload.get("protected_reference_units", [])
+        )
+        if isinstance(legacy_payload.get("protected_reference_units"), list)
+        else [],
+        "no_phase_shift_claim": True,
+        "finalization_eligible": False,
+    }
+    if "overlap_clusters" in legacy_payload:
+        generic["overlap_clusters"] = legacy_payload["overlap_clusters"]
+    return generic
+
+
+def _target_adapter_id_for_target(payload: dict[str, object]) -> str | None:
+    target_id = payload.get("selected_residual_target_id")
+    if not isinstance(target_id, str) or not target_id:
+        return None
+    adapter_id = target_adapter_metadata(target_id).get("target_adapter_id")
+    return adapter_id if isinstance(adapter_id, str) and adapter_id else None
 
 
 def _build_selected_region(
@@ -2484,13 +2586,13 @@ def _inherited_target_units(subject: ResidualWorkOrderSubject) -> list[dict[str,
             return [unit for unit in payload["target_units"] if isinstance(unit, dict)]
     source_dir = _source_work_order_packet_dir(subject)
     if source_dir is not None:
-        unit_path = source_dir / "object_motion_target_unit_map.json"
-        if unit_path.exists():
-            envelope = read_json_file(unit_path)
-            payload = envelope.get("payload") if isinstance(envelope, dict) else None
-            units = payload.get("target_units") if isinstance(payload, dict) else None
-            if isinstance(units, list):
-                return [unit for unit in units if isinstance(unit, dict)]
+        try:
+            payload = read_target_unit_map(source_dir).payload
+        except (FileNotFoundError, ValueError):
+            payload = {}
+        units = payload.get("target_units")
+        if isinstance(units, list):
+            return [unit for unit in units if isinstance(unit, dict)]
     return []
 
 
@@ -2884,7 +2986,7 @@ def _build_gate_report(
     subject: ResidualWorkOrderSubject,
     payloads: dict[str, dict[str, object]],
 ) -> dict[str, object]:
-    unit_map = payloads["object_motion_target_unit_map"]
+    unit_map = payloads.get("target_unit_map") or payloads["object_motion_target_unit_map"]
     selected_region = payloads["selected_intervention_region"]
     novelty = payloads["target_novelty_distinctness_report"]
     semantic_failures = semantic_preflight_failures_for_work_order(
@@ -2895,6 +2997,7 @@ def _build_gate_report(
             },
             "selected_intervention_region": selected_region,
             "object_motion_target_unit_map": unit_map,
+            "target_unit_map": unit_map,
         }
     )
     region_alignment_failures = [
@@ -3083,7 +3186,7 @@ def _build_packet_summary(
         produced_artifact_types=list(artifacts),
         packet_artifact_type="residual_work_order_packet",
     )
-    unit_map = payloads["object_motion_target_unit_map"]
+    unit_map = payloads.get("target_unit_map") or payloads["object_motion_target_unit_map"]
     selected_region = payloads["selected_intervention_region"]
     novelty = payloads["target_novelty_distinctness_report"]
     return {

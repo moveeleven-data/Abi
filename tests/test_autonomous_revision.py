@@ -177,6 +177,14 @@ from abi.modules.supervised_cycle_authorization import (
     SUPERVISED_CYCLE_AUTHORIZATION_ARTIFACT_TYPES,
     run_supervised_cycle_authorization,
 )
+from abi.target_artifacts import (
+    GENERIC_TARGET_DIAGNOSTIC_ARTIFACT,
+    GENERIC_TARGET_UNIT_MAP_ARTIFACT,
+    LEGACY_TARGET_DIAGNOSTIC_ARTIFACT,
+    LEGACY_TARGET_UNIT_MAP_ARTIFACT,
+    read_target_diagnostic,
+    read_target_unit_map,
+)
 
 
 SOURCE_NOTE = """# Source Note
@@ -213,6 +221,54 @@ def write_sources(root: Path) -> Path:
 
 def read_payload(path: str) -> dict[str, object]:
     return json.loads(Path(path).read_text(encoding="utf-8"))["payload"]
+
+
+def assert_residual_target_aliases(packet_dir: Path, target_id: str) -> None:
+    legacy_unit = read_payload(packet_dir / f"{LEGACY_TARGET_UNIT_MAP_ARTIFACT}.json")
+    generic_unit = read_payload(packet_dir / f"{GENERIC_TARGET_UNIT_MAP_ARTIFACT}.json")
+    legacy_diagnostic = read_payload(
+        packet_dir / f"{LEGACY_TARGET_DIAGNOSTIC_ARTIFACT}.json"
+    )
+    generic_diagnostic = read_payload(
+        packet_dir / f"{GENERIC_TARGET_DIAGNOSTIC_ARTIFACT}.json"
+    )
+
+    assert legacy_unit["selected_residual_target_id"] == target_id
+    assert generic_unit["artifact_type"] == GENERIC_TARGET_UNIT_MAP_ARTIFACT
+    assert generic_unit["selected_residual_target_id"] == target_id
+    assert generic_unit["target_adapter_id"]
+    assert generic_unit["unit_map_kind"]
+    assert generic_unit["source_legacy_artifact_name"] == LEGACY_TARGET_UNIT_MAP_ARTIFACT
+    assert generic_unit["legacy_alias_written"] is True
+    assert generic_unit["consumer_should_prefer_generic_artifact"] is True
+    assert generic_unit["target_units"] == legacy_unit["target_units"]
+    assert "protected_reference_units" in generic_unit
+    assert generic_unit["finalization_eligible"] is False
+    assert generic_unit["no_phase_shift_claim"] is True
+
+    assert legacy_diagnostic["selected_residual_target_id"] == target_id
+    assert generic_diagnostic["artifact_type"] == GENERIC_TARGET_DIAGNOSTIC_ARTIFACT
+    assert generic_diagnostic["selected_residual_target_id"] == target_id
+    assert generic_diagnostic["target_adapter_id"]
+    assert generic_diagnostic["diagnostic_kind"]
+    assert generic_diagnostic["source_legacy_artifact_name"] == (
+        LEGACY_TARGET_DIAGNOSTIC_ARTIFACT
+    )
+    assert generic_diagnostic["legacy_alias_written"] is True
+    assert generic_diagnostic["consumer_should_prefer_generic_artifact"] is True
+    assert generic_diagnostic["finalization_eligible"] is False
+    assert generic_diagnostic["no_phase_shift_claim"] is True
+
+    unit_result = read_target_unit_map(packet_dir)
+    diagnostic_result = read_target_diagnostic(packet_dir)
+    assert unit_result.generic_artifact_used is True
+    assert unit_result.legacy_fallback_used is False
+    assert unit_result.source_artifact_name == GENERIC_TARGET_UNIT_MAP_ARTIFACT
+    assert unit_result.selected_residual_target_id == target_id
+    assert diagnostic_result.generic_artifact_used is True
+    assert diagnostic_result.legacy_fallback_used is False
+    assert diagnostic_result.source_artifact_name == GENERIC_TARGET_DIAGNOSTIC_ARTIFACT
+    assert diagnostic_result.selected_residual_target_id == target_id
 
 
 def candidate_text_from_reader_lab_packet(packet_dir: str | Path) -> str:
@@ -846,6 +902,51 @@ def build_ending_return_residual_work_order_chain(tmp_path: Path):
     return chain
 
 
+def test_target_artifact_loader_prefers_generic_and_falls_back_legacy(tmp_path):
+    chain = build_residual_generation_authorization_ready_chain(tmp_path)
+    packet_dir = Path(str(chain["residual_work_order"]["packet_dir"]))
+
+    def _mark_generic(payload):
+        payload["loader_preference_probe"] = "generic"
+
+    rewrite_payload(packet_dir / "target_unit_map.json", _mark_generic)
+
+    preferred = read_target_unit_map(packet_dir)
+    assert preferred.generic_artifact_used is True
+    assert preferred.legacy_fallback_used is False
+    assert preferred.payload["loader_preference_probe"] == "generic"
+
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=packet_dir,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert authorization.exit_code == 0
+    metadata = authorization.payload["target_unit_map_loader_metadata"]
+    assert metadata["generic_artifact_used"] is True
+    assert metadata["legacy_fallback_used"] is False
+    assert metadata["source_artifact_name"] == GENERIC_TARGET_UNIT_MAP_ARTIFACT
+    assert authorization.payload["candidate_generated"] is False
+    assert authorization.payload["counts"]["model_calls"] == 0
+
+    historical_packet = tmp_path / "historical_legacy_work_order"
+    shutil.copytree(packet_dir, historical_packet)
+    (historical_packet / "target_unit_map.json").unlink()
+    (historical_packet / "target_diagnostic.json").unlink()
+
+    fallback = read_target_unit_map(historical_packet)
+    fallback_diagnostic = read_target_diagnostic(historical_packet)
+    assert fallback.generic_artifact_used is False
+    assert fallback.legacy_fallback_used is True
+    assert fallback.source_artifact_name == LEGACY_TARGET_UNIT_MAP_ARTIFACT
+    assert fallback.selected_residual_target_id == OBJECT_MOTION_CAUSALITY_TARGET_ID
+    assert fallback_diagnostic.generic_artifact_used is False
+    assert fallback_diagnostic.legacy_fallback_used is True
+    assert fallback_diagnostic.source_artifact_name == LEGACY_TARGET_DIAGNOSTIC_ARTIFACT
+
+
 PACKET_0064_SOURCE_REGION_FIXTURE = (
     "A room like this teaches by repetition. When a cup is set down and "
     "lifted again, the ring tightens where the lip meets the wood, and "
@@ -937,7 +1038,7 @@ def _apply_packet_0064_hostile_unit_fixture(work_order_packet: Path) -> None:
     rewrite_payload(work_order_packet / "selected_intervention_region.json", _region)
     rewrite_payload(work_order_packet / "residual_work_order_packet.json", _packet)
     rewrite_payload(work_order_packet / "future_generation_contract.json", _packet)
-    rewrite_payload(work_order_packet / "object_motion_target_unit_map.json", _unit_map)
+    rewrite_target_unit_map_aliases(work_order_packet, _unit_map)
     manifest = read_payload(work_order_packet / "residual_work_order_subject_manifest.json")
     base_packet_dir = Path(str(manifest["current_best_candidate_packet_dir"]))
 
@@ -1677,6 +1778,17 @@ def rewrite_payload(path: str | Path, mutator) -> None:
     envelope = json.loads(artifact_path.read_text(encoding="utf-8"))
     mutator(envelope["payload"])
     artifact_path.write_text(dump_json(envelope), encoding="utf-8", newline="\n")
+
+
+def rewrite_target_unit_map_aliases(packet_dir: str | Path, mutator) -> None:
+    directory = Path(packet_dir)
+    for artifact_type in (
+        LEGACY_TARGET_UNIT_MAP_ARTIFACT,
+        GENERIC_TARGET_UNIT_MAP_ARTIFACT,
+    ):
+        path = directory / f"{artifact_type}.json"
+        if path.exists():
+            rewrite_payload(path, mutator)
 
 
 def rewrite_envelope(path: str | Path, mutator) -> None:
@@ -10244,6 +10356,7 @@ def test_residual_work_order_normalizes_stale_tactile_selection_routing(tmp_path
     )
 
     packet_dir = Path(str(result.payload["packet_dir"]))
+    assert_residual_target_aliases(packet_dir, TACTILE_INEVITABILITY_TARGET_ID)
     unit_map = read_payload(packet_dir / "object_motion_target_unit_map.json")
     assert unit_map["selected_residual_target_id"] == TACTILE_INEVITABILITY_TARGET_ID
     assert unit_map["unit_map_kind"] == "tactile_inevitability"
@@ -10331,6 +10444,7 @@ def test_residual_work_order_accepts_hostile_scaffold_visibility_selection(
     assert result.payload["counts"]["model_calls"] == 0
 
     packet_dir = Path(str(result.payload["packet_dir"]))
+    assert_residual_target_aliases(packet_dir, HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID)
     subject = read_payload(packet_dir / "residual_work_order_subject_manifest.json")
     assert subject["target_adapter_id"] == "hostile_scaffold_visibility"
     assert subject["work_order_contract_version"] == (
@@ -10488,6 +10602,7 @@ def test_residual_work_order_accepts_ending_explains_return_risk_selection(
     assert result.payload["finalization_eligible"] is False
 
     packet_dir = Path(str(result.payload["packet_dir"]))
+    assert_residual_target_aliases(packet_dir, ENDING_EXPLAINS_RETURN_RISK_TARGET_ID)
     subject = read_payload(packet_dir / "residual_work_order_subject_manifest.json")
     assert subject["target_adapter_id"] == "ending_return_risk"
     assert subject["selected_region_id"] == ENDING_RETURN_REGION_ID
@@ -10719,10 +10834,7 @@ def test_hostile_scaffold_work_order_supersedes_out_of_region_target_units(
         payload["target_unit_count"] = len(payload["target_units"])
         payload["material_target_units_all_inside_selected_region"] = False
 
-    rewrite_payload(
-        unsafe_packet_dir / "object_motion_target_unit_map.json",
-        _add_out_of_region_material_unit,
-    )
+    rewrite_target_unit_map_aliases(unsafe_packet_dir, _add_out_of_region_material_unit)
     payloads = {
         artifact_type: read_payload(unsafe_packet_dir / f"{artifact_type}.json")
         for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
@@ -10879,7 +10991,7 @@ def test_tactile_stale_work_order_fails_preflight_and_successor_supersedes(tmp_p
         payload["target_adapter_version"] = "1"
         payload["work_order_contract_version"] = "1"
 
-    rewrite_payload(stale_packet_dir / "object_motion_target_unit_map.json", _stale_unit_two)
+    rewrite_target_unit_map_aliases(stale_packet_dir, _stale_unit_two)
     rewrite_payload(stale_packet_dir / "future_generation_contract.json", _stale_packet)
     rewrite_payload(stale_packet_dir / "residual_work_order_packet.json", _stale_packet)
 
@@ -11080,6 +11192,7 @@ def test_residual_work_order_accepts_object_motion_selection_and_stays_fail_clos
 
     packet_dir = Path(str(result.payload["packet_dir"]))
     assert packet_dir.parent.name == "residual_work_order"
+    assert_residual_target_aliases(packet_dir, OBJECT_MOTION_CAUSALITY_TARGET_ID)
     assert {artifact.type for artifact in result.artifacts} == set(
         RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
     )
@@ -11347,10 +11460,7 @@ def test_residual_generation_authorization_refuses_missing_target_unit_map(
         payload["target_units"] = []
         payload["target_unit_count"] = 0
 
-    rewrite_payload(
-        invalid_packet / "object_motion_target_unit_map.json",
-        _remove_target_units,
-    )
+    rewrite_target_unit_map_aliases(invalid_packet, _remove_target_units)
 
     result = run_residual_generation_authorization(
         chain["config"],
@@ -13970,10 +14080,7 @@ def test_tactile_packet_0062_like_output_remains_rejected_with_unit_diagnostics(
             unit["current_physical_relation"] = spec["current_physical_relation"]
             unit["current_motion_action_state"] = spec["current_physical_relation"]
 
-    rewrite_payload(
-        work_order_packet / "object_motion_target_unit_map.json",
-        _force_packet_0062_unit_shape,
-    )
+    rewrite_target_unit_map_aliases(work_order_packet, _force_packet_0062_unit_shape)
     authorization_packet = Path(
         str(chain["residual_generation_authorization"]["packet_dir"])
     )
@@ -14069,7 +14176,7 @@ def test_tactile_materiality_uses_artifact_derived_objects_not_current_nouns(
             unit["current_physical_relation"] = relation
             unit["current_motion_action_state"] = relation
 
-    rewrite_payload(work_order_packet / "object_motion_target_unit_map.json", _replace_objects)
+    rewrite_target_unit_map_aliases(work_order_packet, _replace_objects)
     clients = []
     monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
 
@@ -14230,7 +14337,7 @@ def test_residual_candidate_generation_derives_object_terms_from_work_order(
             unit["current_consequence"] = consequence
             unit["target_effect"] = target_effect
 
-    rewrite_payload(work_order_packet / "object_motion_target_unit_map.json", _replace_objects)
+    rewrite_target_unit_map_aliases(work_order_packet, _replace_objects)
     clients = []
     monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
 
@@ -14269,7 +14376,7 @@ def test_residual_candidate_generation_missing_object_labels_fail_closed(
     def _remove_objects(payload):
         payload["target_units"][0]["objects"] = []
 
-    rewrite_payload(work_order_packet / "object_motion_target_unit_map.json", _remove_objects)
+    rewrite_target_unit_map_aliases(work_order_packet, _remove_objects)
     clients = []
     monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
 
@@ -16685,6 +16792,62 @@ def test_loop_integrity_cleanup_accepts_completed_residual_cycle(tmp_path):
 
 def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     config, authorization_packet, run_id = build_architecture_checkpoint_fixture(tmp_path)
+    alias_dir = config.run_dir(run_id) / "residual_work_order" / "packet_0014"
+    write_test_packet_artifact(
+        alias_dir,
+        run_id=run_id,
+        artifact_type=LEGACY_TARGET_UNIT_MAP_ARTIFACT,
+        payload={
+            "selected_residual_target_id": CHECKPOINT_ENDING_TARGET_ID,
+            "target_adapter_id": "ending_return_risk",
+            "unit_map_kind": "ending_return_risk",
+            "target_units": [{"unit_id": "final_return_enacts_not_explains"}],
+        },
+    )
+    write_test_packet_artifact(
+        alias_dir,
+        run_id=run_id,
+        artifact_type=GENERIC_TARGET_UNIT_MAP_ARTIFACT,
+        payload={
+            "artifact_type": GENERIC_TARGET_UNIT_MAP_ARTIFACT,
+            "selected_residual_target_id": CHECKPOINT_ENDING_TARGET_ID,
+            "target_adapter_id": "ending_return_risk",
+            "unit_map_kind": "ending_return_risk",
+            "source_legacy_artifact_name": LEGACY_TARGET_UNIT_MAP_ARTIFACT,
+            "legacy_alias_written": True,
+            "consumer_should_prefer_generic_artifact": True,
+            "target_units": [{"unit_id": "final_return_enacts_not_explains"}],
+            "protected_reference_units": [],
+            "no_phase_shift_claim": True,
+            "finalization_eligible": False,
+        },
+    )
+    write_test_packet_artifact(
+        alias_dir,
+        run_id=run_id,
+        artifact_type=LEGACY_TARGET_DIAGNOSTIC_ARTIFACT,
+        payload={
+            "selected_residual_target_id": CHECKPOINT_HOSTILE_TARGET_ID,
+            "target_adapter_id": "hostile_scaffold_visibility",
+            "diagnostic_kind": "hostile_scaffold_visibility_diagnostic",
+        },
+    )
+    write_test_packet_artifact(
+        alias_dir,
+        run_id=run_id,
+        artifact_type=GENERIC_TARGET_DIAGNOSTIC_ARTIFACT,
+        payload={
+            "artifact_type": GENERIC_TARGET_DIAGNOSTIC_ARTIFACT,
+            "selected_residual_target_id": CHECKPOINT_HOSTILE_TARGET_ID,
+            "target_adapter_id": "hostile_scaffold_visibility",
+            "diagnostic_kind": "hostile_scaffold_visibility_diagnostic",
+            "source_legacy_artifact_name": LEGACY_TARGET_DIAGNOSTIC_ARTIFACT,
+            "legacy_alias_written": True,
+            "consumer_should_prefer_generic_artifact": True,
+            "no_phase_shift_claim": True,
+            "finalization_eligible": False,
+        },
+    )
     with connect(config.db_path) as connection:
         before_calls = list_model_calls(connection)
 
@@ -16763,7 +16926,17 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     legacy_audit = read_payload(packet_dir / "legacy_artifact_name_audit.json")
     assert legacy_audit["passed"] is True
     assert legacy_audit["warning_count"] == 2
+    assert legacy_audit["note_count"] == 2
+    assert legacy_audit["legacy_only_count"] == 2
+    assert legacy_audit["generic_alias_present_count"] == 2
+    assert legacy_audit["consumer_prefers_generic_count"] == 2
     assert all(finding["blocking"] is False for finding in legacy_audit["findings"])
+    classifications = {finding["classification"] for finding in legacy_audit["findings"]}
+    assert "legacy_only_no_generic_alias" in classifications
+    assert "generic_alias_present_legacy_retained_for_compatibility" in classifications
+    assert "consumer_prefers_generic" in {
+        finding["consumer_state"] for finding in legacy_audit["findings"]
+    }
 
     hardcoded_audit = read_payload(packet_dir / "hardcoded_packet_id_audit.json")
     assert hardcoded_audit["passed"] is True

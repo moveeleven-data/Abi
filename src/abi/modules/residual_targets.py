@@ -2092,7 +2092,9 @@ def semantic_preflight_failures_for_work_order(payloads: dict[str, dict[str, Any
         failures.append("work order missing target_adapter_version")
     if not work_order_contract_version:
         failures.append("work order missing work_order_contract_version")
-    unit_map = payloads.get("object_motion_target_unit_map", {})
+    unit_map = payloads.get("target_unit_map") or payloads.get(
+        "object_motion_target_unit_map", {}
+    )
     if target_id == TACTILE_INEVITABILITY_TARGET_ID:
         failures.extend(validate_tactile_unit_map(unit_map))
     if target_id in {

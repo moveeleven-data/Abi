@@ -29,6 +29,12 @@ from abi.packets import (
     packet_artifact_count_summary,
     read_json_file,
 )
+from abi.target_artifacts import (
+    GENERIC_TARGET_DIAGNOSTIC_ARTIFACT,
+    GENERIC_TARGET_UNIT_MAP_ARTIFACT,
+    LEGACY_TARGET_DIAGNOSTIC_ARTIFACT,
+    LEGACY_TARGET_UNIT_MAP_ARTIFACT,
+)
 
 
 ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_LINEAGE_ID = (
@@ -651,10 +657,15 @@ def _build_legacy_artifact_name_audit(
 ) -> dict[str, object]:
     findings = []
     run_dir = config.run_dir(subject.run_id)
-    for file_name in (
-        "object_motion_target_unit_map.json",
-        "object_motion_causality_diagnostic.json",
-    ):
+    legacy_to_generic = {
+        f"{LEGACY_TARGET_UNIT_MAP_ARTIFACT}.json": (
+            f"{GENERIC_TARGET_UNIT_MAP_ARTIFACT}.json"
+        ),
+        f"{LEGACY_TARGET_DIAGNOSTIC_ARTIFACT}.json": (
+            f"{GENERIC_TARGET_DIAGNOSTIC_ARTIFACT}.json"
+        ),
+    }
+    for file_name, generic_file_name in legacy_to_generic.items():
         for path in sorted(run_dir.glob(f"**/{file_name}")):
             payload = _read_optional_payload(path)
             target_id = _first_string(
@@ -666,35 +677,91 @@ def _build_legacy_artifact_name_audit(
                 continue
             if not target_id:
                 continue
+            generic_path = path.with_name(generic_file_name)
+            generic_payload = _read_optional_payload(generic_path)
+            generic_present = bool(generic_payload)
+            blocking = (
+                payload.get("blocking_legacy_semantic_dependency") is True
+                or generic_payload.get("blocking_legacy_semantic_dependency") is True
+            )
+            classification = (
+                "blocking_legacy_semantic_dependency"
+                if blocking
+                else "generic_alias_present_legacy_retained_for_compatibility"
+                if generic_present
+                else "legacy_only_no_generic_alias"
+            )
+            consumer_state = (
+                "blocking_legacy_semantic_dependency"
+                if blocking
+                else "consumer_prefers_generic"
+                if generic_present
+                else "legacy_fallback_required"
+            )
+            severity = "blocking" if blocking else "note" if generic_present else "warning"
             findings.append(
                 {
                     "path": str(path),
                     "file_name": file_name,
+                    "generic_alias_path": str(generic_path) if generic_present else None,
+                    "generic_alias_file_name": generic_file_name,
                     "payload_target_id": target_id,
                     "payload_target_adapter_id": payload.get("target_adapter_id"),
-                    "severity": "warning",
+                    "classification": classification,
+                    "consumer_state": consumer_state,
+                    "severity": severity,
                     "compatibility_reason": _first_string(
+                        generic_payload.get("source_legacy_artifact_name"),
                         payload.get("artifact_name_compatibility_reason"),
                         payload.get("legacy_artifact_name"),
                         "legacy object-motion artifact filename retained for compatibility",
                     ),
                     "downstream_risk": (
-                        "operator or future automation may misread target-specific "
-                        "artifacts as object-motion only"
+                        "legacy fallback only; operator or future automation may "
+                        "misread target-specific artifacts as object-motion only"
+                        if not generic_present
+                        else "generic alias is available; legacy file retained for historical compatibility"
                     ),
                     "recommendation": (
-                        "migrate to generic target_unit_map/target_diagnostic "
-                        "aliases after the current cycle"
+                        "consumers should prefer generic target_unit_map/target_diagnostic aliases"
+                        if generic_present
+                        else "write generic target_unit_map/target_diagnostic aliases in new packets"
                     ),
-                    "blocking": False,
+                    "blocking": blocking,
                 }
             )
+    warning_count = len([finding for finding in findings if finding["severity"] == "warning"])
+    note_count = len([finding for finding in findings if finding["severity"] == "note"])
+    blocking_count = len([finding for finding in findings if finding["blocking"]])
     return {
         "findings": findings,
         "finding_count": len(findings),
-        "warning_count": len(findings),
-        "blocking_count": 0,
-        "passed": True,
+        "warning_count": warning_count,
+        "note_count": note_count,
+        "generic_alias_present_count": len(
+            [
+                finding
+                for finding in findings
+                if finding["classification"]
+                == "generic_alias_present_legacy_retained_for_compatibility"
+            ]
+        ),
+        "legacy_only_count": len(
+            [
+                finding
+                for finding in findings
+                if finding["classification"] == "legacy_only_no_generic_alias"
+            ]
+        ),
+        "consumer_prefers_generic_count": len(
+            [
+                finding
+                for finding in findings
+                if finding["consumer_state"] == "consumer_prefers_generic"
+            ]
+        ),
+        "blocking_count": blocking_count,
+        "passed": blocking_count == 0,
         "recommendation": (
             "Track as compatibility debt; do not block this checkpoint unless "
             "a downstream command relies on the legacy name semantically."
