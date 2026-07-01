@@ -304,6 +304,19 @@ def _load_subject(
         raise ValueError(
             "Residual target selection refused; strategy packet has no residual options."
         )
+    failed_status = _failed_target_status_for_selection(
+        config,
+        strategy_packet_dir,
+        payloads,
+        run_id=run_id,
+        target=target,
+    )
+    if failed_status:
+        raise ValueError(
+            "Residual target selection refused; "
+            f"{target} is paused/exhausted by failed-target adjudication "
+            "or the strategy packet is stale relative to that adjudication."
+        )
     selected_option = _find_option(options, target)
     if selected_option is None:
         raise ValueError(
@@ -399,6 +412,140 @@ def _strategy_marked_stale_by_latest_cleanup(
                 return True
         return False
     return False
+
+
+def _failed_target_status_for_selection(
+    config: AbiConfig,
+    strategy_packet_dir: Path,
+    payloads: dict[str, dict[str, Any]],
+    *,
+    run_id: str,
+    target: str,
+) -> dict[str, Any]:
+    if target != HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return {}
+    residual_map = payloads["residual_target_option_map"]
+    status_map = residual_map.get("failed_target_status_map")
+    if isinstance(status_map, dict):
+        status = _as_dict(status_map.get(target))
+        if _is_failed_target_unavailable(status):
+            return status
+
+    synthesis_dir = _source_synthesis_dir_for_strategy(
+        config,
+        strategy_packet_dir,
+        payloads,
+        run_id=run_id,
+    )
+    if synthesis_dir is None:
+        return {}
+    return _hostile_failed_status_from_synthesis_dir(synthesis_dir)
+
+
+def _source_synthesis_dir_for_strategy(
+    config: AbiConfig,
+    strategy_packet_dir: Path,
+    payloads: dict[str, dict[str, Any]],
+    *,
+    run_id: str,
+) -> Path | None:
+    packet = payloads["next_target_strategy_packet"]
+    manifest = payloads["next_target_strategy_subject_manifest"]
+    source_dir = _first_string(
+        packet.get("source_synthesis_packet_dir"),
+        manifest.get("source_synthesis_packet_dir"),
+    )
+    if source_dir:
+        return _resolve_path(config, source_dir)
+    source_id = _first_string(
+        packet.get("source_synthesis_packet_id"),
+        manifest.get("source_synthesis_packet_id"),
+    )
+    if source_id:
+        return config.run_dir(run_id) / "autonomous_evidence_synthesis" / source_id
+    return strategy_packet_dir.parent.parent / "autonomous_evidence_synthesis"
+
+
+def _hostile_failed_status_from_synthesis_dir(synthesis_dir: Path) -> dict[str, Any]:
+    for artifact_type in (
+        "failed_or_rejected_repairs",
+        "residual_blocker_map",
+        "strategic_decision_report",
+        "autonomous_evidence_synthesis_packet",
+    ):
+        path = synthesis_dir / f"{artifact_type}.json"
+        if not path.exists():
+            continue
+        envelope = read_json_file(path)
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        status = _extract_hostile_failed_status(payload)
+        if _is_failed_target_unavailable(status):
+            return status
+    return {}
+
+
+def _extract_hostile_failed_status(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = _as_dict(payload.get("hostile_scaffold_failed_generation_path"))
+    target_id = _first_string(
+        summary.get("target_id"),
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+        if summary.get("attempted") is True
+        else "",
+    )
+    status = _first_string(
+        summary.get("target_status"),
+        payload.get("hostile_scaffold_visibility_target_status"),
+    )
+    if target_id != HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID and not status:
+        return {}
+    return {
+        "target_id": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        "target_status": status,
+        "failed_attempt_count": summary.get(
+            "failed_attempt_count",
+            payload.get("hostile_scaffold_failed_attempt_count"),
+        ),
+        "failed_packet_ids": summary.get("attempt_packet_ids", []),
+        "stop_test_triggered": bool(
+            summary.get("stop_test_triggered")
+            or payload.get("hostile_scaffold_stop_test_triggered")
+        ),
+        "no_accepted_hostile_scaffold_candidate_exists": summary.get(
+            "no_accepted_hostile_scaffold_candidate_exists"
+        ),
+        "next_allowed_status": summary.get("next_allowed_status"),
+        "generation_retry_recommended": summary.get("generation_retry_recommended"),
+    }
+
+
+def _is_failed_target_unavailable(status: dict[str, Any]) -> bool:
+    if not status:
+        return False
+    target_status = str(status.get("target_status") or "")
+    unavailable_markers = (
+        "paused",
+        "exhausted",
+        "failed_stop_test",
+        "unavailable_due_to_failed_generation_path",
+    )
+    failed_packet_ids = status.get("failed_packet_ids")
+    has_failed_packets = isinstance(failed_packet_ids, list) and bool(failed_packet_ids)
+    has_failed_attempts = _int_or_zero(status.get("failed_attempt_count")) > 0
+    marker_present = any(marker in target_status for marker in unavailable_markers)
+    if (
+        not has_failed_packets
+        and not has_failed_attempts
+        and status.get("stop_test_triggered") is not True
+        and not marker_present
+    ):
+        return False
+    return (
+        marker_present
+        or status.get("stop_test_triggered") is True
+        or status.get("no_accepted_hostile_scaffold_candidate_exists") is True
+    )
 
 
 def _build_subject_manifest(
@@ -1082,6 +1229,25 @@ def _unique(values: list[str | None]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _first_string(*values: object) -> str:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _as_dict(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _int_or_zero(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
 
 
 def _resolve_path(config: AbiConfig, path: Path | str) -> Path:

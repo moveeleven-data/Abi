@@ -11409,6 +11409,139 @@ def test_autonomous_evidence_synthesis_pauses_failed_hostile_scaffold_path(
     assert packet["finalization_eligible"] is False
     assert packet["no_phase_shift_claim"] is True
 
+    loop_review = run_evidence_loop_review(
+        chain["config"],
+        synthesis_packet=packet_dir,
+    )
+    assert loop_review.exit_code == 0
+    cleanup = run_loop_integrity_cleanup(
+        chain["config"],
+        loop_review_packet=Path(str(loop_review.payload["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert cleanup.exit_code == 0
+    authorization = run_supervised_cycle_authorization(
+        chain["config"],
+        loop_cleanup_packet=Path(str(cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+    assert authorization.exit_code == 0
+
+    strategy = run_next_target_strategy(
+        chain["config"],
+        authorization_packet=Path(str(authorization.payload["packet_dir"])),
+    )
+    assert strategy.exit_code == 0
+    assert strategy.payload["accepted"] is True
+    assert strategy.payload["source_synthesis_packet_id"] == synthesis.payload["packet_id"]
+    assert strategy.payload["source_loop_review_packet_id"] == loop_review.payload[
+        "packet_id"
+    ]
+    assert strategy.payload["source_loop_cleanup_packet_id"] == cleanup.payload[
+        "packet_id"
+    ]
+    assert strategy.payload["source_authorization_packet_id"] == authorization.payload[
+        "packet_id"
+    ]
+    assert strategy.payload["current_best_candidate_packet_id"] == summary[
+        "base_candidate_packet_id"
+    ]
+    assert strategy.payload["proof_packet_id"] == selected["proof_packet_id"]
+    assert strategy.payload["reader_state_packet_id"] == selected[
+        "reader_state_packet_id"
+    ]
+    assert strategy.payload["candidate_generated"] is False
+    assert strategy.payload["model_calls"] == 0
+    assert strategy.payload["counts"]["model_calls"] == 0
+    assert HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID in strategy.payload[
+        "exhausted_or_attempted_target_ids"
+    ]
+    failed_status = strategy.payload["failed_target_status_map"][
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    ]
+    assert failed_status["target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert failed_status["failed_attempt_count"] == 4
+    assert set(failed_status["failed_packet_ids"]) == failed_packet_ids
+    assert failed_status["stop_test_triggered"] is True
+    assert failed_status["generation_retry_recommended"] is False
+    assert failed_status["next_allowed_status"] == "strategy_review_only"
+
+    strategy_dir = Path(str(strategy.payload["packet_dir"]))
+    residual_map = read_payload(strategy_dir / "residual_target_option_map.json")
+    hostile_option = [
+        option
+        for option in residual_map["specific_residual_options"]
+        if option["option_id"] == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    ][0]
+    assert hostile_option["status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert hostile_option["available_for_operator_selection"] is False
+    assert hostile_option["candidate_generation_authorized"] is False
+    assert hostile_option["broad_reuse_authorized"] is False
+    assert hostile_option["generation_retry_recommended"] is False
+    assert set(hostile_option["failed_packet_ids"]) == failed_packet_ids
+    assert HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID not in residual_map[
+        "available_option_ids"
+    ]
+    for option_id in (
+        "rival_level_first_read_vividness",
+        "proof_no_answer_residue",
+        "ending_explains_return_risk",
+        "local_busyness_decorative_detail_risk",
+    ):
+        assert option_id in residual_map["available_option_ids"]
+
+    strategy_packet = read_payload(strategy_dir / "next_target_strategy_packet.json")
+    assert strategy_packet["failed_target_status_map"][
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+    ]["failed_packets_are_not_candidate_evidence"] is True
+    assert strategy_packet["available_residual_target_ids"] == residual_map[
+        "available_option_ids"
+    ]
+
+    stale_strategy = tmp_path / "packet_0009_like_stale_hostile_strategy"
+    shutil.copytree(strategy_dir, stale_strategy)
+
+    def _make_hostile_look_available(payload):
+        payload.pop("failed_target_status_map", None)
+        payload["available_option_ids"] = list(payload.get("available_option_ids", []))
+        if HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID not in payload["available_option_ids"]:
+            payload["available_option_ids"].append(HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID)
+        for option in payload["specific_residual_options"]:
+            if option["option_id"] == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+                option["status"] = "available_for_operator_selection"
+                option["available_for_operator_selection"] = True
+                option["broad_reuse_authorized"] = None
+                option["operator_may_select_narrower_subtarget"] = False
+                option.pop("failed_packet_ids", None)
+                option.pop("failed_attempt_count", None)
+                option.pop("failure_classes", None)
+
+    rewrite_payload(
+        stale_strategy / "residual_target_option_map.json",
+        _make_hostile_look_available,
+    )
+    rewrite_payload(
+        stale_strategy / "next_target_strategy_packet.json",
+        lambda payload: payload.pop("failed_target_status_map", None),
+    )
+
+    stale_selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=stale_strategy,
+        target=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert stale_selection.exit_code == 1
+    assert stale_selection.payload["accepted"] is False
+    assert "paused/exhausted" in stale_selection.payload["message"]
+    assert stale_selection.payload["candidate_generated"] is False
+    assert stale_selection.payload["counts"]["model_calls"] == 0
+
     budget = read_payload(authorization_packet / "generation_attempt_budget.json")
     auth_packet = read_payload(
         authorization_packet / "residual_generation_authorization_packet.json"

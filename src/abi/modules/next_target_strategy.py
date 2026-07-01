@@ -50,6 +50,7 @@ REQUIRED_SYNTHESIS_FILES = (
     "reader_state_evidence_adjudication",
     "reader_state_tension_report",
     "residual_blocker_map",
+    "failed_or_rejected_repairs",
     "rival_pressure_summary",
     "local_law_case_notes",
     "strategic_decision_report",
@@ -93,6 +94,9 @@ ATTEMPTED_BROAD_TARGET_IDS = (
 )
 SAFE_RESIDUAL_CHOICE_TARGET_ID = "next_residual_target_requires_operator_choice"
 SAFE_RESIDUAL_CHOICE_ACTION = "review_narrow_residual_target_options_before_generation"
+HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
+HOSTILE_SCAFFOLD_PAUSED_STATUS = "paused_or_exhausted_pending_strategy_review"
+FAILED_TARGET_NEXT_ALLOWED_STATUS = "strategy_review_only"
 
 RESIDUAL_TARGET_OPTIONS = (
     (
@@ -162,6 +166,7 @@ class StrategySubject:
     next_generation_authorized: bool
     repeated_target_report: dict[str, Any]
     exhausted_or_attempted_target_ids: tuple[str, ...]
+    failed_target_status_map: dict[str, dict[str, Any]]
     payloads: dict[str, dict[str, Any]]
     selected_candidate: dict[str, Any]
     reader_state: dict[str, Any]
@@ -467,6 +472,10 @@ def run_next_target_strategy(
         "exhausted_or_attempted_target_ids": list(
             subject.exhausted_or_attempted_target_ids
         ),
+        "failed_target_status_map": subject.failed_target_status_map,
+        "available_residual_target_ids": payloads["residual_target_option_map"].get(
+            "available_option_ids", []
+        ),
         "residual_target_option_map": payloads["residual_target_option_map"],
         "same_broad_target_allowed": subject.repeated_target_report[
             "same_broad_target_allowed"
@@ -521,6 +530,13 @@ def _load_synthesis_subject(config: AbiConfig, synthesis_packet_dir: Path) -> St
             *source_artifact_ids,
         ]
     )
+    failed_target_status_map = _failed_target_status_map_from_payloads(payloads)
+    attempted_target_ids = _attempted_target_ids(
+        selected_candidate=selected,
+        cleanup_payloads={},
+        loop_review_payloads={},
+        failed_target_status_map=failed_target_status_map,
+    )
     return StrategySubject(
         run_id=run_id,
         input_mode="synthesis",
@@ -554,19 +570,10 @@ def _load_synthesis_subject(config: AbiConfig, synthesis_packet_dir: Path) -> St
             selected_candidate=selected,
             loop_review_payloads={},
             authorization_packet_id=None,
-            exhausted_or_attempted_target_ids=_attempted_target_ids(
-                selected_candidate=selected,
-                cleanup_payloads={},
-                loop_review_payloads={},
-            ),
+            exhausted_or_attempted_target_ids=attempted_target_ids,
         ),
-        exhausted_or_attempted_target_ids=tuple(
-            _attempted_target_ids(
-                selected_candidate=selected,
-                cleanup_payloads={},
-                loop_review_payloads={},
-            )
-        ),
+        exhausted_or_attempted_target_ids=tuple(attempted_target_ids),
+        failed_target_status_map=failed_target_status_map,
         payloads=payloads,
         selected_candidate=selected,
         reader_state=reader_state,
@@ -739,6 +746,7 @@ def _load_authorized_subject(
         selected_candidate=subject.selected_candidate,
         cleanup_payloads=loop_cleanup_payloads,
         loop_review_payloads=loop_review_payloads,
+        failed_target_status_map=subject.failed_target_status_map,
     )
     repeated_target_report = _build_repeated_target_report(
         selected_candidate=subject.selected_candidate,
@@ -786,6 +794,7 @@ def _load_authorized_subject(
         next_generation_authorized=False,
         repeated_target_report=repeated_target_report,
         exhausted_or_attempted_target_ids=tuple(attempted_target_ids),
+        failed_target_status_map=subject.failed_target_status_map,
         payloads=subject.payloads,
         selected_candidate=subject.selected_candidate,
         reader_state=subject.reader_state,
@@ -1050,6 +1059,7 @@ def _attempted_target_ids(
     selected_candidate: dict[str, Any],
     cleanup_payloads: dict[str, dict[str, Any]],
     loop_review_payloads: dict[str, dict[str, Any]],
+    failed_target_status_map: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
     attempted: list[str] = [*ATTEMPTED_BROAD_TARGET_IDS] if cleanup_payloads else []
     current_target = _first_string(
@@ -1080,7 +1090,223 @@ def _attempted_target_ids(
     )
     if repeated_target:
         attempted.append(repeated_target)
+    if failed_target_status_map:
+        attempted.extend(failed_target_status_map)
     return _unique(attempted)
+
+
+def _failed_target_status_map_from_payloads(
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    packet = payloads.get("autonomous_evidence_synthesis_packet", {})
+    residual_blockers = payloads.get("residual_blocker_map", {})
+    strategic_decision = payloads.get("strategic_decision_report", {})
+    failed_repairs = payloads.get("failed_or_rejected_repairs", {})
+    candidates = (
+        _as_dict(failed_repairs.get("hostile_scaffold_failed_generation_path")),
+        _as_dict(residual_blockers.get("hostile_scaffold_failed_generation_path")),
+        _as_dict(strategic_decision.get("hostile_scaffold_failed_generation_path")),
+        _as_dict(packet.get("hostile_scaffold_failed_generation_path")),
+    )
+    for candidate in candidates:
+        status = _normalize_failed_target_status(
+            candidate,
+            packet=packet,
+            residual_blockers=residual_blockers,
+            strategic_decision=strategic_decision,
+        )
+        if status:
+            return {HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID: status}
+
+    status_value = _first_string(
+        packet.get("hostile_scaffold_visibility_target_status"),
+        residual_blockers.get("hostile_scaffold_visibility_target_status"),
+    )
+    if not status_value:
+        return {}
+    failed_attempt_count = _int_or_zero(
+        packet.get("hostile_scaffold_failed_attempt_count")
+    )
+    stop_test_triggered = bool(
+        residual_blockers.get("hostile_scaffold_stop_test_triggered")
+    )
+    if (
+        failed_attempt_count == 0
+        and stop_test_triggered is False
+        and not _failed_target_status_marker(status_value)
+    ):
+        return {}
+    return {
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID: {
+            "target_id": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+            "target_status": status_value,
+            "attempted": True,
+            "failed_attempt_count": failed_attempt_count,
+            "failed_packet_ids": [],
+            "attempt_packet_ids": [],
+            "failure_classes": [],
+            "failure_classes_by_attempt": {},
+            "stop_test_triggered": stop_test_triggered,
+            "next_recommended_action": _first_string(
+                packet.get("hostile_scaffold_next_recommended_action"),
+                residual_blockers.get("hostile_scaffold_next_recommended_action"),
+                strategic_decision.get("next_recommended_action"),
+            )
+            or "strategy_review_only",
+            "next_allowed_status": FAILED_TARGET_NEXT_ALLOWED_STATUS,
+            "generation_retry_recommended": False,
+            "available_for_operator_selection": False,
+            "candidate_generation_authorized": False,
+            "broad_reuse_authorized": False,
+            "failed_packets_are_not_candidate_evidence": True,
+            "source_synthesis_packet_id": packet.get("packet_id"),
+            "strategic_decision": _first_string(
+                packet.get("strategic_decision"),
+                strategic_decision.get("recommendation"),
+            ),
+        }
+    }
+
+
+def _normalize_failed_target_status(
+    summary: dict[str, Any],
+    *,
+    packet: dict[str, Any],
+    residual_blockers: dict[str, Any],
+    strategic_decision: dict[str, Any],
+) -> dict[str, Any]:
+    target_id = _first_string(
+        summary.get("target_id"),
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+        if summary.get("attempted") is True
+        else "",
+    )
+    if target_id != HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        return {}
+    status = _first_string(
+        summary.get("target_status"),
+        packet.get("hostile_scaffold_visibility_target_status"),
+        residual_blockers.get("hostile_scaffold_visibility_target_status"),
+        HOSTILE_SCAFFOLD_PAUSED_STATUS
+        if summary.get("stop_test_triggered") is True
+        else "",
+    )
+    failed_packet_ids = _string_list(summary.get("attempt_packet_ids"))
+    attempts = summary.get("attempts")
+    if isinstance(attempts, list):
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            packet_id = attempt.get("packet_id")
+            if isinstance(packet_id, str) and packet_id:
+                failed_packet_ids.append(packet_id)
+    failed_packet_ids = _unique(failed_packet_ids)
+    failed_attempt_count = _int_or_zero(summary.get("failed_attempt_count")) or len(
+        failed_packet_ids
+    )
+    if (
+        summary.get("attempted") is not True
+        and failed_attempt_count == 0
+        and not failed_packet_ids
+        and summary.get("stop_test_triggered") is not True
+        and not _failed_target_status_marker(status)
+    ):
+        return {}
+    failure_classes_by_attempt = _failure_classes_by_attempt(summary, attempts)
+    failure_classes: list[str] = []
+    for classes in failure_classes_by_attempt.values():
+        failure_classes.extend(classes)
+    return {
+        "target_id": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        "target_status": status or HOSTILE_SCAFFOLD_PAUSED_STATUS,
+        "attempted": True,
+        "failed_attempt_count": failed_attempt_count,
+        "failed_packet_ids": failed_packet_ids,
+        "attempt_packet_ids": failed_packet_ids,
+        "failure_classes": _unique(failure_classes),
+        "failure_classes_by_attempt": failure_classes_by_attempt,
+        "stop_test_triggered": bool(summary.get("stop_test_triggered")),
+        "next_recommended_action": _first_string(
+            summary.get("next_recommended_action"),
+            packet.get("hostile_scaffold_next_recommended_action"),
+            residual_blockers.get("hostile_scaffold_next_recommended_action"),
+            strategic_decision.get("next_recommended_action"),
+        )
+        or "strategy_review_only",
+        "next_allowed_status": FAILED_TARGET_NEXT_ALLOWED_STATUS,
+        "generation_retry_recommended": False,
+        "available_for_operator_selection": False,
+        "candidate_generation_authorized": False,
+        "broad_reuse_authorized": False,
+        "no_accepted_hostile_scaffold_candidate_exists": summary.get(
+            "no_accepted_hostile_scaffold_candidate_exists"
+        )
+        is not False,
+        "failed_packets_are_not_candidate_evidence": summary.get(
+            "failed_packets_are_not_candidate_evidence"
+        )
+        is not False,
+        "should_not_reuse_authorization_without_strategy_review": summary.get(
+            "should_not_reuse_authorization_without_strategy_review"
+        )
+        is not False,
+        "source_authorization_packet_id": summary.get("source_authorization_packet_id"),
+        "source_work_order_packet_id": summary.get("source_work_order_packet_id"),
+        "source_synthesis_packet_id": packet.get("packet_id"),
+        "strategic_decision": _first_string(
+            packet.get("strategic_decision"),
+            strategic_decision.get("recommendation"),
+        ),
+    }
+
+
+def _failure_classes_by_attempt(
+    summary: dict[str, Any],
+    attempts: object,
+) -> dict[str, list[str]]:
+    raw = summary.get("failure_classes_by_attempt")
+    if isinstance(raw, dict):
+        return {
+            str(packet_id): _string_list(classes)
+            for packet_id, classes in raw.items()
+            if _string_list(classes)
+        }
+    result: dict[str, list[str]] = {}
+    if isinstance(attempts, list):
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            packet_id = attempt.get("packet_id")
+            classes = _string_list(attempt.get("failure_classes"))
+            if isinstance(packet_id, str) and packet_id and classes:
+                result[packet_id] = classes
+    return result
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
+
+
+def _int_or_zero(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
+
+
+def _failed_target_status_marker(status: str) -> bool:
+    return any(
+        marker in status
+        for marker in (
+            "paused",
+            "exhausted",
+            "failed_stop_test",
+            "unavailable_due_to_failed_generation_path",
+        )
+    )
 
 
 def _prior_strategy_packet_id(selected_candidate: dict[str, Any]) -> str | None:
@@ -1148,6 +1374,7 @@ def _build_subject_manifest(subject: StrategySubject, packet_dir: Path) -> dict[
         "exhausted_or_attempted_target_ids": list(
             subject.exhausted_or_attempted_target_ids
         ),
+        "failed_target_status_map": subject.failed_target_status_map,
         "strongest_rival_still_blocks": True,
         "candidate_generated": False,
         "finalization_eligible": False,
@@ -1175,6 +1402,8 @@ def _build_source_evidence_summary(subject: StrategySubject) -> dict[str, object
         "exhausted_or_attempted_target_ids": list(
             subject.exhausted_or_attempted_target_ids
         ),
+        "failed_target_status_map": subject.failed_target_status_map,
+        "failed_target_statuses_consumed": bool(subject.failed_target_status_map),
         "evidence_findings": [
             f"{candidate_id} has executed-ablation support",
             f"{candidate_id} has reader-state support",
@@ -1184,6 +1413,10 @@ def _build_source_evidence_summary(subject: StrategySubject) -> dict[str, object
             "first-read object-event pressure remains weaker than strongest rival",
             "internal evidence is model-internal, not human data",
             f"{candidate_id} remains non-final",
+            "hostile scaffold visibility has a failed-generation path and is paused"
+            if HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+            in subject.failed_target_status_map
+            else "no failed residual target path is active",
         ],
         "ablation_support_status": selected.get("proof_causal_status"),
         "reader_state_strength": reader.get("reread_transformation_strength"),
@@ -1428,6 +1661,7 @@ def _build_object_event_pressure_target_map(subject: StrategySubject) -> dict[st
 def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, object]:
     repeated = subject.repeated_target_report["repeated_target_detected"] is True
     attempted = set(subject.exhausted_or_attempted_target_ids)
+    failed_targets = subject.failed_target_status_map
     if repeated:
         primary_next_target = SAFE_RESIDUAL_CHOICE_TARGET_ID
         primary_next_subtarget = "operator_choice_required"
@@ -1445,20 +1679,21 @@ def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, obj
         "exhausted_or_attempted_target_ids": list(
             subject.exhausted_or_attempted_target_ids
         ),
+        "failed_target_status_map": failed_targets,
+        "paused_or_exhausted_targets": list(failed_targets.values()),
+        "available_option_ids": [
+            option_id
+            for option_id, _description in RESIDUAL_TARGET_OPTIONS
+            if option_id not in attempted and option_id not in failed_targets
+        ],
         "specific_residual_options": [
-            {
-                "option_id": option_id,
-                "description": description,
-                "status": (
-                    "attempted_handle_requires_narrower_subtarget"
-                    if option_id in attempted
-                    else "available_for_operator_selection"
-                ),
-                "source_evidence_basis": _residual_option_basis(option_id, subject),
-                "broad_reuse_authorized": False if option_id in attempted else None,
-                "operator_may_select_narrower_subtarget": option_id in attempted,
-                "candidate_generation_authorized": False,
-            }
+            _build_residual_target_option(
+                option_id,
+                description,
+                attempted=attempted,
+                failed_targets=failed_targets,
+                subject=subject,
+            )
             for option_id, description in RESIDUAL_TARGET_OPTIONS
         ],
         "repeated_target_detected": repeated,
@@ -1477,6 +1712,59 @@ def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, obj
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
         "worker": "residual_target_option_map_v1_controller",
+    }
+
+
+def _build_residual_target_option(
+    option_id: str,
+    description: str,
+    *,
+    attempted: set[str],
+    failed_targets: dict[str, dict[str, Any]],
+    subject: StrategySubject,
+) -> dict[str, object]:
+    failed_status = failed_targets.get(option_id)
+    if failed_status:
+        return {
+            "option_id": option_id,
+            "description": description,
+            "status": failed_status.get(
+                "target_status",
+                HOSTILE_SCAFFOLD_PAUSED_STATUS,
+            ),
+            "source_evidence_basis": _residual_option_basis(option_id, subject),
+            "failed_attempt_count": failed_status.get("failed_attempt_count", 0),
+            "failed_packet_ids": failed_status.get("failed_packet_ids", []),
+            "failure_classes": failed_status.get("failure_classes", []),
+            "failure_classes_by_attempt": failed_status.get(
+                "failure_classes_by_attempt", {}
+            ),
+            "stop_test_triggered": bool(failed_status.get("stop_test_triggered")),
+            "next_allowed_status": failed_status.get(
+                "next_allowed_status", FAILED_TARGET_NEXT_ALLOWED_STATUS
+            ),
+            "next_recommended_action": failed_status.get("next_recommended_action"),
+            "generation_retry_recommended": False,
+            "available_for_operator_selection": False,
+            "broad_reuse_authorized": False,
+            "operator_may_select_narrower_subtarget": False,
+            "candidate_generation_authorized": False,
+            "not_candidate_evidence": True,
+        }
+    status = (
+        "attempted_handle_requires_narrower_subtarget"
+        if option_id in attempted
+        else "available_for_operator_selection"
+    )
+    return {
+        "option_id": option_id,
+        "description": description,
+        "status": status,
+        "source_evidence_basis": _residual_option_basis(option_id, subject),
+        "available_for_operator_selection": status == "available_for_operator_selection",
+        "broad_reuse_authorized": False if option_id in attempted else None,
+        "operator_may_select_narrower_subtarget": option_id in attempted,
+        "candidate_generation_authorized": False,
     }
 
 
@@ -1563,6 +1851,11 @@ def _build_next_intervention_strategy(
             if repeated
             else "if authorized, target first-read object-event pressure / lived object causality",
             "do not run another proof/no-answer macro cycle by inertia",
+            "do not retry hostile scaffold visibility from the failed path without "
+            "a separate strategy review"
+            if HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+            in subject.failed_target_status_map
+            else "no paused failed-target retry path is active",
         ],
         "top_ranked_blocker": blocker_summary["top_blocker_id"],
         "next_creative_action_if_authorized": (
@@ -1583,6 +1876,7 @@ def _build_next_intervention_strategy(
         "same_broad_target_allowed": subject.repeated_target_report[
             "same_broad_target_allowed"
         ],
+        "failed_target_status_map": subject.failed_target_status_map,
         "generation_allowed_by_this_packet": False,
         "candidate_generated": False,
         "operator_review_required_before_generation": True,
@@ -1670,6 +1964,7 @@ def _build_gate_report(
             "repeated_target_guard_checked",
             bool(subject.repeated_target_report["guard_checked"]),
         ),
+        _gate_result("failed_target_status_consumed", True),
         _gate_result(
             "residual_blockers_ranked",
             bool(payloads["reader_state_blocker_summary"].get("ranked_blockers")),
@@ -1764,6 +2059,7 @@ def _build_gate_report(
         "phase_shift_claim": False,
         "strongest_rival_still_blocks": True,
         "operator_review_required_before_generation": True,
+        "failed_target_status_map": subject.failed_target_status_map,
         "gate_results": gate_results,
         "failed_gates": failed_gates,
         "missing_gates": ["internal_operator_approval"],
@@ -1845,6 +2141,10 @@ def _build_packet_summary(
         "exhausted_or_attempted_target_ids": list(
             subject.exhausted_or_attempted_target_ids
         ),
+        "failed_target_status_map": subject.failed_target_status_map,
+        "available_residual_target_ids": payloads["residual_target_option_map"].get(
+            "available_option_ids", []
+        ),
         "residual_target_option_map": payloads["residual_target_option_map"],
         "same_broad_target_allowed": subject.repeated_target_report[
             "same_broad_target_allowed"
@@ -1895,6 +2195,15 @@ def _blocker_evidence_basis(blocker_id: str, subject: StrategySubject) -> list[s
 
 def _residual_option_basis(option_id: str, subject: StrategySubject) -> list[str]:
     reader = subject.reader_state
+    failed_status = subject.failed_target_status_map.get(option_id)
+    if failed_status:
+        return [
+            f"{option_id} has a failed-generation path",
+            f"failed packets: {', '.join(failed_status.get('failed_packet_ids', []))}",
+            f"target status: {failed_status.get('target_status')}",
+            f"next allowed status: {failed_status.get('next_allowed_status')}",
+            "failed packets are diagnostic evidence, not accepted candidates",
+        ]
     basis = {
         "tactile_inevitability_gap": [
             str(reader.get("first_read_vividness_status") or ""),

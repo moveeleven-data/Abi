@@ -1,6 +1,14 @@
 # Abi
 
-Abi is an autonomous creative engine for building artifacts through a triply isometric design: the machine process, the artifact’s subject/form, and the reader-state transformation are all described in the same symbolic terms. Its core pattern is germ → differentiation → pressure → crisis → recomposition → return: the architecture uses that pattern to generate, read, diagnose, revise, ablate, and compare creative work, while the target artifact embodies the same transformation and the internal reader model tests whether the artifact caused that transformation. In plain ASCII: germ -> differentiation -> pressure -> crisis -> recomposition -> return. Abi begins with one narrow literary-metaphysical domain so the architecture, topic, and reader effect can be maximally aligned, then aims to generalize the same causal-creative loop into a broader creative intelligence system.
+Abi is an autonomous creative engine for building artifacts through a triply isometric design. The machine process, the artifact's subject and form, and the intended reader-state transformation are all described in the same symbolic terms.
+
+Its core pattern is:
+
+```text
+germ -> differentiation -> pressure -> crisis -> recomposition -> return
+```
+
+Abi uses that pattern to generate, read, diagnose, revise, ablate, and compare creative work. The target artifact is built around the same transformation, and Abi's internal reader model tests whether the artifact appears to cause that transformation. The system begins in one narrow literary-metaphysical domain so the architecture, topic, and reader effect can stay tightly aligned, with the longer-term aim of generalizing the same causal-creative loop into a broader creative intelligence system.
 
 ## How Abi Works
 
@@ -40,13 +48,14 @@ The repo currently includes:
 - Production-harness and pilot artifact-set scaffolds.
 - Strongest-rival import and private reader-kit export.
 - Internal reader-lab, reader-state evaluation, and targeted provisional reader-state evaluation packets.
-- Autonomous evidence synthesis with candidate evidence graph adjudication and loop-level review.
+- Autonomous evidence synthesis with candidate evidence graph adjudication, target-aware proof adjudication, failed-path adjudication, and loop-level review.
 - Bounded macro recomposition with target coverage and materiality checks.
 - Executed counterfactual ablation over supported candidate packet types.
 - Ablation-informed revision and synthesis-guided macro recomposition.
 - Loop-integrity cleanup, supervised next-cycle authorization, and cleanup-aware target planning.
 - Narrow residual target selection, target-aware residual work-order planning, one-shot residual generation, and materiality feedback for failed attempts.
-- Residual target adapters for object-motion causality and tactile inevitability gaps.
+- Residual target adapters for object-motion causality, tactile inevitability, and hostile scaffold visibility.
+- Target-aware executed ablation controls and comparator consistency checks.
 - Policy-driven controller and fail-closed finalization profiles.
 
 Model-shaped work is routed through a structured model-driver layer. Tests use fake or stub clients, and live paths require explicit operator opt-in.

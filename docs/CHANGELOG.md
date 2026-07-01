@@ -8,11 +8,14 @@ It is written as an operator-facing engineering history. It records what was
 built, what was intentionally kept out of scope, and which invariants have been
 preserved across the build.
 
-Current endpoint in Git history:
+Current documented endpoint in Git history:
 
-- `8ab798a Add target-aware residual generation handoff`
+- `2c9253b Adjudicate failed hostile scaffold generation path`
+- plus the current `fix/next-target-strategy-failed-hostile-awareness`
+  branch update that makes next-target strategy consume failed-hostile
+  adjudication before offering residual targets.
 - Active branch during latest changelog update:
-  `main`
+  `fix/next-target-strategy-failed-hostile-awareness`
 - The active runtime direction is the autonomous creative-engine path.
 
 ## Standing Invariants
@@ -1436,6 +1439,195 @@ Verification at this endpoint:
   ineligible.
 - `finalize --profile autonomous_creative_candidate` refused.
 
+## Updates Since Target-Aware Residual Generation Handoff
+
+These entries cover the work after
+`8ab798a Add target-aware residual generation handoff`.
+
+### Target-Aware Residual Materiality Contracts
+
+Commit:
+
+- `05a1e96 Add target-aware residual materiality contracts`
+
+Implemented:
+
+- Added target-aware materiality contract support for residual-generated
+  candidates.
+- Made residual-generation validation distinguish target-specific materiality
+  requirements from generic prose polish.
+- Preserved fail-closed behavior for candidates that do not satisfy the selected
+  target contract.
+
+### Target-Aware Executed Ablation Controls
+
+Commit:
+
+- `7570baa Add target-aware executed ablation controls`
+
+Implemented:
+
+- Added executed-ablation controls for residual-generated bounded candidates.
+- Kept ablation evidence tied to the selected residual target and candidate
+  packet type.
+- Preserved controller ownership of proof and finalization semantics.
+
+### Target-Aware Ablation Comparator Consistency
+
+Commits:
+
+- `b92f161 Add target-aware ablation comparator consistency`
+- `cd9e029 Fix target-aware ablation role consistency negation`
+
+Implemented:
+
+- Added comparator consistency checks for target-aware ablation packets.
+- Hardened role-consistency handling so negated or diagnostic statements do not
+  become false positives.
+- Kept rejected or diagnostic ablation outputs from being promoted as proof.
+
+### Target-Aware Residual Proof Adjudication
+
+Commit:
+
+- `e486d7c Adjudicate target-aware residual proof in synthesis`
+
+Implemented:
+
+- Updated autonomous evidence synthesis to adjudicate target-aware residual
+  proof.
+- Required candidate/proof alignment before residual candidates can supersede
+  earlier candidates.
+- Preserved fail-closed finalization when proof is generic, role-inconsistent,
+  fixture-only, or otherwise non-authoritative.
+
+### Target-Aware Cleanup And Supervised Authorization
+
+Commits:
+
+- `9327fa9 Accept target-aware residual cycle cleanup`
+- `d7c7770 Authorize strategy from target-aware cleanup`
+
+Implemented:
+
+- Extended loop-integrity cleanup to accept the target-aware residual evidence
+  cycle.
+- Added supervised authorization for strategy-only continuation from that
+  cleanup state.
+- Kept next-generation authorization separate from next-strategy authorization.
+
+### Hostile Scaffold Residual Target Support
+
+Commit:
+
+- `a0b2e9f Add hostile scaffold residual target planning`
+
+Implemented:
+
+- Added `hostile_scaffold_visibility` as a residual target.
+- Added planning support for hostile-scaffold work orders while keeping
+  candidate generation separately authorized.
+- Preserved the strongest-rival and no-final-claim blockers.
+
+### Hostile Scaffold Work-Order Alignment
+
+Commit:
+
+- `974d8e4 Align hostile scaffold work-order units with selected region`
+
+Implemented:
+
+- Aligned hostile-scaffold target units with the selected intervention region.
+- Added checks that prevent region/unit mismatch from silently producing an
+  invalid work order.
+
+### Hostile Scaffold Generation Contract Readiness
+
+Commit:
+
+- `ba3d0da Add hostile scaffold generation contract readiness`
+
+Implemented:
+
+- Added generation-contract readiness for hostile-scaffold residual generation.
+- Kept hostile-scaffold generation bounded by selected units, protected effects,
+  and materiality constraints.
+
+### Hostile Scaffold Materiality And Leakage Feedback
+
+Commits:
+
+- `b85c317 Strengthen hostile scaffold generation materiality feedback`
+- `d1d9101 Strengthen hostile scaffold ordinary-table feedback`
+- `7162716 Improve hostile scaffold semantic leakage feedback`
+
+Implemented:
+
+- Strengthened feedback for hostile-scaffold generation failures.
+- Added ordinary-table unit feedback so near-synonym sentence polish does not
+  pass as material hostile-scaffold reduction.
+- Added semantic leakage feedback so scaffold language and explanatory residue
+  remain visible to the validator.
+- Preserved retry hygiene: failed packets remain diagnostics, not candidates,
+  and do not consume authorization.
+
+### Failed Hostile Scaffold Generation Adjudication
+
+Commit:
+
+- `2c9253b Adjudicate failed hostile scaffold generation path`
+
+Implemented:
+
+- Autonomous evidence synthesis now recognizes repeated failed hostile-scaffold
+  generation attempts.
+- Failed hostile packets are recorded as diagnostic evidence, not accepted
+  candidates.
+- The hostile path is marked
+  `paused_or_exhausted_pending_strategy_review` after repeated failures.
+- The residual generation authorization remains unconsumed unless a candidate
+  is actually accepted.
+
+### Failed Hostile Awareness In Next-Target Strategy
+
+Current branch update:
+
+- `fix/next-target-strategy-failed-hostile-awareness`
+
+Implemented:
+
+- Next-target strategy now consumes failed-target adjudication from the source
+  synthesis/loop-review/cleanup/authorization chain.
+- `hostile_scaffold_visibility` is written into
+  `failed_target_status_map` with:
+  - failed packets `packet_0064`, `packet_0065`, `packet_0066`, `packet_0067`
+  - `failed_attempt_count: 4`
+  - `target_status: paused_or_exhausted_pending_strategy_review`
+  - `next_allowed_status: strategy_review_only`
+  - `generation_retry_recommended: false`
+- `hostile_scaffold_visibility` remains visible for auditability but is no
+  longer listed as available for operator selection.
+- Stale strategy packets that still show hostile scaffold as available now
+  refuse selection when their linked synthesis has failed-hostile adjudication.
+
+Verification at this endpoint:
+
+- `ruff check .` passed.
+- `pytest` passed with 432 tests.
+- Planning from
+  `runs\run_8fa54199f23f3d8e\supervised_cycle_authorization\packet_0005`
+  produced
+  `runs\run_8fa54199f23f3d8e\next_target_strategy\packet_0010`.
+- `packet_0010` preserved current best `bounded_macro_recomposition/packet_0063`,
+  proof `executed_ablation/packet_0034`, and reader-state
+  `internal_reader_state_evaluation/packet_0013`.
+- `packet_0010` generated no candidate and made zero model calls.
+- Stale `next_target_strategy/packet_0009` refused hostile-scaffold selection
+  with zero model calls.
+- `finalization status --profile autonomous_creative_candidate` remained
+  ineligible.
+- `finalize --profile autonomous_creative_candidate` refused.
+
 ## Current Runtime Surface
 
 The current repo includes these active areas:
@@ -1469,6 +1661,9 @@ The current repo includes these active areas:
 - one-shot target-aware residual candidate generation
 - residual target adapters for object-motion causality and tactile
   inevitability gaps
+- hostile scaffold residual-target planning, validation feedback, and failed
+  generation adjudication
+- target-aware executed ablation controls and comparator consistency checks
 - model-driver demos and model-call inspection
 - guarded live paths behind explicit opt-in
 
