@@ -10,6 +10,8 @@ germ -> differentiation -> pressure -> crisis -> recomposition -> return
 
 Abi uses that pattern to generate, read, diagnose, revise, ablate, and compare creative work. The target artifact is built around the same transformation, and Abi's internal reader model tests whether the artifact appears to cause that transformation. The system begins in one narrow literary-metaphysical domain so the architecture, topic, and reader effect can stay tightly aligned, with the longer-term aim of generalizing the same causal-creative loop into a broader creative intelligence system.
 
+Start here for a visual overview: [Abi intro presentation](docs/abi_intro.pdf).
+
 ## How Abi Works
 
 Abi stores work as immutable packet directories under `runs/<run_id>/.../packet_NNNN/`. Each packet contains JSON artifacts with a normalized envelope:

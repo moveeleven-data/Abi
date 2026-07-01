@@ -14,6 +14,7 @@ Start with the root [README](../README.md). It is the operator entry point for t
 
 ## Operator Reference
 
+- [Abi intro presentation](abi_intro.pdf)
 - [Changelog](CHANGELOG.md)
 - [Phase 14 operator handoff](phase14_operator_handoff/operator_handoff.md)
 - [Audit report](phase14_operator_handoff/audit_report.md)
