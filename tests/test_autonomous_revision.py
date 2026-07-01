@@ -1832,10 +1832,42 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
             },
         },
         "reader_state_evidence_adjudication": {
+            "packet_id": "packet_0013",
+            "packet_dir": str(
+                run_dir / "internal_reader_state_evaluation" / "packet_0013"
+            ),
+            "reader_state_evidence_present": True,
             "reread_transformation_strength": "partial",
             "reader_state_packet_id": "packet_0013",
+            "post_reread_reader_state": "partial_transformative_attention",
+            "proof_no_outside_answer_carry_status": "partial",
+            "final_return_echo_status": "partial",
+            "first_read_object_event_pressure_status": "rival_still_stronger",
+            "strongest_rival_status": "still_blocks",
+            "first_read_vividness_status": "weaker_than_rival",
+            "lived_object_causality_status": "improved_but_partial",
+            "hostile_risk_status": "active",
+            "hostile_active_risks": ["scaffold_visibility"],
+        },
+        "reader_state_tension_report": {
+            "tensions": [
+                {
+                    "tension_id": "first_read_object_event_pressure_gap",
+                    "status": "active",
+                }
+            ],
         },
         "residual_blocker_map": {
+            "residual_blockers": [
+                {
+                    "blocker_id": "first_read_object_event_pressure_gap",
+                    "status": "active",
+                },
+                {
+                    "blocker_id": "strongest_rival_still_blocks",
+                    "status": "active",
+                },
+            ],
             "failed_target_status_map": failed_target_status_map,
             "strongest_rival_still_blocks": True,
         },
@@ -1846,6 +1878,11 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
         "strategic_decision_report": {
             "failed_target_status_map": failed_target_status_map,
             "next_generation_authorized": False,
+        },
+        "local_law_case_notes": {"notes": ["fixture strategy note"]},
+        "macro_recomposition_brief": {
+            "brief_type": "architecture_checkpoint_fixture",
+            "current_best_candidate_packet_id": "packet_0063",
         },
         "synthesis_gate_report": {
             "passed": True,
@@ -1878,22 +1915,39 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
             "source_synthesis_packet_id": "packet_0037",
             "source_synthesis_packet_dir": str(synthesis_dir),
         },
+        "completed_cycle_map": {
+            "completed_cycles": [],
+            "completed_cycle_count": 0,
+        },
         "evidence_loop_review_packet": loop_review_packet,
         "current_best_candidate_review": {
             "current_best_candidate_packet_id": "packet_0063",
             "proof_packet_id": "packet_0034",
             "reader_state_packet_id": "packet_0013",
         },
+        "evidence_quality_review": {"quality": "fixture"},
         "reader_state_progress_review": {"reader_state_packet_id": "packet_0013"},
         "strongest_rival_status_review": {"strongest_rival_still_blocks": True},
         "residual_blocker_taxonomy": {
             "failed_target_status_map": failed_target_status_map,
         },
+        "drift_risk_report": {
+            "repeated_target_drift_detected": False,
+        },
+        "loop_integrity_report": {"loop_integrity_reviewed": True},
         "next_action_decision": {
             "generation_allowed": False,
             "next_recommended_action": (
                 "prepare_loop_integrity_cleanup_before_more_generation"
             ),
+        },
+        "loop_controller_readiness_report": {
+            "ready_for_full_autonomous_loop_controller": False,
+        },
+        "evidence_loop_review_gate_report": {
+            "passed": False,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
         },
     }
     for artifact_type, payload in loop_review_payloads.items():
@@ -1921,6 +1975,15 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
         "no_phase_shift_claim": True,
     }
     cleanup_payloads = {
+        "loop_integrity_cleanup_subject_manifest": {
+            "run_id": run_id,
+            "source_synthesis_packet_id": "packet_0037",
+            "source_loop_review_packet_id": "packet_0009",
+        },
+        "loop_review_intake_summary": {
+            "source_loop_review_packet_id": "packet_0009",
+            "source_synthesis_packet_id": "packet_0037",
+        },
         "active_evidence_state_checkpoint": {
             "run_id": run_id,
             "source_synthesis_packet_id": "packet_0037",
@@ -1931,11 +1994,26 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
             "proof_packet_id": "packet_0034",
             "reader_state_packet_id": "packet_0013",
         },
+        "stale_recommendation_registry": {"stale_recommendations": []},
+        "prior_cycle_supersession_map": {"cycles": []},
+        "next_command_safety_policy": {
+            "generation_locked_until_supervised_strategy": True,
+        },
         "generation_lock_report": {
             "next_strategy_authorized": True,
             "next_generation_authorized": False,
             "candidate_generated": False,
             "model_calls": 0,
+        },
+        "supervised_strategy_readiness_report": {
+            "ready_for_supervised_strategy_authorization": True,
+            "ready_for_supervised_candidate_generation": False,
+        },
+        "loop_integrity_cleanup_gate_report": {
+            "passed": False,
+            "loop_integrity_cleanup_completed": True,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
         },
         "loop_integrity_cleanup_packet": cleanup_packet,
     }
@@ -1979,6 +2057,35 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
             "source_loop_review_packet_dir": str(loop_review_dir),
             "source_synthesis_packet_id": "packet_0037",
             "source_synthesis_packet_dir": str(synthesis_dir),
+        },
+        "loop_review_intake_summary": {
+            "source_loop_review_packet_id": "packet_0009",
+            "source_synthesis_packet_id": "packet_0037",
+        },
+        "operator_review_record": {
+            "operator_reviewed": True,
+            "decision": "authorize_next_strategy_only",
+        },
+        "cleanup_resolution_report": {
+            "source_loop_cleanup_packet_id": "packet_0006",
+            "current_best_candidate_packet_id": "packet_0063",
+            "proof_packet_id": "packet_0034",
+            "reader_state_packet_id": "packet_0013",
+        },
+        "supervised_next_cycle_readiness_report": {
+            "next_strategy_authorized": True,
+            "next_generation_authorized": False,
+        },
+        "next_cycle_scope_constraints": {
+            "next_strategy_authorized": True,
+            "next_generation_authorized": False,
+        },
+        "authorization_gate_report": {
+            "passed": False,
+            "next_strategy_authorized": True,
+            "next_generation_authorized": False,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
         },
         "supervised_cycle_authorization_packet": authorization_packet,
     }
@@ -16769,6 +16876,275 @@ def test_architecture_evidence_risk_checkpoint_refuses_without_operator_review(
 
     assert len(after_calls) == len(before_calls)
     assert finalization.refused is True
+
+
+def test_checkpoint_aware_next_target_strategy_consumes_checkpoint(tmp_path):
+    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(tmp_path)
+    checkpoint = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=True,
+    )
+    assert checkpoint.exit_code == 0
+    checkpoint_packet = Path(str(checkpoint.payload["packet_dir"]))
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_next_target_strategy(
+        config,
+        authorization_packet=authorization_packet,
+        architecture_risk_checkpoint=checkpoint_packet,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["source_synthesis_packet_id"] == "packet_0037"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0009"
+    assert result.payload["source_loop_cleanup_packet_id"] == "packet_0006"
+    assert result.payload["source_authorization_packet_id"] == "packet_0006"
+    assert result.payload["architecture_checkpoint_packet_id"] == checkpoint.payload[
+        "packet_id"
+    ]
+    assert result.payload["architecture_checkpoint_reviewed"] is True
+    assert result.payload["generation_locked_by_checkpoint"] is True
+    assert result.payload["next_strategy_authorized"] is True
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["primary_next_target"] == "checkpoint_review_required"
+    assert result.payload["next_recommended_action"] == (
+        "review_checkpoint_aware_strategy_before_target_selection"
+    )
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    subject = read_payload(packet_dir / "next_target_strategy_subject_manifest.json")
+    assert subject["architecture_checkpoint_reviewed"] is True
+    assert subject["generation_locked_by_checkpoint"] is True
+    assert subject["architecture_checkpoint_packet_id"] == checkpoint.payload["packet_id"]
+    intake = subject["architecture_checkpoint_intake"]
+    assert intake["checkpoint_packet_id"] == checkpoint.payload["packet_id"]
+    assert intake["legacy_artifact_name_warning_count"] == 2
+    assert intake["hardcoded_packet_id_unacceptable_count"] == 0
+    assert set(intake["failed_local_residual_generation_targets"]) == {
+        CHECKPOINT_HOSTILE_TARGET_ID,
+        CHECKPOINT_ENDING_TARGET_ID,
+    }
+
+    residual = read_payload(packet_dir / "residual_target_option_map.json")
+    assert residual["primary_next_target"] == "checkpoint_review_required"
+    assert residual["available_option_ids"] == []
+    assert residual["checkpoint_plausible_direction_ids"] == [
+        "proof_no_answer_residue",
+        "local_busyness_decorative_detail_risk",
+        "rival_level_first_read_vividness",
+        "pause_local_residual_generation_for_architecture_consolidation",
+        "target_adapter_consolidation_before_more_generation",
+    ]
+    options = {
+        option["option_id"]: option for option in residual["specific_residual_options"]
+    }
+    hostile = options[CHECKPOINT_HOSTILE_TARGET_ID]
+    ending = options[CHECKPOINT_ENDING_TARGET_ID]
+    assert hostile["available_for_operator_selection"] is False
+    assert hostile["generation_retry_recommended"] is False
+    assert hostile["candidate_generation_authorized"] is False
+    assert ending["available_for_operator_selection"] is False
+    assert ending["generation_retry_recommended"] is False
+    assert ending["candidate_generation_authorized"] is False
+    assert options[OBJECT_MOTION_CAUSALITY_TARGET_ID]["status"] == (
+        "previously_integrated_current_best_path"
+    )
+    assert options[OBJECT_MOTION_CAUSALITY_TARGET_ID][
+        "available_for_operator_selection"
+    ] is False
+    assert options[TACTILE_INEVITABILITY_TARGET_ID]["status"] == (
+        "previously_integrated_current_best_path"
+    )
+    assert options[TACTILE_INEVITABILITY_TARGET_ID][
+        "available_for_operator_selection"
+    ] is False
+    assert options["proof_no_answer_residue"]["status"] == (
+        "plausible_checkpoint_direction_requires_operator_review"
+    )
+    assert options["proof_no_answer_residue"][
+        "available_for_operator_selection"
+    ] is False
+
+    strategy = read_payload(packet_dir / "next_intervention_strategy.json")
+    assert strategy["recommended_action"] == (
+        "review_checkpoint_aware_strategy_before_target_selection"
+    )
+    assert strategy["generation_allowed_by_this_packet"] is False
+    assert "checkpoint-aware planning remains strategy-only" in strategy["strategy"]
+
+    gate = read_payload(packet_dir / "next_target_strategy_gate_report.json")
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate_results["architecture_checkpoint_consumed"]["passed"] is True
+    assert gate_results["generation_locked_by_architecture_checkpoint"]["passed"] is True
+    assert gate_results["checkpoint_failed_targets_withheld_from_selection"][
+        "passed"
+    ] is True
+    assert gate["architecture_checkpoint_reviewed"] is True
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    packet = read_payload(packet_dir / "next_target_strategy_packet.json")
+    assert packet["architecture_checkpoint_packet_id"] == checkpoint.payload["packet_id"]
+    assert packet["architecture_checkpoint_reviewed"] is True
+    assert packet["generation_locked_by_checkpoint"] is True
+    assert packet["primary_next_target"] == "checkpoint_review_required"
+    assert packet["candidate_generated"] is False
+    assert packet["counts"]["candidate_artifacts_created"] == 0
+    assert packet["counts"]["model_calls"] == 0
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_checkpoint_aware_next_target_strategy_requires_checkpoint_when_present(
+    tmp_path,
+):
+    config, authorization_packet, _run_id = build_architecture_checkpoint_fixture(tmp_path)
+    checkpoint = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=True,
+    )
+    assert checkpoint.exit_code == 0
+
+    result = run_next_target_strategy(config, authorization_packet=authorization_packet)
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--architecture-risk-checkpoint" in result.payload["message"]
+    assert str(checkpoint.payload["packet_dir"]) in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_checkpoint_aware_next_target_strategy_refuses_mismatched_checkpoint(
+    tmp_path,
+):
+    config, authorization_packet, _run_id = build_architecture_checkpoint_fixture(tmp_path)
+    checkpoint = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=True,
+    )
+    checkpoint_copy = tmp_path / "mismatched_checkpoint"
+    shutil.copytree(Path(str(checkpoint.payload["packet_dir"])), checkpoint_copy)
+
+    def _mismatch_authorization(payload):
+        payload["source_authorization_packet_id"] = "packet_9999"
+
+    rewrite_payload(
+        checkpoint_copy / "architecture_evidence_risk_checkpoint_packet.json",
+        _mismatch_authorization,
+    )
+
+    result = run_next_target_strategy(
+        config,
+        authorization_packet=authorization_packet,
+        architecture_risk_checkpoint=checkpoint_copy,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "source_authorization_packet_id" in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_checkpoint_aware_next_target_strategy_blocks_unacceptable_hardcodes(
+    tmp_path,
+):
+    config, authorization_packet, _run_id = build_architecture_checkpoint_fixture(tmp_path)
+    checkpoint = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=True,
+    )
+    checkpoint_copy = tmp_path / "hardcode_blocking_checkpoint"
+    shutil.copytree(Path(str(checkpoint.payload["packet_dir"])), checkpoint_copy)
+
+    def _make_unacceptable(payload):
+        payload["unacceptable_hardcode_count"] = 1
+        payload["passed"] = False
+
+    rewrite_payload(
+        checkpoint_copy / "hardcoded_packet_id_audit.json",
+        _make_unacceptable,
+    )
+
+    result = run_next_target_strategy(
+        config,
+        authorization_packet=authorization_packet,
+        architecture_risk_checkpoint=checkpoint_copy,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "unacceptable hardcoded packet IDs" in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    "target_id",
+    [
+        CHECKPOINT_HOSTILE_TARGET_ID,
+        CHECKPOINT_ENDING_TARGET_ID,
+        OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        TACTILE_INEVITABILITY_TARGET_ID,
+    ],
+)
+def test_residual_target_selection_refuses_pre_checkpoint_strategy_after_checkpoint(
+    tmp_path,
+    target_id,
+):
+    config, authorization_packet, _run_id = build_architecture_checkpoint_fixture(tmp_path)
+    old_strategy = run_next_target_strategy(
+        config,
+        authorization_packet=authorization_packet,
+    )
+    assert old_strategy.exit_code == 0
+    checkpoint = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=True,
+    )
+    assert checkpoint.exit_code == 0
+
+    result = run_residual_target_selection(
+        config,
+        strategy_packet=Path(str(old_strategy.payload["packet_dir"])),
+        target=target_id,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "predates the latest architecture/evidence-risk checkpoint" in (
+        result.payload["message"]
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["model_calls"] == 0
 
 
 def test_loop_integrity_cleanup_accepts_target_aware_residual_cycle(tmp_path):

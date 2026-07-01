@@ -24,10 +24,12 @@ from abi.packets import (
     read_json_file,
 )
 from abi.modules.residual_targets import (
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     REPEATED_BROAD_TARGET_ID,
     ResidualTargetSpec,
+    TACTILE_INEVITABILITY_TARGET_ID,
     get_residual_target_spec,
 )
 
@@ -64,6 +66,12 @@ REQUIRED_STRATEGY_ARTIFACTS = (
 )
 
 NEXT_ALLOWED_ACTION = "prepare_object_motion_causality_specificity_work_order"
+CHECKPOINT_STALE_BLOCKED_TARGET_IDS = (
+    HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    TACTILE_INEVITABILITY_TARGET_ID,
+)
 
 
 @dataclass(frozen=True)
@@ -298,6 +306,19 @@ def _load_subject(
             "Residual target selection refused; strategy packet is marked stale "
             "by the latest loop-integrity cleanup checkpoint."
         )
+    checkpoint_stale_status = _checkpoint_stale_target_for_selection(
+        config,
+        strategy_packet_dir,
+        payloads,
+        run_id=run_id,
+        target=target,
+    )
+    if checkpoint_stale_status:
+        raise ValueError(
+            "Residual target selection refused; strategy packet predates the "
+            "latest architecture/evidence-risk checkpoint for this target: "
+            f"{target}."
+        )
     residual_map = payloads["residual_target_option_map"]
     options = residual_map.get("specific_residual_options")
     if not isinstance(options, list):
@@ -412,6 +433,67 @@ def _strategy_marked_stale_by_latest_cleanup(
                 return True
         return False
     return False
+
+
+def _checkpoint_stale_target_for_selection(
+    config: AbiConfig,
+    strategy_packet_dir: Path,
+    payloads: dict[str, dict[str, Any]],
+    *,
+    run_id: str,
+    target: str,
+) -> dict[str, Any]:
+    del strategy_packet_dir
+    if target not in CHECKPOINT_STALE_BLOCKED_TARGET_IDS:
+        return {}
+    latest_checkpoint = _latest_architecture_checkpoint(config, run_id)
+    if latest_checkpoint is None:
+        return {}
+    latest_payload = _read_checkpoint_packet(latest_checkpoint)
+    latest_checkpoint_id = _first_string(
+        latest_payload.get("packet_id"),
+        latest_checkpoint.name,
+    )
+    packet = payloads["next_target_strategy_packet"]
+    manifest = payloads["next_target_strategy_subject_manifest"]
+    residual_map = payloads["residual_target_option_map"]
+    strategy_checkpoint_id = _first_string(
+        packet.get("architecture_checkpoint_packet_id"),
+        manifest.get("architecture_checkpoint_packet_id"),
+        residual_map.get("architecture_checkpoint_packet_id"),
+    )
+    if strategy_checkpoint_id and strategy_checkpoint_id == latest_checkpoint_id:
+        return {}
+    return {
+        "target_id": target,
+        "latest_architecture_checkpoint_packet_id": latest_checkpoint_id,
+        "latest_architecture_checkpoint_packet_dir": str(latest_checkpoint),
+        "strategy_checkpoint_packet_id": strategy_checkpoint_id,
+        "strategy_packet_predates_architecture_checkpoint": True,
+    }
+
+
+def _latest_architecture_checkpoint(config: AbiConfig, run_id: str) -> Path | None:
+    base_dir = config.run_dir(run_id) / "architecture_evidence_risk_checkpoint"
+    if not base_dir.exists():
+        return None
+    packet_dirs = sorted(
+        [child for child in base_dir.glob("packet_*") if child.is_dir()],
+        key=lambda path: path.name,
+    )
+    for packet_dir in reversed(packet_dirs):
+        if (packet_dir / "architecture_evidence_risk_checkpoint_packet.json").exists():
+            return packet_dir
+    return None
+
+
+def _read_checkpoint_packet(packet_dir: Path) -> dict[str, Any]:
+    path = packet_dir / "architecture_evidence_risk_checkpoint_packet.json"
+    if not path.exists():
+        return {}
+    envelope = read_json_file(path)
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    return payload if isinstance(payload, dict) else {}
 
 
 def _failed_target_status_for_selection(
@@ -1132,6 +1214,7 @@ def _allowed_packet_references(subject: ResidualTargetSelectionSubject) -> set[s
         packet.get("source_synthesis_packet_id"),
         packet.get("authorization_packet_id"),
         packet.get("source_authorization_packet_id"),
+        packet.get("architecture_checkpoint_packet_id"),
         packet.get("source_loop_cleanup_packet_id"),
         packet.get("loop_review_packet_id"),
         packet.get("source_loop_review_packet_id"),

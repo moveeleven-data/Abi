@@ -85,6 +85,18 @@ REQUIRED_AUTHORIZATION_FILES = (
 )
 
 REQUIRED_LOOP_CLEANUP_FILES = LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES
+REQUIRED_ARCHITECTURE_CHECKPOINT_FILES = (
+    "active_evidence_chain_summary",
+    "failed_target_memory_report",
+    "target_adapter_inventory",
+    "legacy_artifact_name_audit",
+    "hardcoded_packet_id_audit",
+    "generation_lock_and_authorization_audit",
+    "unresolved_creative_blocker_summary",
+    "next_strategy_readiness_report",
+    "architecture_risk_gate_report",
+    "architecture_evidence_risk_checkpoint_packet",
+)
 
 REPEATED_BROAD_TARGET_ID = "first_read_object_event_pressure_gap"
 ATTEMPTED_BROAD_TARGET_IDS = (
@@ -94,9 +106,25 @@ ATTEMPTED_BROAD_TARGET_IDS = (
 )
 SAFE_RESIDUAL_CHOICE_TARGET_ID = "next_residual_target_requires_operator_choice"
 SAFE_RESIDUAL_CHOICE_ACTION = "review_narrow_residual_target_options_before_generation"
+CHECKPOINT_PRIMARY_TARGET_ID = "checkpoint_review_required"
+CHECKPOINT_RECOMMENDED_ACTION = "review_checkpoint_aware_strategy_before_target_selection"
 HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
+ENDING_EXPLAINS_RETURN_RISK_TARGET_ID = "ending_explains_return_risk"
+OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
+TACTILE_INEVITABILITY_TARGET_ID = "tactile_inevitability_gap"
 HOSTILE_SCAFFOLD_PAUSED_STATUS = "paused_or_exhausted_pending_strategy_review"
 FAILED_TARGET_NEXT_ALLOWED_STATUS = "strategy_review_only"
+CURRENT_BEST_PATH_TARGET_IDS = (
+    OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    TACTILE_INEVITABILITY_TARGET_ID,
+)
+CHECKPOINT_ALLOWED_DIRECTION_IDS = (
+    "proof_no_answer_residue",
+    "local_busyness_decorative_detail_risk",
+    "rival_level_first_read_vividness",
+    "pause_local_residual_generation_for_architecture_consolidation",
+    "target_adapter_consolidation_before_more_generation",
+)
 
 RESIDUAL_TARGET_OPTIONS = (
     (
@@ -151,6 +179,11 @@ class StrategySubject:
     authorization_packet_artifact_id: str | None
     authorization_artifact_ids: dict[str, str]
     authorization_payloads: dict[str, dict[str, Any]]
+    architecture_checkpoint_packet_dir: Path | None
+    architecture_checkpoint_packet_id: str | None
+    architecture_checkpoint_packet_artifact_id: str | None
+    architecture_checkpoint_artifact_ids: dict[str, str]
+    architecture_checkpoint_payloads: dict[str, dict[str, Any]]
     loop_cleanup_packet_dir: Path | None
     loop_cleanup_packet_id: str | None
     loop_cleanup_packet_artifact_id: str | None
@@ -182,6 +215,7 @@ def run_next_target_strategy(
     *,
     synthesis_packet: Path | str | None = None,
     authorization_packet: Path | str | None = None,
+    architecture_risk_checkpoint: Path | str | None = None,
 ) -> NextTargetStrategyResult:
     initialize_database(config)
     if (synthesis_packet is None) == (authorization_packet is None):
@@ -189,6 +223,16 @@ def run_next_target_strategy(
             message=(
                 "Next-target strategy refused; pass exactly one of "
                 "--synthesis-packet or --authorization-packet."
+            ),
+        )
+    if architecture_risk_checkpoint is not None and authorization_packet is None:
+        return _refusal(
+            synthesis_packet=_resolve_path(config, synthesis_packet)
+            if synthesis_packet is not None
+            else None,
+            message=(
+                "Next-target strategy refused; --architecture-risk-checkpoint "
+                "is only supported with --authorization-packet."
             ),
         )
 
@@ -203,7 +247,16 @@ def run_next_target_strategy(
                         f"directory not found: {authorization_packet_dir}"
                     ),
                 )
-            subject = _load_authorized_subject(config, authorization_packet_dir)
+            subject = _load_authorized_subject(
+                config,
+                authorization_packet_dir,
+                architecture_risk_checkpoint=_resolve_path(
+                    config,
+                    architecture_risk_checkpoint,
+                )
+                if architecture_risk_checkpoint is not None
+                else None,
+            )
         else:
             synthesis_packet_dir = _resolve_path(config, synthesis_packet or "")
             if not synthesis_packet_dir.exists() or not synthesis_packet_dir.is_dir():
@@ -228,6 +281,12 @@ def run_next_target_strategy(
             else None,
             authorization_packet=_resolve_path(config, authorization_packet)
             if authorization_packet is not None
+            else None,
+            architecture_risk_checkpoint=_resolve_path(
+                config,
+                architecture_risk_checkpoint,
+            )
+            if architecture_risk_checkpoint is not None
             else None,
             message=str(error),
         )
@@ -446,12 +505,35 @@ def run_next_target_strategy(
         "proof_packet_id": subject.selected_candidate.get("proof_packet_id"),
         "reader_state_packet_id": subject.reader_state.get("packet_id"),
         "source_synthesis_packet_id": subject.synthesis_packet_id,
+        "source_synthesis_packet_dir": str(subject.synthesis_packet_dir),
         "authorization_packet_id": subject.authorization_packet_id,
         "source_authorization_packet_id": subject.authorization_packet_id,
+        "architecture_checkpoint_packet_id": subject.architecture_checkpoint_packet_id,
+        "architecture_checkpoint_packet_dir": str(
+            subject.architecture_checkpoint_packet_dir
+        )
+        if subject.architecture_checkpoint_packet_dir
+        else None,
+        "architecture_checkpoint_packet_artifact_id": (
+            subject.architecture_checkpoint_packet_artifact_id
+        ),
+        "architecture_checkpoint_reviewed": bool(
+            subject.architecture_checkpoint_payloads
+        ),
+        "generation_locked_by_checkpoint": bool(
+            subject.architecture_checkpoint_payloads
+        ),
+        "architecture_checkpoint_intake": _architecture_checkpoint_intake(subject),
         "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
+        "source_loop_cleanup_packet_dir": str(subject.loop_cleanup_packet_dir)
+        if subject.loop_cleanup_packet_dir
+        else None,
         "cleanup_checkpoint_consumed": subject.loop_cleanup_packet_id is not None,
         "loop_review_packet_id": subject.loop_review_packet_id,
         "source_loop_review_packet_id": subject.loop_review_packet_id,
+        "source_loop_review_packet_dir": str(subject.loop_review_packet_dir)
+        if subject.loop_review_packet_dir
+        else None,
         "completed_cycles": subject.completed_cycles,
         "next_strategy_authorized": subject.next_strategy_authorized,
         "next_generation_authorized": subject.next_generation_authorized,
@@ -553,6 +635,11 @@ def _load_synthesis_subject(config: AbiConfig, synthesis_packet_dir: Path) -> St
         authorization_packet_artifact_id=None,
         authorization_artifact_ids={},
         authorization_payloads={},
+        architecture_checkpoint_packet_dir=None,
+        architecture_checkpoint_packet_id=None,
+        architecture_checkpoint_packet_artifact_id=None,
+        architecture_checkpoint_artifact_ids={},
+        architecture_checkpoint_payloads={},
         loop_cleanup_packet_dir=None,
         loop_cleanup_packet_id=None,
         loop_cleanup_packet_artifact_id=None,
@@ -588,6 +675,8 @@ def _load_synthesis_subject(config: AbiConfig, synthesis_packet_dir: Path) -> St
 def _load_authorized_subject(
     config: AbiConfig,
     authorization_packet_dir: Path,
+    *,
+    architecture_risk_checkpoint: Path | None = None,
 ) -> StrategySubject:
     authorization_payloads = _load_packet_payloads(
         authorization_packet_dir,
@@ -709,6 +798,48 @@ def _load_authorized_subject(
         loop_manifest=loop_manifest,
     )
 
+    authorization_packet_id = str(
+        authorization_packet_payload.get("packet_id") or authorization_packet_dir.name
+    )
+    architecture_checkpoint_dir: Path | None = None
+    architecture_checkpoint_payloads: dict[str, dict[str, Any]] = {}
+    architecture_checkpoint_artifact: ArtifactRecord | None = None
+    architecture_checkpoint_artifact_ids: dict[str, str] = {}
+    latest_checkpoint = _latest_architecture_checkpoint_for_authorization(
+        config,
+        run_id=subject.run_id,
+        authorization_packet_id=authorization_packet_id,
+    )
+    if architecture_risk_checkpoint is None:
+        if latest_checkpoint is not None:
+            raise ValueError(
+                "Next-target strategy refused; this authorization chain has a "
+                "completed architecture/evidence-risk checkpoint. Pass "
+                f"--architecture-risk-checkpoint {latest_checkpoint}."
+            )
+    else:
+        architecture_checkpoint_dir = architecture_risk_checkpoint
+        if (
+            not architecture_checkpoint_dir.exists()
+            or not architecture_checkpoint_dir.is_dir()
+        ):
+            raise ValueError(
+                "Next-target strategy refused; architecture/evidence-risk "
+                f"checkpoint directory not found: {architecture_checkpoint_dir}"
+            )
+        architecture_checkpoint_payloads = _load_packet_payloads(
+            architecture_checkpoint_dir,
+            REQUIRED_ARCHITECTURE_CHECKPOINT_FILES,
+            "architecture/evidence-risk checkpoint",
+        )
+        _validate_architecture_checkpoint_chain(
+            subject=subject,
+            authorization_packet_id=authorization_packet_id,
+            cleanup_packet_id=source_loop_cleanup_packet_id or None,
+            loop_packet_id=str(loop_packet.get("packet_id") or loop_review_dir.name),
+            checkpoint_payloads=architecture_checkpoint_payloads,
+        )
+
     authorization_path = authorization_packet_dir / "supervised_cycle_authorization_packet.json"
     loop_path = loop_review_dir / "evidence_loop_review_packet.json"
     cleanup_path = (
@@ -724,6 +855,15 @@ def _load_authorized_subject(
             if cleanup_path is not None
             else None
         )
+        architecture_checkpoint_artifact = (
+            _artifact_for_path(
+                connection,
+                architecture_checkpoint_dir
+                / "architecture_evidence_risk_checkpoint_packet.json",
+            )
+            if architecture_checkpoint_dir is not None
+            else None
+        )
 
     authorization_artifact_ids = _artifact_ids_from_packet(authorization_packet_payload)
     loop_artifact_ids = _artifact_ids_from_packet(loop_packet)
@@ -731,14 +871,26 @@ def _load_authorized_subject(
         loop_cleanup_artifact_ids = _artifact_ids_from_packet(
             loop_cleanup_payloads["loop_integrity_cleanup_packet"]
         )
+    if architecture_checkpoint_payloads:
+        architecture_checkpoint_artifact_ids = _artifact_ids_from_packet(
+            architecture_checkpoint_payloads["architecture_evidence_risk_checkpoint_packet"]
+        )
+    failed_target_status_map = {
+        **subject.failed_target_status_map,
+        **_failed_target_status_map_from_checkpoint(architecture_checkpoint_payloads),
+    }
     parent_ids = _unique(
         [
             authorization_artifact.id if authorization_artifact else None,
             loop_cleanup_artifact.id if loop_cleanup_artifact else None,
             loop_artifact.id if loop_artifact else None,
+            architecture_checkpoint_artifact.id
+            if architecture_checkpoint_artifact
+            else None,
             *authorization_artifact_ids.values(),
             *loop_cleanup_artifact_ids.values(),
             *loop_artifact_ids.values(),
+            *architecture_checkpoint_artifact_ids.values(),
             *subject.source_parent_ids,
         ]
     )
@@ -746,7 +898,7 @@ def _load_authorized_subject(
         selected_candidate=subject.selected_candidate,
         cleanup_payloads=loop_cleanup_payloads,
         loop_review_payloads=loop_review_payloads,
-        failed_target_status_map=subject.failed_target_status_map,
+        failed_target_status_map=failed_target_status_map,
     )
     repeated_target_report = _build_repeated_target_report(
         selected_candidate=subject.selected_candidate,
@@ -779,6 +931,22 @@ def _load_authorized_subject(
         else None,
         loop_cleanup_artifact_ids=loop_cleanup_artifact_ids,
         loop_cleanup_payloads=loop_cleanup_payloads,
+        architecture_checkpoint_packet_dir=architecture_checkpoint_dir,
+        architecture_checkpoint_packet_id=_first_string(
+            architecture_checkpoint_payloads.get(
+                "architecture_evidence_risk_checkpoint_packet",
+                {},
+            ).get("packet_id"),
+            architecture_checkpoint_dir.name if architecture_checkpoint_dir else "",
+        )
+        or None,
+        architecture_checkpoint_packet_artifact_id=(
+            architecture_checkpoint_artifact.id
+            if architecture_checkpoint_artifact
+            else None
+        ),
+        architecture_checkpoint_artifact_ids=architecture_checkpoint_artifact_ids,
+        architecture_checkpoint_payloads=architecture_checkpoint_payloads,
         loop_review_packet_dir=loop_review_dir,
         loop_review_packet_id=str(loop_packet.get("packet_id") or loop_review_dir.name),
         loop_review_packet_artifact_id=loop_artifact.id if loop_artifact else None,
@@ -794,7 +962,7 @@ def _load_authorized_subject(
         next_generation_authorized=False,
         repeated_target_report=repeated_target_report,
         exhausted_or_attempted_target_ids=tuple(attempted_target_ids),
-        failed_target_status_map=subject.failed_target_status_map,
+        failed_target_status_map=failed_target_status_map,
         payloads=subject.payloads,
         selected_candidate=subject.selected_candidate,
         reader_state=subject.reader_state,
@@ -952,6 +1120,202 @@ def _validate_authorized_chain(
             "Next-target strategy refused; authorization reader-state packet does "
             "not match source synthesis."
         )
+
+
+def _latest_architecture_checkpoint_for_authorization(
+    config: AbiConfig,
+    *,
+    run_id: str,
+    authorization_packet_id: str,
+) -> Path | None:
+    base_dir = config.run_dir(run_id) / "architecture_evidence_risk_checkpoint"
+    if not base_dir.exists():
+        return None
+    packet_dirs = sorted(
+        [child for child in base_dir.glob("packet_*") if child.is_dir()],
+        key=lambda path: path.name,
+    )
+    for packet_dir in reversed(packet_dirs):
+        packet_path = packet_dir / "architecture_evidence_risk_checkpoint_packet.json"
+        if not packet_path.exists():
+            continue
+        envelope = read_json_file(packet_path)
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("source_authorization_packet_id") == authorization_packet_id:
+            return packet_dir
+    return None
+
+
+def _validate_architecture_checkpoint_chain(
+    *,
+    subject: StrategySubject,
+    authorization_packet_id: str,
+    cleanup_packet_id: str | None,
+    loop_packet_id: str,
+    checkpoint_payloads: dict[str, dict[str, Any]],
+) -> None:
+    packet = checkpoint_payloads["architecture_evidence_risk_checkpoint_packet"]
+    chain = checkpoint_payloads["active_evidence_chain_summary"]
+    hardcoded = checkpoint_payloads["hardcoded_packet_id_audit"]
+    generation_lock = checkpoint_payloads["generation_lock_and_authorization_audit"]
+    selected_id = str(subject.selected_candidate.get("packet_id") or "")
+    proof_id = str(subject.selected_candidate.get("proof_packet_id") or "")
+    reader_id = _first_string(
+        subject.selected_candidate.get("reader_state_packet_id"),
+        subject.reader_state.get("packet_id"),
+    )
+    checks = (
+        ("source_authorization_packet_id", authorization_packet_id),
+        ("current_best_candidate_packet_id", selected_id),
+        ("proof_packet_id", proof_id),
+        ("reader_state_packet_id", reader_id),
+        ("source_synthesis_packet_id", subject.synthesis_packet_id),
+        ("source_loop_review_packet_id", loop_packet_id),
+    )
+    for field_name, expected in checks:
+        value = _first_string(packet.get(field_name), chain.get(field_name))
+        if value != expected:
+            raise ValueError(
+                "Next-target strategy refused; architecture checkpoint "
+                f"{field_name}={value or '<missing>'} does not match active "
+                f"chain value {expected}."
+            )
+    if cleanup_packet_id:
+        cleanup_value = _first_string(
+            packet.get("source_cleanup_packet_id"),
+            chain.get("source_cleanup_packet_id"),
+        )
+        if cleanup_value != cleanup_packet_id:
+            raise ValueError(
+                "Next-target strategy refused; architecture checkpoint source "
+                "cleanup does not match the authorization chain."
+            )
+    if packet.get("next_generation_authorized") is True or generation_lock.get(
+        "next_generation_authorized"
+    ) is True:
+        raise ValueError(
+            "Next-target strategy refused; architecture checkpoint permits generation."
+        )
+    if _int_or_zero(hardcoded.get("unacceptable_hardcode_count")) > 0:
+        raise ValueError(
+            "Next-target strategy refused; architecture checkpoint reports "
+            "unacceptable hardcoded packet IDs."
+        )
+    for payload_name, payload in checkpoint_payloads.items():
+        if payload.get("finalization_eligible") is True:
+            raise ValueError(
+                "Next-target strategy refused; architecture checkpoint includes "
+                f"a finalization-eligible claim in {payload_name}."
+            )
+        if payload.get("phase_shift_claim") is True or payload.get(
+            "no_phase_shift_claim"
+        ) is False:
+            raise ValueError(
+                "Next-target strategy refused; architecture checkpoint includes "
+                f"a phase-shift claim in {payload_name}."
+            )
+
+
+def _failed_target_status_map_from_checkpoint(
+    checkpoint_payloads: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    failed_memory = checkpoint_payloads.get("failed_target_memory_report", {})
+    failed_targets = failed_memory.get("failed_targets")
+    if not isinstance(failed_targets, dict):
+        return {}
+    statuses: dict[str, dict[str, Any]] = {}
+    for target_id, raw_status in failed_targets.items():
+        if not isinstance(raw_status, dict):
+            continue
+        target = str(target_id)
+        failed_packet_ids = _string_list(raw_status.get("failed_packet_ids"))
+        statuses[target] = {
+            "target_id": target,
+            "target_status": _first_string(
+                raw_status.get("target_status"),
+                HOSTILE_SCAFFOLD_PAUSED_STATUS,
+            ),
+            "attempted": bool(failed_packet_ids),
+            "failed_attempt_count": len(failed_packet_ids),
+            "failed_packet_ids": failed_packet_ids,
+            "attempt_packet_ids": failed_packet_ids,
+            "failure_classes": _string_list(raw_status.get("failure_classes")),
+            "failure_classes_by_attempt": {},
+            "stop_test_triggered": bool(raw_status.get("paused_or_exhausted")),
+            "next_recommended_action": FAILED_TARGET_NEXT_ALLOWED_STATUS,
+            "next_allowed_status": FAILED_TARGET_NEXT_ALLOWED_STATUS,
+            "generation_retry_recommended": False,
+            "available_for_operator_selection": False,
+            "candidate_generation_authorized": False,
+            "broad_reuse_authorized": False,
+            "failed_packets_are_not_candidate_evidence": True,
+            "should_not_reuse_authorization_without_strategy_review": True,
+            "source_authorization_packet_id": raw_status.get(
+                "source_authorization_packet_id"
+            ),
+            "source_work_order_packet_id": raw_status.get("source_work_order_packet_id"),
+            "source_checkpoint_packet_id": checkpoint_payloads[
+                "architecture_evidence_risk_checkpoint_packet"
+            ].get("packet_id"),
+        }
+    return statuses
+
+
+def _architecture_checkpoint_intake(subject: StrategySubject) -> dict[str, object]:
+    if not subject.architecture_checkpoint_payloads:
+        return {
+            "architecture_checkpoint_reviewed": False,
+            "generation_locked_by_checkpoint": False,
+        }
+    packet = subject.architecture_checkpoint_payloads[
+        "architecture_evidence_risk_checkpoint_packet"
+    ]
+    legacy = subject.architecture_checkpoint_payloads["legacy_artifact_name_audit"]
+    hardcoded = subject.architecture_checkpoint_payloads["hardcoded_packet_id_audit"]
+    blockers = subject.architecture_checkpoint_payloads[
+        "unresolved_creative_blocker_summary"
+    ]
+    failed_memory = subject.architecture_checkpoint_payloads[
+        "failed_target_memory_report"
+    ]
+    failed_targets = failed_memory.get("failed_targets")
+    failed_target_ids = (
+        list(failed_targets)
+        if isinstance(failed_targets, dict)
+        else list(subject.failed_target_status_map)
+    )
+    return {
+        "checkpoint_packet_id": subject.architecture_checkpoint_packet_id,
+        "checkpoint_packet_dir": str(subject.architecture_checkpoint_packet_dir)
+        if subject.architecture_checkpoint_packet_dir
+        else None,
+        "checkpoint_packet_artifact_id": (
+            subject.architecture_checkpoint_packet_artifact_id
+        ),
+        "source_authorization_packet_id": packet.get("source_authorization_packet_id"),
+        "source_synthesis_packet_id": packet.get("source_synthesis_packet_id"),
+        "source_loop_review_packet_id": packet.get("source_loop_review_packet_id"),
+        "source_cleanup_packet_id": packet.get("source_cleanup_packet_id"),
+        "current_best_candidate_packet_id": packet.get(
+            "current_best_candidate_packet_id"
+        ),
+        "proof_packet_id": packet.get("proof_packet_id"),
+        "reader_state_packet_id": packet.get("reader_state_packet_id"),
+        "legacy_artifact_name_warning_count": legacy.get("warning_count", 0),
+        "hardcoded_packet_id_unacceptable_count": hardcoded.get(
+            "unacceptable_hardcode_count",
+            0,
+        ),
+        "unresolved_creative_blocker_count": blockers.get("blocker_count", 0),
+        "failed_local_residual_generation_targets": failed_target_ids,
+        "architecture_checkpoint_reviewed": True,
+        "generation_locked_by_checkpoint": True,
+        "checkpoint_permits_generation": packet.get("next_generation_authorized") is True,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+    }
 
 
 def _synthesis_only_refusal_message(
@@ -1440,6 +1804,22 @@ def _build_subject_manifest(subject: StrategySubject, packet_dir: Path) -> dict[
         else None,
         "authorization_packet_artifact_id": subject.authorization_packet_artifact_id,
         "source_authorization_packet_id": subject.authorization_packet_id,
+        "architecture_checkpoint_packet_id": subject.architecture_checkpoint_packet_id,
+        "architecture_checkpoint_packet_dir": str(
+            subject.architecture_checkpoint_packet_dir
+        )
+        if subject.architecture_checkpoint_packet_dir
+        else None,
+        "architecture_checkpoint_packet_artifact_id": (
+            subject.architecture_checkpoint_packet_artifact_id
+        ),
+        "architecture_checkpoint_reviewed": bool(
+            subject.architecture_checkpoint_payloads
+        ),
+        "generation_locked_by_checkpoint": bool(
+            subject.architecture_checkpoint_payloads
+        ),
+        "architecture_checkpoint_intake": _architecture_checkpoint_intake(subject),
         "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
         "source_loop_cleanup_packet_dir": str(subject.loop_cleanup_packet_dir)
         if subject.loop_cleanup_packet_dir
@@ -1489,6 +1869,7 @@ def _build_source_evidence_summary(subject: StrategySubject) -> dict[str, object
         "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
         "source_loop_review_packet_id": subject.loop_review_packet_id,
         "source_synthesis_packet_id": subject.synthesis_packet_id,
+        "architecture_checkpoint_intake": _architecture_checkpoint_intake(subject),
         "current_best_candidate_packet_id": selected.get("packet_id"),
         "proof_packet_id": selected.get("proof_packet_id"),
         "reader_state_packet_id": reader.get("packet_id"),
@@ -1686,19 +2067,35 @@ def _build_protected_effects_and_forbidden_changes(
 
 def _build_object_event_pressure_target_map(subject: StrategySubject) -> dict[str, object]:
     candidate_id = str(subject.selected_candidate.get("packet_id") or "current best")
+    checkpoint_aware = subject.architecture_checkpoint_packet_id is not None
     repeated = subject.repeated_target_report["repeated_target_detected"] is True
     target_name = (
-        SAFE_RESIDUAL_CHOICE_TARGET_ID if repeated else REPEATED_BROAD_TARGET_ID
+        CHECKPOINT_PRIMARY_TARGET_ID
+        if checkpoint_aware
+        else SAFE_RESIDUAL_CHOICE_TARGET_ID
+        if repeated
+        else REPEATED_BROAD_TARGET_ID
     )
     return {
         "target_name": target_name,
         "broad_target_class": REPEATED_BROAD_TARGET_ID,
+        "architecture_checkpoint_reviewed": checkpoint_aware,
         "repeated_target_detected": repeated,
         "same_broad_target_allowed": subject.repeated_target_report[
             "same_broad_target_allowed"
         ],
-        "primary_next_subtarget": "operator_choice_required" if repeated else None,
+        "primary_next_subtarget": "checkpoint_review_required"
+        if checkpoint_aware
+        else "operator_choice_required"
+        if repeated
+        else None,
         "purpose": (
+            "Use the architecture checkpoint to prevent another local target "
+            "treadmill; require operator review before choosing a non-exhausted "
+            "or nonlocal strategy."
+        )
+        if checkpoint_aware
+        else (
             "Stop broad object-event targeting from repeating by inertia; require "
             "operator choice among narrower residual subtargets."
         )
@@ -1752,10 +2149,16 @@ def _build_object_event_pressure_target_map(subject: StrategySubject) -> dict[st
 
 
 def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, object]:
+    checkpoint_aware = subject.architecture_checkpoint_packet_id is not None
     repeated = subject.repeated_target_report["repeated_target_detected"] is True
     attempted = set(subject.exhausted_or_attempted_target_ids)
     failed_targets = subject.failed_target_status_map
-    if repeated:
+    if checkpoint_aware:
+        primary_next_target = CHECKPOINT_PRIMARY_TARGET_ID
+        primary_next_subtarget = "operator_checkpoint_review_required"
+        next_recommended_action = CHECKPOINT_RECOMMENDED_ACTION
+        strategy_decision = "checkpoint_aware_strategy_requires_operator_review"
+    elif repeated:
         primary_next_target = SAFE_RESIDUAL_CHOICE_TARGET_ID
         primary_next_subtarget = "operator_choice_required"
         next_recommended_action = SAFE_RESIDUAL_CHOICE_ACTION
@@ -1777,8 +2180,19 @@ def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, obj
         "available_option_ids": [
             option_id
             for option_id, _description in RESIDUAL_TARGET_OPTIONS
-            if option_id not in attempted and option_id not in failed_targets
+            if not checkpoint_aware
+            and option_id not in attempted
+            and option_id not in failed_targets
         ],
+        "checkpoint_plausible_direction_ids": list(CHECKPOINT_ALLOWED_DIRECTION_IDS)
+        if checkpoint_aware
+        else [],
+        "previously_integrated_current_best_path_target_ids": list(
+            CURRENT_BEST_PATH_TARGET_IDS
+        )
+        if checkpoint_aware
+        else [],
+        "architecture_checkpoint_intake": _architecture_checkpoint_intake(subject),
         "specific_residual_options": [
             _build_residual_target_option(
                 option_id,
@@ -1800,6 +2214,9 @@ def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, obj
         "next_recommended_action": next_recommended_action,
         "next_strategy_authorized": subject.next_strategy_authorized,
         "next_generation_authorized": False,
+        "architecture_checkpoint_reviewed": checkpoint_aware,
+        "generation_locked_by_checkpoint": checkpoint_aware,
+        "architecture_checkpoint_packet_id": subject.architecture_checkpoint_packet_id,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -1844,6 +2261,47 @@ def _build_residual_target_option(
             "candidate_generation_authorized": False,
             "not_candidate_evidence": True,
         }
+    if subject.architecture_checkpoint_packet_id is not None:
+        if option_id in CURRENT_BEST_PATH_TARGET_IDS:
+            return {
+                "option_id": option_id,
+                "description": description,
+                "status": "previously_integrated_current_best_path",
+                "source_evidence_basis": _residual_option_basis(option_id, subject),
+                "available_for_operator_selection": False,
+                "available_for_immediate_selection": False,
+                "history_only": True,
+                "current_best_path_integrated": True,
+                "explicit_future_override_required": True,
+                "broad_reuse_authorized": False,
+                "operator_may_select_narrower_subtarget": False,
+                "candidate_generation_authorized": False,
+            }
+        if option_id in CHECKPOINT_ALLOWED_DIRECTION_IDS:
+            return {
+                "option_id": option_id,
+                "description": description,
+                "status": "plausible_checkpoint_direction_requires_operator_review",
+                "source_evidence_basis": _residual_option_basis(option_id, subject),
+                "available_for_operator_selection": False,
+                "available_for_immediate_selection": False,
+                "history_only": False,
+                "explicit_future_strategy_required": True,
+                "broad_reuse_authorized": False,
+                "operator_may_select_narrower_subtarget": False,
+                "candidate_generation_authorized": False,
+            }
+        return {
+            "option_id": option_id,
+            "description": description,
+            "status": "not_recommended_after_architecture_checkpoint",
+            "source_evidence_basis": _residual_option_basis(option_id, subject),
+            "available_for_operator_selection": False,
+            "available_for_immediate_selection": False,
+            "broad_reuse_authorized": False,
+            "operator_may_select_narrower_subtarget": False,
+            "candidate_generation_authorized": False,
+        }
     status = (
         "attempted_handle_requires_narrower_subtarget"
         if option_id in attempted
@@ -1862,11 +2320,14 @@ def _build_residual_target_option(
 
 
 def _build_candidate_region_pressure_map(subject: StrategySubject) -> dict[str, object]:
-    residual_target = (
-        SAFE_RESIDUAL_CHOICE_TARGET_ID
-        if subject.repeated_target_report["repeated_target_detected"] is True
-        else REPEATED_BROAD_TARGET_ID
-    )
+    checkpoint_aware = subject.architecture_checkpoint_packet_id is not None
+    repeated = subject.repeated_target_report["repeated_target_detected"] is True
+    if checkpoint_aware:
+        residual_target = CHECKPOINT_PRIMARY_TARGET_ID
+    elif repeated:
+        residual_target = SAFE_RESIDUAL_CHOICE_TARGET_ID
+    else:
+        residual_target = REPEATED_BROAD_TARGET_ID
     return {
         "regions": [
             _region(
@@ -1910,8 +2371,10 @@ def _build_candidate_region_pressure_map(subject: StrategySubject) -> dict[str, 
         "primary_pressure_need": residual_target,
         "broad_blocker_class": REPEATED_BROAD_TARGET_ID,
         "operator_must_select_specific_residual_subtarget": (
-            subject.repeated_target_report["repeated_target_detected"] is True
+            checkpoint_aware
+            or subject.repeated_target_report["repeated_target_detected"] is True
         ),
+        "architecture_checkpoint_reviewed": checkpoint_aware,
         "not_candidate_artifact": True,
         "no_phase_shift_claim": True,
         "worker": "candidate_region_pressure_map_v1_controller",
@@ -1923,48 +2386,77 @@ def _build_next_intervention_strategy(
     blocker_summary: dict[str, object],
 ) -> dict[str, object]:
     candidate_id = str(subject.selected_candidate.get("packet_id") or "current best")
+    checkpoint_aware = subject.architecture_checkpoint_packet_id is not None
     repeated = subject.repeated_target_report["repeated_target_detected"] is True
-    return {
-        "recommended_action": SAFE_RESIDUAL_CHOICE_ACTION
-        if repeated
-        else "request_operator_review_before_generation",
-        "secondary_recommendation": "choose_narrow_residual_subtarget_before_generation"
-        if repeated
-        else "prepare_bounded_object_event_pressure_recomposition",
-        "strategy": [
+    if checkpoint_aware:
+        recommended_action = CHECKPOINT_RECOMMENDED_ACTION
+        secondary_recommendation = "choose_non_exhausted_target_after_checkpoint_review"
+        next_creative_action = "operator-reviewed checkpoint-aware nonlocal strategy selection"
+        primary_next_target = CHECKPOINT_PRIMARY_TARGET_ID
+        primary_next_subtarget = "operator_checkpoint_review_required"
+        strategy_steps = [
+            f"preserve {candidate_id} as current best candidate",
+            "consume the architecture/evidence-risk checkpoint before target selection",
+            "do not retry hostile scaffold or ending-return generation from the failed paths",
+            "treat object motion and tactile inevitability as current-best-path history, not naive repeat targets",
+            "checkpoint-aware planning remains strategy-only",
+            "choose a non-exhausted or nonlocal strategy only after operator review",
+            "do not run another proof/no-answer macro cycle by inertia",
+        ]
+    elif repeated:
+        recommended_action = SAFE_RESIDUAL_CHOICE_ACTION
+        secondary_recommendation = "choose_narrow_residual_subtarget_before_generation"
+        next_creative_action = "operator-selected residual subtarget strategy before any generation"
+        primary_next_target = SAFE_RESIDUAL_CHOICE_TARGET_ID
+        primary_next_subtarget = "operator_choice_required"
+        strategy_steps = [
             f"preserve {candidate_id} as current best candidate",
             "consume the supervised authorization packet before strategy planning"
             if subject.input_mode == "authorization"
             else "consume the source synthesis packet",
-            "do not repeat the broad object-event target without a narrower residual subtarget"
-            if repeated
-            else "prepare a bounded object-event pressure strategy brief",
+            "do not repeat the broad object-event target without a narrower residual subtarget",
             "require operator review before generation",
-            "if later authorized, target only the selected residual subtarget"
-            if repeated
-            else "if authorized, target first-read object-event pressure / lived object causality",
+            "if later authorized, target only the selected residual subtarget",
             "do not run another proof/no-answer macro cycle by inertia",
-            "do not retry hostile scaffold visibility from the failed path without "
-            "a separate strategy review"
-            if HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
-            in subject.failed_target_status_map
-            else "no paused failed-target retry path is active",
-        ],
+        ]
+    else:
+        recommended_action = "request_operator_review_before_generation"
+        secondary_recommendation = "prepare_bounded_object_event_pressure_recomposition"
+        next_creative_action = (
+            "bounded object-event pressure recomposition focused on first-read "
+            "lived object causality"
+        )
+        primary_next_target = REPEATED_BROAD_TARGET_ID
+        primary_next_subtarget = "object_event_pressure_operationalization"
+        strategy_steps = [
+            f"preserve {candidate_id} as current best candidate",
+            "consume the supervised authorization packet before strategy planning"
+            if subject.input_mode == "authorization"
+            else "consume the source synthesis packet",
+            "prepare a bounded object-event pressure strategy brief",
+            "require operator review before generation",
+            "if authorized, target first-read object-event pressure / lived object causality",
+            "do not run another proof/no-answer macro cycle by inertia",
+        ]
+    strategy_steps.append(
+        "do not retry hostile scaffold visibility from the failed path without "
+        "a separate strategy review"
+        if HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID in subject.failed_target_status_map
+        else "no paused failed-target retry path is active"
+    )
+    return {
+        "recommended_action": recommended_action,
+        "secondary_recommendation": secondary_recommendation,
+        "strategy": strategy_steps,
         "top_ranked_blocker": blocker_summary["top_blocker_id"],
-        "next_creative_action_if_authorized": (
-            "operator-selected residual subtarget strategy before any generation"
-            if repeated
-            else (
-                "bounded object-event pressure recomposition focused on first-read "
-                "lived object causality"
-            )
-        ),
-        "primary_next_target": SAFE_RESIDUAL_CHOICE_TARGET_ID
-        if repeated
-        else REPEATED_BROAD_TARGET_ID,
-        "primary_next_subtarget": "operator_choice_required"
-        if repeated
-        else "object_event_pressure_operationalization",
+        "next_creative_action_if_authorized": next_creative_action,
+        "primary_next_target": primary_next_target,
+        "primary_next_subtarget": primary_next_subtarget,
+        "architecture_checkpoint_reviewed": checkpoint_aware,
+        "generation_locked_by_checkpoint": checkpoint_aware,
+        "checkpoint_plausible_direction_ids": list(CHECKPOINT_ALLOWED_DIRECTION_IDS)
+        if checkpoint_aware
+        else [],
         "repeated_target_detected": repeated,
         "same_broad_target_allowed": subject.repeated_target_report[
             "same_broad_target_allowed"
@@ -1981,13 +2473,24 @@ def _build_next_intervention_strategy(
 
 def _build_ablation_and_reader_eval_plan(subject: StrategySubject) -> dict[str, object]:
     candidate_id = str(subject.selected_candidate.get("packet_id") or "current best")
+    checkpoint_aware = subject.architecture_checkpoint_packet_id is not None
     repeated = subject.repeated_target_report["repeated_target_detected"] is True
+    if checkpoint_aware:
+        verification_step = "first choose a checkpoint-aware non-exhausted strategy"
+        primary_next_target = CHECKPOINT_PRIMARY_TARGET_ID
+        primary_next_subtarget = "operator_checkpoint_review_required"
+    elif repeated:
+        verification_step = "verify the operator-selected residual subtarget is actually addressed"
+        primary_next_target = SAFE_RESIDUAL_CHOICE_TARGET_ID
+        primary_next_subtarget = "operator_choice_required"
+    else:
+        verification_step = "verify first-read object-event pressure is actually addressed"
+        primary_next_target = REPEATED_BROAD_TARGET_ID
+        primary_next_subtarget = "object_event_pressure_operationalization"
     return {
         "if_future_candidate_is_generated": [
             f"execute ablation against {candidate_id}",
-            "verify the operator-selected residual subtarget is actually addressed"
-            if repeated
-            else "verify first-read object-event pressure is actually addressed",
+            verification_step,
             "include a revert of the object-event pressure intervention",
             "isolate the object-event pressure intervention",
             "include an over-vividness / decorative-detail control",
@@ -2009,12 +2512,9 @@ def _build_ablation_and_reader_eval_plan(subject: StrategySubject) -> dict[str, 
             "hostile scaffold risk",
         ],
         "requires_operator_selected_residual_subtarget": repeated,
-        "primary_next_target": SAFE_RESIDUAL_CHOICE_TARGET_ID
-        if repeated
-        else REPEATED_BROAD_TARGET_ID,
-        "primary_next_subtarget": "operator_choice_required"
-        if repeated
-        else "object_event_pressure_operationalization",
+        "requires_checkpoint_review_before_target_selection": checkpoint_aware,
+        "primary_next_target": primary_next_target,
+        "primary_next_subtarget": primary_next_subtarget,
         "next_candidate_generated": False,
         "ablation_completed_for_next_candidate": False,
         "reader_state_eval_completed_for_next_candidate": False,
@@ -2033,6 +2533,7 @@ def _build_gate_report(
     reader = subject.reader_state
     repeated = subject.repeated_target_report["repeated_target_detected"] is True
     same_broad_allowed = subject.repeated_target_report["same_broad_target_allowed"] is True
+    checkpoint_aware = subject.architecture_checkpoint_packet_id is not None
     gate_results = [
         _gate_result(
             "authorization_packet_consumed",
@@ -2128,6 +2629,24 @@ def _build_gate_report(
             record=False,
         ),
     ]
+    if checkpoint_aware:
+        gate_results.extend(
+            [
+                _gate_result("architecture_checkpoint_consumed", True),
+                _gate_result("generation_locked_by_architecture_checkpoint", True),
+                _gate_result(
+                    "checkpoint_failed_targets_withheld_from_selection",
+                    all(
+                        target_id in subject.failed_target_status_map
+                        for target_id in (
+                            HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+                            ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+                        )
+                    ),
+                ),
+                _gate_result("checkpoint_unacceptable_hardcodes_absent", True),
+            ]
+        )
     failed_gates = [
         str(gate["gate_name"]) for gate in gate_results if not bool(gate["passed"])
     ]
@@ -2152,6 +2671,9 @@ def _build_gate_report(
         "phase_shift_claim": False,
         "strongest_rival_still_blocks": True,
         "operator_review_required_before_generation": True,
+        "architecture_checkpoint_reviewed": checkpoint_aware,
+        "architecture_checkpoint_packet_id": subject.architecture_checkpoint_packet_id,
+        "generation_locked_by_checkpoint": checkpoint_aware,
         "failed_target_status_map": subject.failed_target_status_map,
         "gate_results": gate_results,
         "failed_gates": failed_gates,
@@ -2159,6 +2681,11 @@ def _build_gate_report(
         "final_gates_marked_passed": [],
         "unresolved_blockers": blockers,
         "summary_verdict": (
+            "Next-target strategy consumed the architecture/evidence-risk "
+            "checkpoint and withholds target selection until operator review."
+        )
+        if checkpoint_aware
+        else (
             "Next-target strategy consumed supervised authorization and blocks "
             "repeated broad targeting until the operator chooses a narrower "
             "residual subtarget."
@@ -2200,12 +2727,32 @@ def _build_packet_summary(
             "candidate_artifacts_created": 0,
         },
         "source_synthesis_packet_id": subject.synthesis_packet_id,
+        "source_synthesis_packet_dir": str(subject.synthesis_packet_dir),
         "authorization_packet_id": subject.authorization_packet_id,
         "source_authorization_packet_id": subject.authorization_packet_id,
+        "architecture_checkpoint_packet_id": subject.architecture_checkpoint_packet_id,
+        "architecture_checkpoint_packet_dir": str(
+            subject.architecture_checkpoint_packet_dir
+        )
+        if subject.architecture_checkpoint_packet_dir
+        else None,
+        "architecture_checkpoint_reviewed": bool(
+            subject.architecture_checkpoint_payloads
+        ),
+        "generation_locked_by_checkpoint": bool(
+            subject.architecture_checkpoint_payloads
+        ),
+        "architecture_checkpoint_intake": _architecture_checkpoint_intake(subject),
         "source_loop_cleanup_packet_id": subject.loop_cleanup_packet_id,
+        "source_loop_cleanup_packet_dir": str(subject.loop_cleanup_packet_dir)
+        if subject.loop_cleanup_packet_dir
+        else None,
         "cleanup_checkpoint_consumed": subject.loop_cleanup_packet_id is not None,
         "loop_review_packet_id": subject.loop_review_packet_id,
         "source_loop_review_packet_id": subject.loop_review_packet_id,
+        "source_loop_review_packet_dir": str(subject.loop_review_packet_dir)
+        if subject.loop_review_packet_dir
+        else None,
         "completed_cycles": subject.completed_cycles,
         "next_strategy_authorized": subject.next_strategy_authorized,
         "next_generation_authorized": subject.next_generation_authorized,
@@ -2422,6 +2969,7 @@ def _refusal(
     *,
     synthesis_packet: Path | None = None,
     authorization_packet: Path | None = None,
+    architecture_risk_checkpoint: Path | None = None,
     message: str,
 ) -> NextTargetStrategyResult:
     payload = {
@@ -2431,6 +2979,9 @@ def _refusal(
         "synthesis_packet": str(synthesis_packet) if synthesis_packet else None,
         "authorization_packet": str(authorization_packet)
         if authorization_packet
+        else None,
+        "architecture_risk_checkpoint": str(architecture_risk_checkpoint)
+        if architecture_risk_checkpoint
         else None,
         "candidate_generated": False,
         "counts": {"model_calls": 0, "candidate_artifacts_created": 0},

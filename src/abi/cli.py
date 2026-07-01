@@ -495,6 +495,12 @@ def build_parser() -> argparse.ArgumentParser:
             "authorization-aware next-target planning."
         ),
     )
+    autonomous_plan_next_target_parser.add_argument(
+        "--architecture-risk-checkpoint",
+        type=Path,
+        required=False,
+        help="Architecture/evidence-risk checkpoint packet directory to consume.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -846,6 +852,7 @@ def main(argv: list[str] | None = None) -> int:
             config,
             synthesis_packet=args.synthesis_packet,
             authorization_packet=args.authorization_packet,
+            architecture_risk_checkpoint=args.architecture_risk_checkpoint,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1270,11 +1277,13 @@ def _cmd_autonomous_plan_next_target(
     *,
     synthesis_packet: Path | None,
     authorization_packet: Path | None,
+    architecture_risk_checkpoint: Path | None,
 ) -> int:
     result = run_next_target_strategy(
         config,
         synthesis_packet=synthesis_packet,
         authorization_packet=authorization_packet,
+        architecture_risk_checkpoint=architecture_risk_checkpoint,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
