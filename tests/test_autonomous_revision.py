@@ -118,6 +118,10 @@ from abi.modules.residual_target_selection import (
     run_residual_target_selection,
 )
 from abi.modules.residual_targets import (
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    ENDING_RETURN_GENERATION_CONTRACT_VERSION,
+    ENDING_RETURN_REGION_ID,
+    ENDING_RETURN_WORK_ORDER_CONTRACT_VERSION,
     HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION,
     HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID,
     HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
@@ -9212,6 +9216,74 @@ def test_residual_target_selection_accepts_tactile_inevitability_gap(tmp_path):
     assert packet["work_order_adapter"] == "tactile_inevitability"
 
 
+def test_residual_target_selection_accepts_ending_explains_return_risk(tmp_path):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_target_selection(
+        config,
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == (
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    )
+    assert result.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["next_allowed_action"] == (
+        "prepare_ending_explains_return_risk_work_order"
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["next_strategy_or_work_order_authorized"] is True
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    contract = read_payload(packet_dir / "selected_residual_target_contract.json")
+    assert contract["selected_residual_target_id"] == (
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    )
+    assert contract["target_definition"]["final_return_should_enact_not_explain"] is True
+    assert "explaining return more explicitly" in contract["forbidden_under_this_target"]
+    protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
+    assert "opening-return relation" in protected["protected_effects"]
+    assert "strongest-rival pressure preservation" in protected["protected_effects"]
+    assert "returning to hostile scaffold generation" in protected["forbidden_changes"]
+
+    scope = read_payload(packet_dir / "next_work_order_scope.json")
+    assert scope["work_order_adapter"] == "ending_return_risk"
+    assert scope["next_allowed_action"] == (
+        "prepare_ending_explains_return_risk_work_order"
+    )
+    assert scope["candidate_generation_authorized"] is False
+    assert scope["future_generation_requires_separate_authorization"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
 def test_residual_target_selection_accepts_hostile_scaffold_visibility_and_normalizes_stale_best(
     tmp_path,
 ):
@@ -9313,6 +9385,7 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     object_adapter = require_residual_target_adapter(OBJECT_MOTION_CAUSALITY_TARGET_ID)
     tactile_adapter = require_residual_target_adapter(TACTILE_INEVITABILITY_TARGET_ID)
     hostile_adapter = require_residual_target_adapter(HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID)
+    ending_adapter = require_residual_target_adapter(ENDING_EXPLAINS_RETURN_RISK_TARGET_ID)
 
     assert object_adapter.generation_contract_version == (
         OBJECT_MOTION_GENERATION_CONTRACT_VERSION
@@ -9332,6 +9405,13 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
         HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION
     )
     assert hostile_adapter.adapter_id == "hostile_scaffold_visibility"
+    assert ending_adapter.adapter_id == "ending_return_risk"
+    assert ending_adapter.work_order_contract_version == (
+        ENDING_RETURN_WORK_ORDER_CONTRACT_VERSION
+    )
+    assert ending_adapter.generation_contract_version == (
+        ENDING_RETURN_GENERATION_CONTRACT_VERSION
+    )
     assert object_adapter.materiality_policy.policy_id
     assert tactile_adapter.materiality_policy.policy_id
     assert hostile_adapter.materiality_policy.policy_id == (
@@ -9357,6 +9437,12 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     )
     assert "scaffold_leakage_failures" in (
         hostile_adapter.materiality_policy.failure_report_fields
+    )
+    assert ending_adapter.materiality_policy.primary_materiality_scope == (
+        "planning_only"
+    )
+    assert target_generation_readiness_failures(
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
     )
     assert target_generation_readiness_failures(
         HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
@@ -9671,6 +9757,188 @@ def test_residual_work_order_accepts_hostile_scaffold_visibility_selection(
     assert gates["no_openai_calls"]["passed"] is True
     assert gates["candidate_generation_authorized"]["passed"] is False
     assert gate["finalization_eligible"] is False
+
+    with connect(chain["config"].db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_residual_work_order_accepts_ending_explains_return_risk_selection(
+    tmp_path,
+):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert selection.exit_code == 0
+    with connect(chain["config"].db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["current_best_candidate_packet_id"] == chain["object_event"][
+        "packet_id"
+    ]
+    assert result.payload["proof_packet_id"] == chain["object_event_proof"]["packet_id"]
+    assert result.payload["reader_state_packet_id"] == chain["object_event_reader_state"][
+        "packet_id"
+    ]
+    assert result.payload["selected_residual_target_id"] == (
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    )
+    assert result.payload["target_adapter_id"] == "ending_return_risk"
+    assert result.payload["selected_region_id"] == ENDING_RETURN_REGION_ID
+    assert result.payload["next_recommended_action"] == (
+        "review_ending_explains_return_risk_work_order_before_generation_authorization"
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    subject = read_payload(packet_dir / "residual_work_order_subject_manifest.json")
+    assert subject["target_adapter_id"] == "ending_return_risk"
+    assert subject["selected_region_id"] == ENDING_RETURN_REGION_ID
+    assert subject["work_order_contract_version"] == (
+        ENDING_RETURN_WORK_ORDER_CONTRACT_VERSION
+    )
+    assert subject["generation_contract_version"] == (
+        ENDING_RETURN_GENERATION_CONTRACT_VERSION
+    )
+
+    inventory = read_payload(packet_dir / "current_candidate_region_inventory.json")
+    final_region = [
+        region
+        for region in inventory["regions"]
+        if region["region_id"] == ENDING_RETURN_REGION_ID
+    ][0]
+    middle_region = [
+        region
+        for region in inventory["regions"]
+        if region["region_id"] == RESIDUAL_WORK_ORDER_SELECTED_REGION_ID
+    ][0]
+    assert final_region["eligible_for_ending_explains_return_risk_work"] is True
+    assert middle_region["eligible_for_ending_explains_return_risk_work"] is False
+    assert inventory["selected_region_candidate"] == ENDING_RETURN_REGION_ID
+
+    selected_region = read_payload(packet_dir / "selected_intervention_region.json")
+    selected_region_text = " ".join(
+        selected_region["selected_region_before_text"].split()
+    )
+    assert selected_region["selected_region_id"] == ENDING_RETURN_REGION_ID
+    assert selected_region["strategy_evidence_points_to_region"] is True
+    assert selected_region["region_change_authorized_now"] is False
+    assert "final-return region" in selected_region["selection_reason"]
+    assert "final_return_opening_transformation_region" in (
+        selected_region["selected_region_id"]
+    )
+
+    diagnostic = read_payload(packet_dir / "object_motion_causality_diagnostic.json")
+    assert diagnostic["diagnostic_kind"] == "ending_explains_return_risk_diagnostic"
+    assert diagnostic["likely_strongest_candidate_region"] == ENDING_RETURN_REGION_ID
+    categories = {
+        finding["category"] for finding in diagnostic["diagnostic_findings"]
+    }
+    assert "final_return_explains_rather_than_enacts" in categories
+    assert "middle_recurrence_protection" in categories
+
+    unit_map = read_payload(packet_dir / "object_motion_target_unit_map.json")
+    assert unit_map["selected_residual_target_id"] == (
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    )
+    assert unit_map["unit_map_kind"] == "ending_return_risk"
+    assert unit_map["selected_region_id"] == ENDING_RETURN_REGION_ID
+    assert unit_map["material_target_units_all_inside_selected_region"] is True
+    unit_ids = {unit["unit_id"] for unit in unit_map["target_units"]}
+    assert {
+        "final_return_enacts_not_explains",
+        "opening_return_relation_without_thesis",
+        "no_reset_return_pressure",
+        "same_object_field_returns_without_summary",
+        "proof_no_answer_carry_preserved",
+    } <= unit_ids
+    for unit in unit_map["target_units"]:
+        assert " ".join(unit["before_text"].split()) in selected_region_text
+        assert unit["source_region_id"] == ENDING_RETURN_REGION_ID
+        assert unit["source_span"]["region_id"] == ENDING_RETURN_REGION_ID
+        assert unit["source_span"]["contained_in_selected_region"] is True
+        assert unit["before_text_sha256"]
+        assert unit["future_generation_authorized"] is False
+        assert "explain return more explicitly" in unit["forbidden_operation"]
+
+    protected_reference_ids = {
+        unit["reference_unit_id"] for unit in unit_map["protected_reference_units"]
+    }
+    assert {
+        "opening_table_field_reference",
+        "middle_recurrence_object_field_reference",
+        "proof_no_answer_pressure_reference",
+    } <= protected_reference_ids
+    assert "middle_recurrence_object_field_reference" not in unit_ids
+    for unit in unit_map["protected_reference_units"]:
+        assert unit["material_change_required"] is False
+        assert unit["future_generation_authorized"] is False
+        assert unit["source_region_id"] != ENDING_RETURN_REGION_ID
+
+    contract = read_payload(packet_dir / "future_generation_contract.json")
+    assert contract["selected_region_id"] == ENDING_RETURN_REGION_ID
+    assert contract["future_generation_requires_separate_authorization"] is True
+    assert contract["candidate_generation_authorized"] is False
+    assert contract["generation_contract_version"] == (
+        ENDING_RETURN_GENERATION_CONTRACT_VERSION
+    )
+    assert "proof_no_answer_preservation_control" in contract[
+        "target_specific_ablation_controls"
+    ]
+    assert "final return enacts rather than explains" in contract[
+        "target_specific_reader_state_focus"
+    ]
+
+    protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
+    assert "object/tactile causal field" in protected["protected_effects"]
+    assert "proof/no-answer pressure" in protected["protected_effects"]
+    assert "opening-return relation" in protected["protected_effects"]
+    assert "hostile path paused/exhausted" in protected["protected_effects"]
+    assert "explaining return more explicitly" in protected["forbidden_changes"]
+
+    plan = read_payload(packet_dir / "ablation_and_reader_eval_plan.json")
+    assert "revert_ending_return_intervention" in plan["future_ablation_controls"]
+    assert "strongest_rival_comparison" in plan["future_ablation_controls"]
+    assert "reread transformation" in plan["future_reader_state_eval_focus"]
+    assert plan["ablation_authorized"] is False
+    assert plan["reader_state_eval_authorized"] is False
+
+    gate = read_payload(packet_dir / "residual_work_order_gate_report.json")
+    gates = {item["gate_name"]: item for item in gate["gate_results"]}
+    assert gates["target_adapter_resolved"]["passed"] is True
+    assert gates["bounded_region_selected"]["passed"] is True
+    assert gates["target_units_created"]["passed"] is True
+    assert gates["target_units_inside_selected_region"]["passed"] is True
+    assert gates["no_openai_calls"]["passed"] is True
+    assert gates["candidate_generation_authorized"]["passed"] is False
+    assert gate["finalization_eligible"] is False
+
+    preflight_payloads = {
+        artifact_type: read_payload(packet_dir / f"{artifact_type}.json")
+        for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    }
+    assert semantic_preflight_failures_for_work_order(preflight_payloads) == []
 
     with connect(chain["config"].db_path) as connection:
         after_calls = list_model_calls(connection)

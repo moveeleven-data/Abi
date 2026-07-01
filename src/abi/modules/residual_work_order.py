@@ -25,6 +25,8 @@ from abi.packets import (
     read_json_file,
 )
 from abi.modules.residual_targets import (
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    ENDING_RETURN_REGION_ID,
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     SELECTED_REGION_ID,
@@ -772,7 +774,7 @@ def _build_subject_manifest(
         "target_mechanism_description": subject.target_spec.mechanism_description,
         "work_order_adapter": subject.target_spec.work_order_adapter,
         **target_adapter_metadata(subject.selected_target_id),
-        "selected_region_id": SELECTED_REGION_ID,
+        "selected_region_id": _selected_region_id(subject),
         **subject.supersession,
         "new_canonical_work_order_packet_id": (
             packet_dir.name
@@ -821,6 +823,7 @@ def _build_selection_intake(subject: ResidualWorkOrderSubject) -> dict[str, obje
 
 def _build_region_inventory(subject: ResidualWorkOrderSubject) -> dict[str, object]:
     paragraphs = _paragraphs(subject.candidate.text)
+    final_return_start = 10 if len(paragraphs) > 10 else max(len(paragraphs) - 1, 0)
     regions = [
         _region(
             region_id="opening_table_dust_spoon_saucer_ring_field",
@@ -874,8 +877,8 @@ def _build_region_inventory(subject: ResidualWorkOrderSubject) -> dict[str, obje
         _region(
             region_id="final_return_opening_transformation_region",
             paragraphs=paragraphs,
-            start=10,
-            end=10,
+            start=final_return_start,
+            end=final_return_start,
             function="returns to opening field with altered relation",
             protected_effects=[
                 "final-return gains",
@@ -891,7 +894,7 @@ def _build_region_inventory(subject: ResidualWorkOrderSubject) -> dict[str, obje
         "candidate_text_sha256": subject.candidate.text_sha256,
         "regions": regions,
         "region_count": len(regions),
-        "selected_region_candidate": SELECTED_REGION_ID,
+        "selected_region_candidate": _selected_region_id(subject),
         "selected_residual_target_id": subject.selected_target_id,
         "target_mechanism_description": subject.target_spec.mechanism_description,
         "candidate_generated": False,
@@ -927,6 +930,9 @@ def _region(
         "eligible_for_object_motion_causality_specificity_work": eligible,
         "eligible_for_tactile_inevitability_gap_work": eligible,
         "eligible_for_hostile_scaffold_visibility_work": eligible,
+        "eligible_for_ending_explains_return_risk_work": (
+            region_id == ENDING_RETURN_REGION_ID
+        ),
         "reason": reason,
     }
 
@@ -935,7 +941,7 @@ def _build_diagnostic(
     subject: ResidualWorkOrderSubject,
     inventory: dict[str, object],
 ) -> dict[str, object]:
-    selected_region = _find_region(inventory, SELECTED_REGION_ID)
+    selected_region = _find_region(inventory, _selected_region_id(subject))
     if subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID:
         return {
             "selected_residual_target_id": subject.selected_target_id,
@@ -1068,6 +1074,69 @@ def _build_diagnostic(
             "no_phase_shift_claim": True,
             "worker": "hostile_scaffold_visibility_diagnostic_v1_controller",
         }
+    if subject.selected_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return {
+            "selected_residual_target_id": subject.selected_target_id,
+            "diagnostic_kind": "ending_explains_return_risk_diagnostic",
+            "legacy_artifact_name": "object_motion_causality_diagnostic",
+            "artifact_name_compatibility_reason": (
+                "residual work-order packet contract still expects this artifact "
+                "filename; target_adapter_id and diagnostic_kind are authoritative"
+            ),
+            "current_best_candidate_packet_id": subject.candidate.packet_id,
+            "diagnostic_findings": [
+                {
+                    "category": "final_return_explains_rather_than_enacts",
+                    "status": "active_return_risk",
+                    "evidence": _selected_option_evidence(subject)
+                    or ["final return remains improved but unproven"],
+                },
+                {
+                    "category": "opening_return_relation",
+                    "status": "must_transform_without_thesis",
+                    "evidence": [
+                        "future work must let the final return alter the opening relation through the field"
+                    ],
+                },
+                {
+                    "category": "proof_no_answer_carry",
+                    "status": "protected_pressure_to_preserve",
+                    "evidence": [
+                        "proof/no-answer pressure must carry into return without becoming an answer"
+                    ],
+                },
+                {
+                    "category": "middle_recurrence_protection",
+                    "status": "not_selected_by_inertia",
+                    "evidence": [
+                        "middle object-event/tactile gains are protected reference material"
+                    ],
+                },
+                {
+                    "category": "strongest_rival_pressure",
+                    "status": "blocking_pressure_preserved",
+                    "evidence": ["strongest rival remains pressure, not defeated evidence"],
+                },
+            ],
+            "likely_strongest_candidate_region": ENDING_RETURN_REGION_ID,
+            "selected_region_text_excerpt": selected_region.get("text_excerpt"),
+            "middle_recurrence_protection": (
+                "middle recurrence is protected reference material for this target; "
+                "it is not selected again by inertia"
+            ),
+            "proof_no_answer_region_protection": (
+                "proof/no-answer pressure is protected outside the selected ending region"
+            ),
+            "summary": (
+                "Ending-return risk targets the final-return region so the ending "
+                "can enact, rather than explain, the opening transformation."
+            ),
+            "candidate_generated": False,
+            "model_calls": 0,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+            "worker": "ending_explains_return_risk_diagnostic_v1_controller",
+        }
     return {
         "selected_residual_target_id": subject.selected_target_id,
         "current_best_candidate_packet_id": subject.candidate.packet_id,
@@ -1139,8 +1208,9 @@ def _build_selected_region(
     subject: ResidualWorkOrderSubject,
     inventory: dict[str, object],
 ) -> dict[str, object]:
-    selected_region = _find_region(inventory, SELECTED_REGION_ID)
-    selected_text = _region_text(subject.candidate.text, SELECTED_REGION_ID)
+    selected_region_id = _selected_region_id(subject)
+    selected_region = _find_region(inventory, selected_region_id)
+    selected_text = _region_text(subject.candidate.text, selected_region_id)
     if subject.selected_target_id == TACTILE_INEVITABILITY_TARGET_ID:
         selection_reason = (
             "The strategy evidence marks this bounded middle recurrence region "
@@ -1154,13 +1224,19 @@ def _build_selected_region(
             "with narrow proof and return units protected for later authorized work "
             "rather than broad rewrite."
         )
+    elif subject.selected_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        selection_reason = (
+            "The operator selected ending-return risk, so the bounded ending/final-return "
+            "region is the editable planning scope. Opening, middle recurrence, and "
+            "proof/no-answer material are protected references, not material target units."
+        )
     else:
         selection_reason = (
             "This region already contains object motion and implied consequence; "
             "it is the narrowest bounded place to sharpen causality before explanation."
         )
     return {
-        "selected_region_id": SELECTED_REGION_ID,
+        "selected_region_id": selected_region_id,
         "selected_region_before_text": selected_text,
         "selected_region_sha256": sha256_text(selected_text),
         "selected_region_paragraph_refs": selected_region.get("paragraph_refs", []),
@@ -1179,7 +1255,19 @@ def _build_selected_region(
         "why_other_regions_were_not_selected": [
             {
                 "region_id": "opening_table_dust_spoon_saucer_ring_field",
-                "reason": "opening field carries protected setup and should not be disturbed",
+                "reason": (
+                    "opening field carries protected setup and should not be disturbed"
+                    if selected_region_id != "opening_table_dust_spoon_saucer_ring_field"
+                    else "opening field is selected"
+                ),
+            },
+            {
+                "region_id": SELECTED_REGION_ID,
+                "reason": (
+                    "middle recurrence gains are protected references for ending-return work"
+                    if selected_region_id != SELECTED_REGION_ID
+                    else "middle recurrence is selected"
+                ),
             },
             {
                 "region_id": "proof_no_outside_answer_region",
@@ -1187,7 +1275,11 @@ def _build_selected_region(
             },
             {
                 "region_id": "final_return_opening_transformation_region",
-                "reason": "final return gains should not be overworked before evidence demands it",
+                "reason": (
+                    "final return is selected because ending-return risk is the chosen target"
+                    if selected_region_id == ENDING_RETURN_REGION_ID
+                    else "final return gains should not be overworked before evidence demands it"
+                ),
             },
         ],
         "region_change_authorized_later": True,
@@ -1208,6 +1300,8 @@ def _build_target_unit_map(
         return _build_tactile_target_unit_map(subject, selected_region)
     if subject.selected_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
         return _build_hostile_scaffold_target_unit_map(subject, selected_region)
+    if subject.selected_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return _build_ending_return_target_unit_map(subject, selected_region)
     selected_text = str(selected_region["selected_region_before_text"])
     units = [
         _unit(
@@ -1554,6 +1648,291 @@ def _hostile_scaffold_object_labels(before_text: str) -> list[str]:
         if len(labels) >= 5:
             break
     return labels or ["table", "mark", "pressure"]
+
+
+def _build_ending_return_target_unit_map(
+    subject: ResidualWorkOrderSubject,
+    selected_region: dict[str, object],
+) -> dict[str, object]:
+    selected_text = str(selected_region["selected_region_before_text"])
+    selected_region_id = str(selected_region["selected_region_id"])
+    selected_paragraphs = _paragraphs(selected_text)
+    units = [
+        _ending_return_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="final_return_enacts_not_explains",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=0,
+                needles=("return", "same table", "explain", "means"),
+            ),
+            weakness=(
+                "final return can become a thesis about what the return means "
+                "instead of an enacted change in relation"
+            ),
+            allowed_operation=(
+                "make the final return happen through object relation or reader encounter"
+            ),
+            target_effect="reader feels the return before explanatory closure arrives",
+        ),
+        _ending_return_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="opening_return_relation_without_thesis",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=0,
+                needles=("opening", "first", "morning", "again"),
+            ),
+            weakness=(
+                "opening-return relation can be named as structure rather than "
+                "transformed by the returning field"
+            ),
+            allowed_operation=(
+                "let the opening relation return altered without announcing the structure"
+            ),
+            target_effect="reader recognizes the opening as changed by return",
+        ),
+        _ending_return_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="no_reset_return_pressure",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=0,
+                needles=("still", "there", "nothing resets", "not wipe"),
+            ),
+            weakness=(
+                "the ending can feel like reset or summary if return pressure "
+                "does not remain locally active"
+            ),
+            allowed_operation=(
+                "keep accumulated pressure active at return without adding explanation"
+            ),
+            target_effect="return carries prior pressure instead of resetting the artifact",
+        ),
+        _ending_return_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="same_object_field_returns_without_summary",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=0,
+                needles=("table", "dust", "spoon", "saucer", "ring"),
+            ),
+            weakness=(
+                "same-object return can collapse into summary unless object field "
+                "keeps carrying the relation"
+            ),
+            allowed_operation=(
+                "preserve table/dust/spoon/saucer/ring return as embodied relation"
+            ),
+            target_effect="same object field returns without explaining itself",
+        ),
+        _ending_return_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="proof_no_answer_carry_preserved",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=0,
+                needles=("answer", "proof", "outside", "line", "carry"),
+            ),
+            weakness=(
+                "proof/no-answer carry can turn into an answer at the ending "
+                "instead of remaining pressure"
+            ),
+            allowed_operation=(
+                "carry proof/no-answer pressure into return without resolving it"
+            ),
+            target_effect="proof/no-answer remains pressure, not final answer",
+        ),
+    ]
+    protected_references = _ending_return_protected_reference_units(
+        subject=subject,
+        selected_region_text=selected_text,
+    )
+    return {
+        "selected_residual_target_id": subject.selected_target_id,
+        "unit_map_kind": subject.target_spec.work_order_adapter,
+        "legacy_artifact_name": "object_motion_target_unit_map",
+        "artifact_name_compatibility_reason": (
+            "residual work-order packet contract still expects this artifact "
+            "filename; target_adapter_id and unit_map_kind are authoritative"
+        ),
+        **target_adapter_metadata(subject.selected_target_id),
+        "selected_region_id": selected_region_id,
+        "target_units": units,
+        "target_unit_count": len(units),
+        "material_target_units_all_inside_selected_region": True,
+        "protected_reference_units": protected_references,
+        "protected_reference_unit_count": len(protected_references),
+        "future_evaluation_focus": [
+            "final return enacts rather than explains",
+            "opening-return transformation remains readable",
+            "proof/no-answer carry remains pressure",
+            "object/tactile field returns without summary",
+            "strongest-rival pressure remains blocking",
+        ],
+        "target_semantic_contract": list(subject.target_spec.operational_definition),
+        "generation_materiality_policy": target_adapter_metadata(
+            subject.selected_target_id
+        )["materiality_policy_id"],
+        "generation_semantic_validation_contract": [
+            "future generation is not authorized by this packet",
+            "selected ending region must carry return through object relation",
+            "do not explain the return more explicitly",
+            "preserve opening, middle recurrence, proof/no-answer, and rival-pressure references",
+        ],
+        "ablation_control_plan": list(
+            subject.target_spec.target_specific_ablation_controls
+        ),
+        "reader_state_focus_plan": list(
+            subject.target_spec.target_specific_reader_state_focus
+        ),
+        "stop_test_policy": target_adapter_metadata(subject.selected_target_id).get(
+            "stop_test_policy"
+        ),
+        "future_generation_requires_separate_authorization": True,
+        "future_generation_authorized": False,
+        "candidate_generated": False,
+        "model_calls": 0,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "worker": "ending_explains_return_risk_target_unit_map_v1_controller",
+    }
+
+
+def _ending_return_unit(
+    *,
+    subject: ResidualWorkOrderSubject,
+    selected_region_id: str,
+    selected_region_text: str,
+    unit_id: str,
+    text: str,
+    weakness: str,
+    allowed_operation: str,
+    target_effect: str,
+) -> dict[str, object]:
+    before_text = text or _excerpt(selected_region_text or subject.candidate.text)
+    source_span = _source_span_for_selected_region_text(
+        selected_region_id=selected_region_id,
+        selected_region_text=selected_region_text,
+        before_text=before_text,
+    )
+    object_labels = extract_object_labels(before_text) or ["table", "return", "opening"]
+    return {
+        "unit_id": unit_id,
+        "target_unit_id": unit_id,
+        "before_text": before_text,
+        "before_text_sha256": sha256_text(before_text),
+        "objects": object_labels,
+        "involved_object_labels": object_labels,
+        "parent_region_id": selected_region_id,
+        "source_region_id": selected_region_id,
+        "source_span": source_span,
+        "contained_in_selected_region": source_span["contained_in_selected_region"],
+        "source_text_packet_id": subject.candidate.packet_id,
+        "current_best_candidate_packet_id": subject.candidate.packet_id,
+        "current_motion_action_state": allowed_operation,
+        "current_consequence": target_effect,
+        "current_physical_relation": (
+            "return must be carried by object relation, local pressure, or reader encounter"
+        ),
+        "source_unit_role": "ending_return_risk_reduction",
+        "weakness": weakness,
+        "allowed_operation": allowed_operation,
+        "forbidden_operation": [
+            "explain return more explicitly",
+            "delete proof/no-answer pressure",
+            "weaken object/tactile causal field",
+            "imitate the rival",
+            "return to hostile scaffold generation",
+            "select middle recurrence by inertia",
+            "broad rewrite",
+        ],
+        "protected_effects": [
+            f"{subject.candidate.packet_id} as current best candidate",
+            "opening-return relation",
+            "proof/no-answer pressure",
+            "object/tactile causal field",
+            "table/dust/spoon/saucer/ring field",
+            "strongest-rival pressure preservation",
+        ],
+        "target_effect": target_effect,
+        "material_change_required": True,
+        "semantic_contract": list(subject.target_spec.operational_definition),
+        "future_generation_authorized": False,
+    }
+
+
+def _ending_return_protected_reference_units(
+    *,
+    subject: ResidualWorkOrderSubject,
+    selected_region_text: str,
+) -> list[dict[str, object]]:
+    paragraphs = _paragraphs(subject.candidate.text)
+    references = [
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="opening_table_field_reference",
+            source_region_id="opening_table_dust_spoon_saucer_ring_field",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=0,
+                end=2,
+                needles=("table", "dust", "spoon", "saucer", "ring"),
+            ),
+            protection_reason=(
+                "opening object field is protected reference material for ending-return work"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="middle_recurrence_object_field_reference",
+            source_region_id=SELECTED_REGION_ID,
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=3,
+                end=4,
+                needles=("cup", "ring", "crumb", "spoon", "saucer"),
+            ),
+            protection_reason=(
+                "middle recurrence object-event/tactile gains are protected; do not select them by inertia"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="proof_no_answer_pressure_reference",
+            source_region_id="proof_no_outside_answer_region",
+            text=_sentence_matching_any(
+                subject.candidate.text,
+                ("No answer", "outside", "Proof", "line of carry"),
+            ),
+            protection_reason=(
+                "proof/no-answer pressure is protected outside the selected ending region"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+    ]
+    return [
+        reference
+        for reference in references
+        if not reference["contained_in_selected_region"]
+    ]
 
 
 def _hostile_scaffold_protected_reference_units(
@@ -2095,6 +2474,25 @@ def _prevalidate_target_adapter(subject: ResidualWorkOrderSubject) -> None:
         if failures:
             raise ValueError(
                 "Residual work-order planning refused; hostile scaffold "
+                "adapter failed selected-region invariant; semantic preflight "
+                f"failed: {'; '.join(failures)}"
+            )
+        return
+    if subject.selected_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        unit_map = _build_ending_return_target_unit_map(subject, selected_region)
+        failures = semantic_preflight_failures_for_work_order(
+            {
+                "residual_work_order_packet": {
+                    "selected_residual_target_id": subject.selected_target_id,
+                    **target_adapter_metadata(subject.selected_target_id),
+                },
+                "selected_intervention_region": selected_region,
+                "object_motion_target_unit_map": unit_map,
+            }
+        )
+        if failures:
+            raise ValueError(
+                "Residual work-order planning refused; ending-return "
                 "adapter failed selected-region invariant; semantic preflight "
                 f"failed: {'; '.join(failures)}"
             )
@@ -2652,16 +3050,28 @@ def _find_region(inventory: dict[str, object], region_id: str) -> dict[str, Any]
     return {}
 
 
+def _selected_region_id(subject: ResidualWorkOrderSubject) -> str:
+    if subject.selected_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return ENDING_RETURN_REGION_ID
+    return SELECTED_REGION_ID
+
+
 def _strategy_points_to_selected_region(subject: ResidualWorkOrderSubject) -> bool:
     pressure_map = subject.strategy_payloads.get("candidate_region_pressure_map", {})
     regions = pressure_map.get("regions")
     if not isinstance(regions, list):
         return False
+    selected_region_id = _selected_region_id(subject)
     for region in regions:
         if not isinstance(region, dict):
             continue
-        if region.get("region_id") != SELECTED_REGION_ID:
+        if region.get("region_id") != selected_region_id:
             continue
+        if subject.selected_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+            return _selected_option_mentions(
+                subject,
+                ("return", "ending", "final", "opening"),
+            )
         return bool(
             region.get("plausible_next_intervention_region") is True
             or region.get("recommendation") == "plausible_next_intervention_region"
@@ -2669,10 +3079,28 @@ def _strategy_points_to_selected_region(subject: ResidualWorkOrderSubject) -> bo
     return False
 
 
+def _selected_option_mentions(
+    subject: ResidualWorkOrderSubject,
+    terms: tuple[str, ...],
+) -> bool:
+    values = [
+        str(subject.selected_option.get("description") or ""),
+        str(subject.target_spec.mechanism_description),
+    ]
+    basis = subject.selected_option.get("source_evidence_basis")
+    if isinstance(basis, list):
+        values.extend(str(value) for value in basis if isinstance(value, str))
+    haystack = " ".join(values).lower()
+    return any(term in haystack for term in terms)
+
+
 def _region_text(text: str, region_id: str) -> str:
     paragraphs = _paragraphs(text)
     if region_id == SELECTED_REGION_ID:
         return "\n\n".join(paragraphs[3:5])
+    if region_id == ENDING_RETURN_REGION_ID:
+        final_return_start = 10 if len(paragraphs) > 10 else max(len(paragraphs) - 1, 0)
+        return "\n\n".join(paragraphs[final_return_start : final_return_start + 1])
     return ""
 
 

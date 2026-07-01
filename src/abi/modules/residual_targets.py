@@ -18,26 +18,36 @@ from abi.model_schemas import (
 OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
 TACTILE_INEVITABILITY_TARGET_ID = "tactile_inevitability_gap"
 HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
+ENDING_EXPLAINS_RETURN_RISK_TARGET_ID = "ending_explains_return_risk"
 REPEATED_BROAD_TARGET_ID = "first_read_object_event_pressure_gap"
 SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
+ENDING_RETURN_REGION_ID = "final_return_opening_transformation_region"
 OBJECT_MOTION_TARGET_SPEC_VERSION = "1"
 TACTILE_TARGET_SPEC_VERSION = "2"
 HOSTILE_SCAFFOLD_TARGET_SPEC_VERSION = "1"
+ENDING_RETURN_TARGET_SPEC_VERSION = "1"
 OBJECT_MOTION_WORK_ORDER_CONTRACT_VERSION = "1"
 TACTILE_WORK_ORDER_CONTRACT_VERSION = "2"
 HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION = "1"
+ENDING_RETURN_WORK_ORDER_CONTRACT_VERSION = "1"
 OBJECT_MOTION_GENERATION_CONTRACT_VERSION = "1"
 TACTILE_GENERATION_CONTRACT_VERSION = "1"
 HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION = "1"
-PLACEHOLDER_GENERATION_CONTRACT_VERSIONS = ("placeholder_1",)
+ENDING_RETURN_GENERATION_CONTRACT_VERSION = "placeholder_ending_return_planning_only_v1"
+PLACEHOLDER_GENERATION_CONTRACT_VERSIONS = (
+    "placeholder_1",
+    ENDING_RETURN_GENERATION_CONTRACT_VERSION,
+)
 HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID = (
     "hostile_scaffold_visibility_planning_placeholder_v1"
 )
 HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID = (
     "hostile_scaffold_visibility_generation_materiality_v1"
 )
+ENDING_RETURN_MATERIALITY_POLICY_ID = "ending_return_risk_planning_placeholder_v1"
 PLACEHOLDER_MATERIALITY_POLICY_IDS = (
     HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
+    ENDING_RETURN_MATERIALITY_POLICY_ID,
 )
 
 
@@ -391,10 +401,106 @@ HOSTILE_SCAFFOLD_VISIBILITY_SPEC = ResidualTargetSpec(
     ),
 )
 
+ENDING_EXPLAINS_RETURN_RISK_SPEC = ResidualTargetSpec(
+    target_id=ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    canonical_next_action="prepare_ending_explains_return_risk_work_order",
+    review_action=(
+        "review_ending_explains_return_risk_work_order_before_generation_authorization"
+    ),
+    work_order_adapter="ending_return_risk",
+    mechanism_description=(
+        "Make the final return enact the opening transformation through object "
+        "relation and carry, rather than explaining what the return means."
+    ),
+    permitted_source_candidate_kinds=("bounded_macro_recomposition",),
+    required_evidence_inputs=(
+        "current best candidate text",
+        "strategy residual target option map",
+        "strategy candidate region pressure map",
+        "proof packet reference",
+        "reader-state packet reference",
+        "final-return echo or ending-risk evidence",
+        "strongest-rival pressure evidence",
+    ),
+    generation_requires_separate_authorization=True,
+    target_specific_ablation_controls=(
+        "revert_ending_return_intervention",
+        "isolate_return_enactment_without_extra_explanation",
+        "proof_no_answer_preservation_control",
+        "object_field_return_preservation_control",
+        "strongest_rival_comparison",
+    ),
+    target_specific_reader_state_focus=(
+        "final return enacts rather than explains",
+        "opening-return transformation",
+        "proof/no-answer carry preservation",
+        "first-read closure pressure",
+        "reread transformation",
+        "strongest-rival pressure",
+    ),
+    target_definition={
+        "final_return_should_enact_not_explain": True,
+        "opening_relation_should_transform_without_thesis": True,
+        "return_pressure_must_not_reset_the_artifact": True,
+        "same_object_field_must_return_without_summary": True,
+        "proof_no_answer_carry_must_remain_pressure_not_answer": True,
+        "must_preserve_current_best_macro_and_reader_state_gains": True,
+    },
+    operational_definition=(
+        "select the ending/final-return region, not the exhausted middle recurrence, unless explicit evidence justifies otherwise",
+        "make the return happen through object relation, local pressure, or reader encounter",
+        "do not explain the return more explicitly or announce what the opening meant",
+        "preserve proof/no-answer pressure as pressure, not as answer or thesis",
+        "protect opening and middle object-field gains as reference material outside the selected region",
+        "preserve strongest-rival pressure; do not claim it is defeated",
+    ),
+    forbidden_under_this_target=(
+        "generic vividness",
+        "rival imitation",
+        "broad rewrite",
+        "explaining return more explicitly",
+        "deleting proof/no-answer pressure",
+        "weakening object/tactile causal field",
+        "returning to hostile scaffold generation",
+        "selecting middle recurrence by inertia",
+        "direct candidate generation in this command",
+        "finality claim",
+        "phase-shift claim",
+    ),
+    protected_effects=(
+        "current best candidate",
+        "executed ablation support",
+        "reader-state support",
+        "partial reread gain",
+        "object/tactile causal field",
+        "table/dust/spoon/saucer/ring field",
+        "proof/no-answer pressure",
+        "opening-return relation",
+        "strongest-rival pressure preservation",
+        "hostile path paused/exhausted",
+        "no finality claim",
+        "no phase-shift claim",
+    ),
+    forbidden_changes=(
+        "generic vividness",
+        "rival imitation",
+        "broad rewrite",
+        "explaining return more explicitly",
+        "deleting proof/no-answer pressure",
+        "weakening object/tactile causal field",
+        "returning to hostile scaffold generation",
+        "selecting middle recurrence by inertia",
+        "candidate generation in this command",
+        "finality claim",
+        "phase-shift claim",
+    ),
+)
+
 RESIDUAL_TARGET_SPECS = {
     OBJECT_MOTION_SPEC.target_id: OBJECT_MOTION_SPEC,
     TACTILE_INEVITABILITY_SPEC.target_id: TACTILE_INEVITABILITY_SPEC,
     HOSTILE_SCAFFOLD_VISIBILITY_SPEC.target_id: HOSTILE_SCAFFOLD_VISIBILITY_SPEC,
+    ENDING_EXPLAINS_RETURN_RISK_SPEC.target_id: ENDING_EXPLAINS_RETURN_RISK_SPEC,
 }
 
 MATERIALITY_FAILURE_REPORT_FIELDS = (
@@ -585,6 +691,57 @@ HOSTILE_SCAFFOLD_MATERIALITY_POLICY = ResidualMaterialityPolicy(
     ),
 )
 
+ENDING_RETURN_MATERIALITY_POLICY = ResidualMaterialityPolicy(
+    policy_id=ENDING_RETURN_MATERIALITY_POLICY_ID,
+    policy_version="1",
+    primary_materiality_scope="planning_only",
+    whole_region_guard={
+        "scope": "ending_final_return_region",
+        "planning_only": True,
+        "future_generation_must_define_enforceable_thresholds": True,
+    },
+    target_bearing_scope={
+        "scope": "final-return sentences containing target units",
+        "planning_only": True,
+        "must_enact_return_without_extra_explanation": True,
+    },
+    target_unit_scope={
+        "scope": "each ending-return risk target unit",
+        "planning_only": True,
+        "must_be_inside_selected_ending_region": True,
+    },
+    overlap_cluster_policy={
+        "detect_shared_before_text_hash": True,
+        "planning_only": True,
+        "future_generation_must_validate_member_semantics_separately": True,
+    },
+    absolute_change_floor=0,
+    ratio_floor=0.0,
+    token_edit_distance_floor=0,
+    sequence_similarity_ceiling=1.0,
+    changed_sentence_floor=0,
+    protected_context_exemptions=(
+        "opening object field remains protected reference material",
+        "middle recurrence object-event gains remain protected reference material",
+        "proof/no-answer region remains protected reference material",
+    ),
+    prompt_feedback=(
+        "planning only; generation requires a later explicit authorization and materiality contract",
+        "target the ending/final-return region, not middle recurrence by inertia",
+        "make return happen through object relation, local pressure, or reader encounter",
+        "do not explain the return more explicitly",
+        "preserve proof/no-answer carry, object/tactile field, and strongest-rival pressure",
+    ),
+    failure_report_fields=(
+        "ending_return_explanation_leakage_failures",
+        "opening_return_relation_failures",
+        "proof_no_answer_carry_failures",
+        "object_field_preservation_failures",
+        "rival_pressure_preservation_failures",
+        "finality_or_phase_shift_claim_failures",
+    ),
+)
+
 OBJECT_MOTION_ADAPTER = ResidualTargetAdapter(
     target_id=OBJECT_MOTION_CAUSALITY_TARGET_ID,
     target_spec_version=OBJECT_MOTION_TARGET_SPEC_VERSION,
@@ -706,10 +863,47 @@ HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER = ResidualTargetAdapter(
     materiality_policy=HOSTILE_SCAFFOLD_MATERIALITY_POLICY,
 )
 
+ENDING_RETURN_RISK_ADAPTER = ResidualTargetAdapter(
+    target_id=ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    target_spec_version=ENDING_RETURN_TARGET_SPEC_VERSION,
+    work_order_contract_version=ENDING_RETURN_WORK_ORDER_CONTRACT_VERSION,
+    generation_contract_version=ENDING_RETURN_GENERATION_CONTRACT_VERSION,
+    canonical_work_order_action=ENDING_EXPLAINS_RETURN_RISK_SPEC.canonical_next_action,
+    review_action=ENDING_EXPLAINS_RETURN_RISK_SPEC.review_action,
+    work_order_adapter=ENDING_EXPLAINS_RETURN_RISK_SPEC.work_order_adapter,
+    generation_schema=RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
+    worker_role=WorkerRole.RESIDUAL_INTERVENTION_GENERATOR,
+    prompt_contract_id="autonomous.residual_intervention_generation.v1.ending_return_risk.placeholder",
+    prompt_instructions=(
+        "planning only; do not generate from this adapter until separately authorized",
+        "future work may replace only the selected ending/final-return region",
+        "make final return enact rather than explain the opening transformation",
+        "preserve protected opening, middle, proof/no-answer, object-field, and rival-pressure references",
+    ),
+    mechanism_contract=ENDING_EXPLAINS_RETURN_RISK_SPEC.operational_definition,
+    ablation_controls=ENDING_EXPLAINS_RETURN_RISK_SPEC.target_specific_ablation_controls,
+    reader_state_evaluation_focus=(
+        ENDING_EXPLAINS_RETURN_RISK_SPEC.target_specific_reader_state_focus
+    ),
+    stop_test_policy={
+        "cycle_kind": "residual_stop_test",
+        "pause_action": "pause_until_generation_authorization",
+        "failure_conditions": [
+            "final return explains the transformation instead of enacting it",
+            "proof/no-answer pressure is converted into an answer",
+            "opening or middle object-field gains are weakened",
+            "strongest-rival pressure is treated as defeated",
+            "finality or phase-shift is claimed",
+        ],
+    },
+    materiality_policy=ENDING_RETURN_MATERIALITY_POLICY,
+)
+
 RESIDUAL_TARGET_ADAPTERS = {
     OBJECT_MOTION_ADAPTER.target_id: OBJECT_MOTION_ADAPTER,
     TACTILE_INEVITABILITY_ADAPTER.target_id: TACTILE_INEVITABILITY_ADAPTER,
     HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER.target_id: HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER,
+    ENDING_RETURN_RISK_ADAPTER.target_id: ENDING_RETURN_RISK_ADAPTER,
 }
 
 TACTILE_FORCE_TERMS = (
@@ -1449,7 +1643,10 @@ def semantic_preflight_failures_for_work_order(payloads: dict[str, dict[str, Any
     unit_map = payloads.get("object_motion_target_unit_map", {})
     if target_id == TACTILE_INEVITABILITY_TARGET_ID:
         failures.extend(validate_tactile_unit_map(unit_map))
-    if target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+    if target_id in {
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    }:
         failures.extend(
             validate_single_region_target_unit_alignment(
                 unit_map,

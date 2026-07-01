@@ -29,8 +29,9 @@ def test_abi_ear_demo_cli_outputs_summary(tmp_path, capsys, monkeypatch):
 def test_readme_describes_abi():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert readme.startswith("# Abi")
-    assert "germ -> differentiation -> pressure -> crisis -> recomposition -> return" in readme
+    assert "# Abi" in readme
+    assert "An autonomous system for creating and testing transformative artifacts." in readme
+    assert "[Open the design brief](docs/abi_intro.pdf)" in readme
 
 
 def test_source_uses_no_model_or_api_client_imports():
