@@ -1102,6 +1102,26 @@ def _failed_target_status_map_from_payloads(
     residual_blockers = payloads.get("residual_blocker_map", {})
     strategic_decision = payloads.get("strategic_decision_report", {})
     failed_repairs = payloads.get("failed_or_rejected_repairs", {})
+    prebuilt_statuses: dict[str, dict[str, Any]] = {}
+    for status_map in (
+        _as_dict(packet.get("failed_target_status_map")),
+        _as_dict(residual_blockers.get("failed_target_status_map")),
+        _as_dict(strategic_decision.get("failed_target_status_map")),
+        _as_dict(failed_repairs.get("failed_target_status_map")),
+    ):
+        for target_id, raw_status in status_map.items():
+            if not isinstance(raw_status, dict):
+                continue
+            status = _normalize_prebuilt_failed_target_status(
+                str(target_id),
+                raw_status,
+                packet=packet,
+                strategic_decision=strategic_decision,
+            )
+            if status:
+                prebuilt_statuses[str(status["target_id"])] = status
+    if prebuilt_statuses:
+        return prebuilt_statuses
     candidates = (
         _as_dict(failed_repairs.get("hostile_scaffold_failed_generation_path")),
         _as_dict(residual_blockers.get("hostile_scaffold_failed_generation_path")),
@@ -1165,6 +1185,79 @@ def _failed_target_status_map_from_payloads(
                 strategic_decision.get("recommendation"),
             ),
         }
+    }
+
+
+def _normalize_prebuilt_failed_target_status(
+    target_id: str,
+    summary: dict[str, Any],
+    *,
+    packet: dict[str, Any],
+    strategic_decision: dict[str, Any],
+) -> dict[str, Any]:
+    actual_target_id = _first_string(summary.get("target_id"), target_id)
+    if not actual_target_id:
+        return {}
+    status = _first_string(summary.get("target_status"))
+    failed_packet_ids = _string_list(
+        summary.get("failed_packet_ids") or summary.get("attempt_packet_ids")
+    )
+    failed_attempt_count = _int_or_zero(summary.get("failed_attempt_count")) or len(
+        failed_packet_ids
+    )
+    stop_test_triggered = bool(summary.get("stop_test_triggered"))
+    if (
+        failed_attempt_count == 0
+        and not failed_packet_ids
+        and stop_test_triggered is False
+        and not _failed_target_status_marker(status)
+    ):
+        return {}
+    failure_classes_by_attempt = summary.get("failure_classes_by_attempt")
+    if not isinstance(failure_classes_by_attempt, dict):
+        failure_classes_by_attempt = {}
+    return {
+        "target_id": actual_target_id,
+        "target_adapter_id": summary.get("target_adapter_id"),
+        "target_status": status or HOSTILE_SCAFFOLD_PAUSED_STATUS,
+        "attempted": True,
+        "failed_attempt_count": failed_attempt_count,
+        "failed_packet_ids": failed_packet_ids,
+        "attempt_packet_ids": failed_packet_ids,
+        "failure_classes": _string_list(summary.get("failure_classes")),
+        "failure_classes_by_attempt": {
+            str(packet_id): _string_list(classes)
+            for packet_id, classes in failure_classes_by_attempt.items()
+        },
+        "stop_test_triggered": stop_test_triggered,
+        "next_recommended_action": _first_string(
+            summary.get("next_recommended_action"),
+            strategic_decision.get("next_recommended_action"),
+        )
+        or FAILED_TARGET_NEXT_ALLOWED_STATUS,
+        "next_allowed_status": _first_string(
+            summary.get("next_allowed_status"),
+            FAILED_TARGET_NEXT_ALLOWED_STATUS,
+        ),
+        "generation_retry_recommended": False,
+        "available_for_operator_selection": False,
+        "candidate_generation_authorized": False,
+        "broad_reuse_authorized": False,
+        "failed_packets_are_not_candidate_evidence": summary.get(
+            "failed_packets_are_not_candidate_evidence"
+        )
+        is not False,
+        "should_not_reuse_authorization_without_strategy_review": summary.get(
+            "should_not_reuse_authorization_without_strategy_review"
+        )
+        is not False,
+        "source_authorization_packet_id": summary.get("source_authorization_packet_id"),
+        "source_work_order_packet_id": summary.get("source_work_order_packet_id"),
+        "source_synthesis_packet_id": packet.get("packet_id"),
+        "strategic_decision": _first_string(
+            packet.get("strategic_decision"),
+            strategic_decision.get("recommendation"),
+        ),
     }
 
 

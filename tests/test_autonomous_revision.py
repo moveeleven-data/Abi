@@ -58,6 +58,7 @@ from abi.modules.autonomous_revision import (
 )
 from abi.modules.autonomous_evidence_synthesis import (
     AUTONOMOUS_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES,
+    _classify_failed_ending_return_attempt,
     run_autonomous_evidence_synthesis,
 )
 from abi.modules.bounded_macro_recomposition import (
@@ -2758,6 +2759,8 @@ class StubResidualInterventionClient:
             return dump_json(_ending_packet_0068_like_residual_payload(units))
         if self.mode == "ending_packet_0069_like":
             return dump_json(_ending_packet_0069_like_residual_payload(units))
+        if self.mode == "ending_packet_0070_like":
+            return dump_json(_ending_packet_0070_like_residual_payload(units))
         if self.mode == "ending_clearing_reset":
             return dump_json(_ending_clearing_reset_residual_payload(units))
         if self.mode == "ending_strong":
@@ -3320,6 +3323,40 @@ def _ending_clearing_reset_residual_payload(units):
             "constraint_id": "no_reset_or_finality",
             "how_satisfied": "not satisfied",
             "risk_note": "contains reset and clearing language",
+        }
+    ]
+    return payload
+
+
+def _ending_packet_0070_like_residual_payload(units):
+    payload = _valid_ending_residual_intervention_payload(units)
+    by_unit = {str(unit["unit_id"]): unit for unit in units}
+    final_before = str(
+        by_unit.get("final_return_enacts_not_explains", {}).get("before_text")
+        or "So the return is not a reset."
+    )
+    object_field_before = str(
+        by_unit.get("same_object_field_returns_without_summary", {}).get("before_text")
+        or "Morning comes back to the same table, but the table has kept the record of relation inside itself."
+    )
+    proof_before = str(
+        by_unit.get("proof_no_answer_carry_preserved", {}).get("before_text")
+        or final_before
+    )
+    payload["replacement_region_text"] = (
+        f"{final_before} {object_field_before} {proof_before} The ring remains "
+        "near the table and the dust remains near the edge, but the relation "
+        "does not gain enough new object pressure to carry the ending."
+    )
+    payload["intervention_plan"] = [
+        "packet 0070-like ending-return exact-copy/object-pressure failure shape",
+        "copies overlapping target units while under-enacting global return relation",
+    ]
+    payload["constraint_mapping"] = [
+        {
+            "constraint_id": "opening_return_relation",
+            "how_satisfied": "not satisfied",
+            "risk_note": "same-unit exact copy and object-pressure relation remains too weak",
         }
     ]
     return payload
@@ -11778,6 +11815,267 @@ def test_ending_return_strong_stub_passes_with_return_and_altered_opening(
     assert "strong_tactile_intervention" not in classifications
     assert "strong_return_enactment" in classifications
     assert "opening_return_relation_preserved" in classifications
+
+
+def test_autonomous_evidence_synthesis_pauses_failed_ending_return_path(
+    tmp_path,
+    monkeypatch,
+):
+    chain = build_ending_return_residual_work_order_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    authorization_packet = Path(str(authorization.payload["packet_dir"]))
+    monkeypatch.setenv("OPENAI_API_KEY", "stub-key")
+
+    historical_0068_classes = _classify_failed_ending_return_attempt(
+        replacement_text=(
+            "If it comes, the return passes through the table and the dust, "
+            "through the spoon on its side and the saucer with its crack. "
+            "Nothing here settles into a reset; proof keeps asking without answering."
+        ),
+        subject_manifest={},
+        work_order={},
+        model_call_error_messages=[
+            "residual intervention validation failed: ending lets return become reset language"
+        ],
+    )
+    assert "reset_or_clearing_language_failure" in historical_0068_classes
+
+    failed_results = []
+    for mode in (
+        "ending_clearing_reset",
+        "ending_packet_0069_like",
+        "ending_packet_0070_like",
+    ):
+        result = run_residual_candidate_generation(
+            chain["config"],
+            client_name="openai",
+            authorization_packet=authorization_packet,
+            allow_live_model=True,
+            max_model_calls=1,
+            model="stub-ending-model",
+            client_factory=residual_intervention_stub_factory([], mode=mode),
+        )
+        assert result.exit_code == 1
+        assert result.payload["accepted"] is False
+        assert result.payload["authorization_consumed"] is False
+        assert result.payload["candidate_generated"] is False
+        assert result.payload["candidate_artifact_id"] is None
+        assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+        failed_results.append(result)
+
+    budget = read_payload(authorization_packet / "generation_attempt_budget.json")
+    packet = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+    assert budget["authorization_consumed"] is False
+    assert packet["authorization_consumed"] is False
+
+    synthesis = run_autonomous_evidence_synthesis(
+        chain["config"],
+        run_id=chain["run_id"],
+    )
+
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["accepted"] is True
+    packet_dir = Path(str(synthesis.payload["packet_dir"]))
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    failed_rows = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "failed_residual_generation"
+        and row["selected_residual_target_id"] == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    ]
+    assert len(failed_rows) == 3
+    assert all(
+        row["source_authorization_packet_id"] == authorization.payload["packet_id"]
+        for row in failed_rows
+    )
+    assert all(
+        row["source_work_order_packet_id"] == chain["residual_work_order"]["packet_id"]
+        for row in failed_rows
+    )
+    assert all(row["authorization_consumed"] is False for row in failed_rows)
+    assert all(row["candidate_generated"] is False for row in failed_rows)
+    assert all(row["candidate_artifact_id"] is None for row in failed_rows)
+    assert all(row["not_candidate_evidence"] is True for row in failed_rows)
+    assert all(row["ablation_authorized"] is False for row in failed_rows)
+    assert all(row["reader_state_evaluation_authorized"] is False for row in failed_rows)
+    failure_classes = {
+        failure_class
+        for row in failed_rows
+        for failure_class in row["failure_classes"]
+    }
+    assert "reset_or_clearing_language_failure" in failure_classes
+    assert "explicit_negated_explanation_global_failure" in failure_classes
+    assert "object_pressure_too_weak" in failure_classes
+    assert "target_unit_exact_copy_regression" in failure_classes
+
+    failed = read_payload(packet_dir / "failed_or_rejected_repairs.json")
+    summary = failed["ending_return_failed_generation_path"]
+    assert summary["attempted"] is True
+    assert summary["failed_attempt_count"] == 3
+    assert summary["stop_test_triggered"] is True
+    assert summary["target_status"] == "paused_or_exhausted_pending_strategy_review"
+    assert summary["generation_retry_recommended"] is False
+    assert summary["next_recommended_action"] == (
+        "synthesize_failed_ending_return_path_before_new_strategy"
+    )
+    assert summary["no_accepted_ending_return_candidate_exists"] is True
+    assert summary["authorization_still_technically_unconsumed"] is True
+    assert summary["should_not_reuse_authorization_without_strategy_review"] is True
+    assert summary["source_authorization_packet_id"] == authorization.payload["packet_id"]
+    assert summary["source_work_order_packet_id"] == chain["residual_work_order"][
+        "packet_id"
+    ]
+    assert summary["base_candidate_packet_id"]
+    assert summary["proof_packet_id"]
+    assert summary["reader_state_packet_id"]
+    assert summary["repeated_object_pressure_or_global_relation_failure"] is True
+    assert summary["latest_target_unit_exact_copy_regression"] is True
+
+    failed_packet_ids = {
+        Path(str(result.payload["packet_dir"])).name for result in failed_results
+    }
+    graph = read_payload(packet_dir / "candidate_evidence_graph.json")
+    assert failed_packet_ids.issubset(
+        set(graph["failed_residual_generation_packet_ids"])
+    )
+    assert failed_packet_ids.isdisjoint(set(graph["candidate_packet_ids"]))
+    assert all(
+        node["not_candidate_evidence"] is True
+        for node in graph["failed_residual_generation_nodes"]
+        if node["selected_residual_target_id"] == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    )
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == summary["base_candidate_packet_id"]
+    assert selected["packet_id"] not in failed_packet_ids
+    assert selected["proof_packet_id"] == summary["proof_packet_id"]
+    assert selected["reader_state_packet_id"] == summary["reader_state_packet_id"]
+    assert selected["selected_candidate_is_final"] is False
+    assert selected.get("no_phase_shift_claim", True) is True
+
+    exhausted = read_payload(packet_dir / "exhausted_handle_report.json")
+    ending_handle = [
+        handle
+        for handle in exhausted["handles"]
+        if handle["handle"] == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    ][0]
+    assert ending_handle["status"] == "paused_or_exhausted_pending_strategy_review"
+    assert ending_handle["stop_test_triggered"] is True
+
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    assert blockers["ending_return_stop_test_triggered"] is True
+    assert blockers["ending_return_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert blockers["ending_return_next_recommended_action"] == (
+        "synthesize_failed_ending_return_path_before_new_strategy"
+    )
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["recommendation"] == (
+        "pause_ending_return_generation_path_for_strategy_review"
+    )
+    assert decision["next_recommended_action"] == (
+        "synthesize_failed_ending_return_path_before_new_strategy"
+    )
+    assert decision["ending_return_retry_recommended"] is False
+    assert (
+        decision["ending_return_generation_authorization_reuse_recommended"] is False
+    )
+    decision_text = json.dumps(decision)
+    assert "run_one_bounded_residual_intervention_generation" not in decision_text
+    assert "reader-state evaluate" not in decision_text
+    assert "run_internal_reader_state_evaluation" not in decision_text
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    assert gate["ending_return_failed_generation_path_adjudicated"] is True
+    assert gate["ending_return_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    synthesis_packet = read_payload(
+        packet_dir / "autonomous_evidence_synthesis_packet.json"
+    )
+    assert synthesis_packet["best_current_candidate"]["packet_id"] == summary[
+        "base_candidate_packet_id"
+    ]
+    assert synthesis_packet["ending_return_failed_attempt_count"] == 3
+    assert synthesis_packet["ending_return_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    status = synthesis_packet["failed_target_status_map"][
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    ]
+    assert set(status["failed_packet_ids"]) == failed_packet_ids
+    assert status["generation_retry_recommended"] is False
+    assert status["failed_packets_are_not_candidate_evidence"] is True
+    assert synthesis_packet["finalization_eligible"] is False
+    assert synthesis_packet["no_phase_shift_claim"] is True
+
+    loop_review = run_evidence_loop_review(
+        chain["config"],
+        synthesis_packet=packet_dir,
+    )
+    assert loop_review.exit_code == 0
+    cleanup = run_loop_integrity_cleanup(
+        chain["config"],
+        loop_review_packet=Path(str(loop_review.payload["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert cleanup.exit_code == 0
+    next_cycle_authorization = run_supervised_cycle_authorization(
+        chain["config"],
+        loop_cleanup_packet=Path(str(cleanup.payload["packet_dir"])),
+        operator_reviewed=True,
+        decision="authorize_next_strategy_only",
+    )
+    assert next_cycle_authorization.exit_code == 0
+    strategy = run_next_target_strategy(
+        chain["config"],
+        authorization_packet=Path(str(next_cycle_authorization.payload["packet_dir"])),
+    )
+    assert strategy.exit_code == 0
+    strategy_status = strategy.payload["failed_target_status_map"][
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    ]
+    assert strategy_status["target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert strategy_status["failed_attempt_count"] == 3
+    assert strategy_status["generation_retry_recommended"] is False
+    strategy_dir = Path(str(strategy.payload["packet_dir"]))
+    residual_map = read_payload(strategy_dir / "residual_target_option_map.json")
+    ending_option = [
+        option
+        for option in residual_map["specific_residual_options"]
+        if option["option_id"] == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    ][0]
+    assert ending_option["available_for_operator_selection"] is False
+    assert ending_option["candidate_generation_authorized"] is False
+    assert ending_option["generation_retry_recommended"] is False
+    assert ENDING_EXPLAINS_RETURN_RISK_TARGET_ID not in residual_map[
+        "available_option_ids"
+    ]
+
+    with connect(chain["config"].db_path) as connection:
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert final_report.refused is True
 
 
 def test_hostile_scaffold_fake_fixture_generation_validates_semantics_without_model_calls(

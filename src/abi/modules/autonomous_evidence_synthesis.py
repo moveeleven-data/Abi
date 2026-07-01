@@ -112,10 +112,16 @@ RESIDUAL_OBJECT_MOTION_TARGET_ID = "object_motion_causality_specificity"
 TACTILE_RESIDUAL_TARGET_ID = "tactile_inevitability_gap"
 TACTILE_TARGET_ADAPTER_ID = "tactile_inevitability"
 HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
+ENDING_EXPLAINS_RETURN_RISK_TARGET_ID = "ending_explains_return_risk"
+ENDING_RETURN_RISK_TARGET_ADAPTER_ID = "ending_return_risk"
 FAILED_RESIDUAL_GENERATION_PACKET_KIND = "failed_residual_generation"
 HOSTILE_SCAFFOLD_PAUSED_STATUS = "paused_or_exhausted_pending_strategy_review"
 HOSTILE_SCAFFOLD_STRATEGY_ACTION = (
     "synthesize_failed_hostile_scaffold_path_before_new_strategy"
+)
+ENDING_RETURN_PAUSED_STATUS = "paused_or_exhausted_pending_strategy_review"
+ENDING_RETURN_STRATEGY_ACTION = (
+    "synthesize_failed_ending_return_path_before_new_strategy"
 )
 USEFUL_OR_STRONGER_CAUSAL_STATUSES = {
     "useful_but_insufficient",
@@ -225,7 +231,7 @@ def run_autonomous_evidence_synthesis(
             parent_ids=source_parent_ids,
         )
 
-        history = _build_repair_history(sources, run_dir=run_dir)
+        history = _build_repair_history(sources, run_dir=run_dir, connection=connection)
         payloads["repair_history_table"] = history
         artifacts["repair_history_table"] = writer.write_artifact(
             "repair_history_table",
@@ -863,6 +869,7 @@ def _build_repair_history(
     sources: list[SourcePacket],
     *,
     run_dir: Path | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict[str, object]:
     rows: list[dict[str, object]] = []
     for source in sources:
@@ -877,7 +884,12 @@ def _build_repair_history(
         elif source.packet_kind == "internal_reader_state_evaluation":
             rows.append(_internal_reader_state_history_row(source))
     if run_dir is not None:
-        rows.extend(_failed_residual_generation_history_rows(run_dir))
+        rows.extend(
+            _failed_residual_generation_history_rows(
+                run_dir,
+                connection=connection,
+            )
+        )
     rows.sort(key=lambda row: (str(row["created_at"]), str(row["packet_kind"]), str(row["packet_id"])))
     _annotate_candidate_evidence_links(rows)
     for index, row in enumerate(rows, start=1):
@@ -1308,7 +1320,11 @@ def _bounded_macro_history_row(source: SourcePacket) -> dict[str, object]:
     }
 
 
-def _failed_residual_generation_history_rows(run_dir: Path) -> list[dict[str, object]]:
+def _failed_residual_generation_history_rows(
+    run_dir: Path,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> list[dict[str, object]]:
     packet_base = run_dir / "bounded_macro_recomposition"
     if not packet_base.exists():
         return []
@@ -1320,30 +1336,55 @@ def _failed_residual_generation_history_rows(run_dir: Path) -> list[dict[str, ob
         work_order = _optional_payload(packet_dir, "macro_recomposition_work_order.json")
         if not subject and not work_order:
             continue
-        target_id = str(
-            subject.get("selected_residual_target_id")
-            or subject.get("target_adapter_id")
-            or work_order.get("selected_residual_target_id")
-            or work_order.get("target_adapter_id")
-            or ""
-        )
-        if target_id != HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+        target_id = _failed_residual_generation_target_id(subject, work_order)
+        if target_id not in {
+            HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+            ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        }:
             continue
         raw_outputs = _failed_generation_raw_outputs(packet_dir)
         replacement = _replacement_region_text_from_raw_outputs(raw_outputs)
-        failure_classes = _classify_failed_hostile_scaffold_attempt(
-            replacement_text=replacement,
-            subject_manifest=subject,
-            work_order=work_order,
+        model_call_records = _failed_generation_model_call_records(
+            connection,
+            packet_dir,
         )
-        packet_created_at = ""
-        manifest_path = packet_dir / "macro_recomposition_subject_manifest.json"
-        if manifest_path.exists():
-            packet_created_at = str(manifest_path.stat().st_mtime)
         model_call_ids = [
+            str(record["id"])
+            for record in model_call_records
+            if isinstance(record.get("id"), str) and record.get("id")
+        ] or [
             path.parent.name
             for path in sorted((packet_dir / "model_calls").glob("*/raw_output.txt"))
         ]
+        model_call_error_messages = [
+            str(record["error_message"])
+            for record in model_call_records
+            if record.get("error_message")
+        ]
+        if target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
+            failure_classes = _classify_failed_hostile_scaffold_attempt(
+                replacement_text=replacement,
+                subject_manifest=subject,
+                work_order=work_order,
+                model_call_error_messages=model_call_error_messages,
+            )
+            failure_summary = _failed_hostile_scaffold_failure_summary(
+                failure_classes
+            )
+        else:
+            failure_classes = _classify_failed_ending_return_attempt(
+                replacement_text=replacement,
+                subject_manifest=subject,
+                work_order=work_order,
+                model_call_error_messages=model_call_error_messages,
+            )
+            failure_summary = _failed_ending_return_failure_summary(failure_classes)
+        packet_created_at = ""
+        if model_call_records:
+            packet_created_at = str(model_call_records[-1].get("created_at") or "")
+        manifest_path = packet_dir / "macro_recomposition_subject_manifest.json"
+        if not packet_created_at and manifest_path.exists():
+            packet_created_at = str(manifest_path.stat().st_mtime)
         return_row: dict[str, object] = {
             "packet_dir": str(packet_dir),
             "packet_kind": FAILED_RESIDUAL_GENERATION_PACKET_KIND,
@@ -1358,11 +1399,17 @@ def _failed_residual_generation_history_rows(run_dir: Path) -> list[dict[str, ob
             "no_phase_shift_claim": True,
             "model_backed": bool(model_call_ids),
             "model_call_ids": model_call_ids,
+            "model_call_statuses": [
+                str(record["status"])
+                for record in model_call_records
+                if record.get("status")
+            ],
+            "model_call_error_messages": model_call_error_messages,
             "fixture_only": False,
             "source_packet": subject.get("source_authorization_packet_id"),
             "source_revision_packet_id": None,
-            "selected_handle": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
-            "target_handle": HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+            "selected_handle": target_id,
+            "target_handle": target_id,
             "target_scope": subject.get("target_scope") or work_order.get("target_scope"),
             "target_movement": subject.get("target_movement")
             or work_order.get("target_movement"),
@@ -1409,13 +1456,55 @@ def _failed_residual_generation_history_rows(run_dir: Path) -> list[dict[str, ob
             "reader_state_evaluation_authorized": False,
             "strongest_rival_pressure_remains_blocking": True,
             "failure_classes": failure_classes,
-            "failure_summary": _failed_hostile_scaffold_failure_summary(
-                failure_classes
-            ),
+            "failure_summary": failure_summary,
             "raw_replacement_excerpt": replacement[:360],
         }
         rows.append(return_row)
     return rows
+
+
+def _failed_residual_generation_target_id(
+    subject: dict[str, object],
+    work_order: dict[str, object],
+) -> str:
+    target_id = str(
+            subject.get("selected_residual_target_id")
+            or subject.get("target_adapter_id")
+            or work_order.get("selected_residual_target_id")
+            or work_order.get("target_adapter_id")
+            or ""
+    )
+    target_adapter_id = str(
+        subject.get("target_adapter_id") or work_order.get("target_adapter_id") or ""
+    )
+    if target_id == ENDING_RETURN_RISK_TARGET_ADAPTER_ID:
+        return ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    if target_adapter_id == ENDING_RETURN_RISK_TARGET_ADAPTER_ID:
+        return ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    return target_id
+
+
+def _failed_generation_model_call_records(
+    connection: sqlite3.Connection | None,
+    packet_dir: Path,
+) -> list[dict[str, object]]:
+    if connection is None:
+        return []
+    records: list[dict[str, object]] = []
+    for raw_path in sorted((packet_dir / "model_calls").glob("*/raw_output.txt")):
+        row = connection.execute(
+            """
+            SELECT id, status, error_message, created_at
+            FROM model_calls
+            WHERE raw_output_path IN (?, ?)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(raw_path), str(raw_path.resolve())),
+        ).fetchone()
+        if row is not None:
+            records.append(dict(row))
+    return records
 
 
 def _failed_generation_raw_outputs(packet_dir: Path) -> list[str]:
@@ -1447,6 +1536,7 @@ def _classify_failed_hostile_scaffold_attempt(
     replacement_text: str,
     subject_manifest: dict[str, object],
     work_order: dict[str, object],
+    model_call_error_messages: list[str] | None = None,
 ) -> list[str]:
     lower = replacement_text.lower()
     classes: list[str] = []
@@ -1485,6 +1575,75 @@ def _classify_failed_hostile_scaffold_attempt(
     return _unique(classes)
 
 
+def _classify_failed_ending_return_attempt(
+    *,
+    replacement_text: str,
+    subject_manifest: dict[str, object],
+    work_order: dict[str, object],
+    model_call_error_messages: list[str] | None = None,
+) -> list[str]:
+    del subject_manifest
+    lower = replacement_text.lower()
+    error_text = " ".join(model_call_error_messages or []).lower()
+    combined = f"{lower} {error_text}"
+    classes: list[str] = []
+    if not replacement_text:
+        classes.append("missing_model_replacement_output")
+    if (
+        "ending lets return become reset language" in combined
+        or "return clears" in lower
+        or "wiped clean" in lower
+        or "started over" in lower
+        or "reset" in lower
+        and "not be a reset" not in lower
+        and "nothing is wiped clean" not in lower
+        and "nothing here settles into a reset" not in lower
+    ):
+        classes.append("reset_or_clearing_language_failure")
+    if (
+        "global_failure_class=explicit_negated_explanation" in combined
+        or "does not arrive as an explanation" in lower
+    ):
+        classes.append("explicit_negated_explanation_global_failure")
+    if (
+        "ending return relation is not enacted through object pressure" in combined
+        or "global_failure_class=object_pressure_too_weak" in combined
+        or "ending return relation count below floor" in combined
+    ):
+        classes.append("object_pressure_too_weak")
+        classes.append("ending_return_global_relation_failure")
+    if "exact normalized copy" in combined or "overlap_cluster:" in combined:
+        classes.append("target_unit_exact_copy_regression")
+    for unit_id in (
+        "final_return_enacts_not_explains",
+        "same_object_field_returns_without_summary",
+        "proof_no_answer_carry_preserved",
+    ):
+        if f"{unit_id}: target_unit:{unit_id}: exact normalized copy" in combined:
+            classes.append(f"{unit_id}_exact_copy_regression")
+    if "token edit distance below floor" in combined:
+        classes.append("target_unit_token_edit_distance_failure")
+    if "changed_unique_word_count below floor" in combined:
+        classes.append("target_unit_changed_word_floor_failure")
+    before_text = str(
+        work_order.get("before_section_text")
+        or work_order.get("selected_region_before_text")
+        or ""
+    )
+    if before_text and replacement_text:
+        changed_count, changed_ratio = _changed_unique_word_stats(
+            before_text,
+            replacement_text,
+        )
+        if changed_ratio < 0.1:
+            classes.append("target_bearing_ratio_failure")
+        if changed_count < 8:
+            classes.append("target_bearing_changed_word_floor_failure")
+    if not classes:
+        classes.append("failed_residual_generation_validation")
+    return _unique(classes)
+
+
 def _failed_hostile_scaffold_failure_summary(failure_classes: list[str]) -> str:
     if "ordinary_table_unit_under_material_failure" in failure_classes:
         return "ordinary-table unit remained under-material sentence polish"
@@ -1498,6 +1657,21 @@ def _failed_hostile_scaffold_failure_summary(failure_classes: list[str]) -> str:
     if "broad_materiality_failure" in failure_classes:
         return "broad selected-region materiality remained insufficient"
     return "failed residual generation validation"
+
+
+def _failed_ending_return_failure_summary(failure_classes: list[str]) -> str:
+    if "target_unit_exact_copy_regression" in failure_classes:
+        return (
+            "ending-return attempt left target units as exact copies and failed "
+            "object-pressure relation"
+        )
+    if "object_pressure_too_weak" in failure_classes:
+        return "ending return relation remained too weakly enacted through object pressure"
+    if "explicit_negated_explanation_global_failure" in failure_classes:
+        return "ending return was framed through negated explanation rather than enacted"
+    if "reset_or_clearing_language_failure" in failure_classes:
+        return "ending return drifted into reset or clearing language"
+    return "failed ending-return residual generation validation"
 
 
 def _changed_unique_word_stats(before_text: str, after_text: str) -> tuple[int, float]:
@@ -3552,6 +3726,198 @@ def _hostile_scaffold_failed_path_summary(
     }
 
 
+def _ending_return_failed_path_summary(
+    history: dict[str, object],
+) -> dict[str, object]:
+    rows = _rows(history)
+    attempts = [
+        row
+        for row in rows
+        if row["packet_kind"] == FAILED_RESIDUAL_GENERATION_PACKET_KIND
+        and row.get("selected_residual_target_id")
+        == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    ]
+    accepted_candidates = [
+        row
+        for row in rows
+        if row["packet_kind"] == "bounded_macro_recomposition"
+        and row.get("selected_residual_target_id")
+        == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+        and row.get("candidate_generated")
+        and row.get("accepted")
+    ]
+    attempt_summaries = [
+        {
+            "packet_id": row["packet_id"],
+            "packet_dir": row["packet_dir"],
+            "source_authorization_packet_id": row.get(
+                "source_authorization_packet_id"
+            ),
+            "source_work_order_packet_id": row.get("source_work_order_packet_id"),
+            "base_candidate_packet_id": row.get("base_candidate_packet_id"),
+            "proof_packet_id": row.get("proof_packet_id"),
+            "reader_state_packet_id": row.get("reader_state_packet_id"),
+            "failure_classes": list(
+                row.get("failure_classes", [])
+                if isinstance(row.get("failure_classes"), list)
+                else []
+            ),
+            "failure_summary": row.get("failure_summary"),
+            "model_call_error_messages": list(
+                row.get("model_call_error_messages", [])
+                if isinstance(row.get("model_call_error_messages"), list)
+                else []
+            ),
+            "authorization_consumed": bool(row.get("authorization_consumed")),
+            "candidate_generated": bool(row.get("candidate_generated")),
+            "candidate_artifact_id": row.get("candidate_artifact_id"),
+            "ablation_authorized": bool(row.get("ablation_authorized")),
+            "reader_state_evaluation_authorized": bool(
+                row.get("reader_state_evaluation_authorized")
+            ),
+            "not_candidate_evidence": True,
+        }
+        for row in attempts
+    ]
+    global_relation_attempts = [
+        row
+        for row in attempts
+        if any(
+            failure_class
+            in {
+                "object_pressure_too_weak",
+                "ending_return_global_relation_failure",
+                "explicit_negated_explanation_global_failure",
+            }
+            for failure_class in row.get("failure_classes", [])
+        )
+    ]
+    latest_classes = (
+        list(attempts[-1].get("failure_classes", []))
+        if attempts and isinstance(attempts[-1].get("failure_classes"), list)
+        else []
+    )
+    stop_test_triggered = len(attempts) >= 3 and not accepted_candidates
+    return {
+        "target_id": ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        "target_adapter_id": ENDING_RETURN_RISK_TARGET_ADAPTER_ID,
+        "attempted": bool(attempts),
+        "failed_attempt_count": len(attempts),
+        "attempts": attempt_summaries,
+        "attempt_packet_ids": [str(row["packet_id"]) for row in attempts],
+        "failure_classes_by_attempt": {
+            str(row["packet_id"]): list(
+                row.get("failure_classes", [])
+                if isinstance(row.get("failure_classes"), list)
+                else []
+            )
+            for row in attempts
+        },
+        "failure_classes": _unique(
+            failure_class
+            for row in attempts
+            for failure_class in (
+                row.get("failure_classes", [])
+                if isinstance(row.get("failure_classes"), list)
+                else []
+            )
+        ),
+        "repeated_object_pressure_or_global_relation_failure": (
+            len(global_relation_attempts) >= 2
+        ),
+        "latest_target_unit_exact_copy_regression": (
+            "target_unit_exact_copy_regression" in latest_classes
+        ),
+        "latest_failure_classes": latest_classes,
+        "no_accepted_ending_return_candidate_exists": not accepted_candidates,
+        "accepted_candidate_packet_ids": [
+            str(row["packet_id"]) for row in accepted_candidates
+        ],
+        "source_authorization_packet_id": attempts[-1].get(
+            "source_authorization_packet_id"
+        )
+        if attempts
+        else None,
+        "source_work_order_packet_id": attempts[-1].get("source_work_order_packet_id")
+        if attempts
+        else None,
+        "base_candidate_packet_id": attempts[-1].get("base_candidate_packet_id")
+        if attempts
+        else None,
+        "proof_packet_id": attempts[-1].get("proof_packet_id") if attempts else None,
+        "reader_state_packet_id": attempts[-1].get("reader_state_packet_id")
+        if attempts
+        else None,
+        "authorization_still_technically_unconsumed": bool(attempts)
+        and not any(row.get("authorization_consumed") for row in attempts),
+        "should_not_reuse_authorization_without_strategy_review": bool(attempts),
+        "stop_test_triggered": stop_test_triggered,
+        "target_status": ENDING_RETURN_PAUSED_STATUS
+        if stop_test_triggered
+        else ("failed_attempts_observed" if attempts else "not_observed"),
+        "next_recommended_action": ENDING_RETURN_STRATEGY_ACTION
+        if stop_test_triggered
+        else None,
+        "generation_retry_recommended": False,
+        "failed_packets_are_not_candidate_evidence": True,
+        "ablation_authorized_on_failed_packets": False,
+        "reader_state_evaluation_authorized_on_failed_packets": False,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+    }
+
+
+def _failed_target_status_map(
+    *summaries: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    statuses: dict[str, dict[str, object]] = {}
+    for summary in summaries:
+        target_id = str(summary.get("target_id") or "")
+        if not target_id or summary.get("attempted") is not True:
+            continue
+        statuses[target_id] = {
+            "target_id": target_id,
+            "target_adapter_id": summary.get("target_adapter_id"),
+            "target_status": summary.get("target_status"),
+            "attempted": True,
+            "failed_attempt_count": summary.get("failed_attempt_count", 0),
+            "failed_packet_ids": list(
+                summary.get("attempt_packet_ids", [])
+                if isinstance(summary.get("attempt_packet_ids"), list)
+                else []
+            ),
+            "attempt_packet_ids": list(
+                summary.get("attempt_packet_ids", [])
+                if isinstance(summary.get("attempt_packet_ids"), list)
+                else []
+            ),
+            "failure_classes": list(
+                summary.get("failure_classes", [])
+                if isinstance(summary.get("failure_classes"), list)
+                else []
+            ),
+            "failure_classes_by_attempt": dict(
+                summary.get("failure_classes_by_attempt", {})
+                if isinstance(summary.get("failure_classes_by_attempt"), dict)
+                else {}
+            ),
+            "stop_test_triggered": bool(summary.get("stop_test_triggered")),
+            "next_recommended_action": summary.get("next_recommended_action"),
+            "next_allowed_status": "strategy_review_only",
+            "generation_retry_recommended": False,
+            "available_for_operator_selection": False,
+            "candidate_generation_authorized": False,
+            "broad_reuse_authorized": False,
+            "failed_packets_are_not_candidate_evidence": True,
+            "source_authorization_packet_id": summary.get(
+                "source_authorization_packet_id"
+            ),
+            "source_work_order_packet_id": summary.get("source_work_order_packet_id"),
+            "base_candidate_packet_id": summary.get("base_candidate_packet_id"),
+        }
+    return statuses
+
+
 def _build_provisional_candidate_queue(
     history: dict[str, object],
     best_candidate: dict[str, object],
@@ -3963,10 +4329,16 @@ def _build_failed_or_rejected_repairs(history: dict[str, object]) -> dict[str, o
                     }
                 )
     hostile_scaffold_failed_path = _hostile_scaffold_failed_path_summary(history)
+    ending_return_failed_path = _ending_return_failed_path_summary(history)
     return {
         "failed_or_rejected_repairs": repairs,
         "failed_or_rejected_count": len(repairs),
         "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
+        "ending_return_failed_generation_path": ending_return_failed_path,
+        "failed_target_status_map": _failed_target_status_map(
+            hostile_scaffold_failed_path,
+            ending_return_failed_path,
+        ),
         "mechanically_invalid_prior_packets": [],
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
@@ -3977,6 +4349,7 @@ def _build_failed_or_rejected_repairs(history: dict[str, object]) -> dict[str, o
 def _build_exhausted_handle_report(history: dict[str, object]) -> dict[str, object]:
     rows = _rows(history)
     hostile_scaffold_failed_path = _hostile_scaffold_failed_path_summary(history)
+    ending_return_failed_path = _ending_return_failed_path_summary(history)
     record_rows = [
         row
         for row in rows
@@ -4115,6 +4488,40 @@ def _build_exhausted_handle_report(history: dict[str, object]) -> dict[str, obje
                 ],
             }
         )
+    if ending_return_failed_path["attempted"]:
+        handles.append(
+            {
+                "handle": ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+                "status": ending_return_failed_path["target_status"],
+                "evidence_packet_ids": list(
+                    ending_return_failed_path["attempt_packet_ids"]
+                ),
+                "reason": (
+                    "Ending-return residual generation has failed repeatedly; "
+                    "failed packets are diagnostic evidence and should not be "
+                    "reread as accepted candidates."
+                ),
+                "allowed_to_revisit_only_if": (
+                    "operator strategy review produces a new strategy or target "
+                    "contract rather than a direct retry"
+                ),
+                "source_authorization_packet_id": ending_return_failed_path[
+                    "source_authorization_packet_id"
+                ],
+                "source_work_order_packet_id": ending_return_failed_path[
+                    "source_work_order_packet_id"
+                ],
+                "failed_attempt_count": ending_return_failed_path[
+                    "failed_attempt_count"
+                ],
+                "stop_test_triggered": ending_return_failed_path[
+                    "stop_test_triggered"
+                ],
+                "next_recommended_action": ending_return_failed_path[
+                    "next_recommended_action"
+                ],
+            }
+        )
     return {
         "handles": handles,
         "exhausted_or_failed_count": sum(
@@ -4126,9 +4533,15 @@ def _build_exhausted_handle_report(history: dict[str, object]) -> dict[str, obje
                 "failed",
                 "weak_noncausal_or_unproven",
                 HOSTILE_SCAFFOLD_PAUSED_STATUS,
+                ENDING_RETURN_PAUSED_STATUS,
             }
         ),
         "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
+        "ending_return_failed_generation_path": ending_return_failed_path,
+        "failed_target_status_map": _failed_target_status_map(
+            hostile_scaffold_failed_path,
+            ending_return_failed_path,
+        ),
         "not_finalization_eligible": True,
         "no_phase_shift_claim": True,
         "worker": "exhausted_handle_report_v1_controller",
@@ -4746,6 +5159,9 @@ def _build_residual_blocker_map(
     hostile_scaffold_failed_path = _as_dict(
         exhausted_handle_report.get("hostile_scaffold_failed_generation_path")
     )
+    ending_return_failed_path = _as_dict(
+        exhausted_handle_report.get("ending_return_failed_generation_path")
+    )
     rival_failed = handles["rival_informed_object_event_pressure"]["status"] == "failed"
     macro_active = str(
         handles.get("bounded_macro_recomposition", {}).get("status", "")
@@ -5136,6 +5552,32 @@ def _build_residual_blocker_map(
                 ),
             ]
         )
+    if ending_return_failed_path.get("stop_test_triggered"):
+        blockers.extend(
+            [
+                _blocker(
+                    "ending_return_generation_path_paused",
+                    "high",
+                    "ending-return generation failed across repeated residual-generation attempts and requires strategy review",
+                    False,
+                    status=ENDING_RETURN_PAUSED_STATUS,
+                ),
+                _blocker(
+                    "ending_return_authorization_unconsumed_but_not_reusable",
+                    "high",
+                    "the ending-return authorization remains technically unconsumed but should not be reused without a new strategy review",
+                    False,
+                    status="strategy_review_required_before_reuse",
+                ),
+                _blocker(
+                    "ending_return_failed_packets_not_candidate_evidence",
+                    "high",
+                    "failed ending-return packets cannot authorize ablation or reader-state evaluation",
+                    False,
+                    status="diagnostic_only",
+                ),
+            ]
+        )
     return {
         "residual_blockers": blockers,
         "blocker_count": len(blockers),
@@ -5180,6 +5622,20 @@ def _build_residual_blocker_map(
         ),
         "hostile_scaffold_next_recommended_action": hostile_scaffold_failed_path.get(
             "next_recommended_action"
+        ),
+        "ending_return_failed_generation_path": ending_return_failed_path,
+        "ending_return_target_status": ending_return_failed_path.get("target_status")
+        if ending_return_failed_path.get("attempted")
+        else None,
+        "ending_return_stop_test_triggered": bool(
+            ending_return_failed_path.get("stop_test_triggered")
+        ),
+        "ending_return_next_recommended_action": ending_return_failed_path.get(
+            "next_recommended_action"
+        ),
+        "failed_target_status_map": _failed_target_status_map(
+            hostile_scaffold_failed_path,
+            ending_return_failed_path,
         ),
         "residual_candidate_may_supersede_current_best_after_reader_state": bool(
             pending_candidates or evaluated_contenders
@@ -5489,7 +5945,28 @@ def _build_strategic_decision_report(
     hostile_scaffold_failed_path = _as_dict(
         exhausted_handle_report.get("hostile_scaffold_failed_generation_path")
     )
-    if hostile_scaffold_failed_path.get("stop_test_triggered"):
+    ending_return_failed_path = _as_dict(
+        exhausted_handle_report.get("ending_return_failed_generation_path")
+    )
+    if ending_return_failed_path.get("stop_test_triggered"):
+        recommendation = "pause_ending_return_generation_path_for_strategy_review"
+        next_action = ENDING_RETURN_STRATEGY_ACTION
+        do_not_patch = True
+        basis = [
+            "ending_explains_return_risk has repeated failed residual-generation attempts",
+            "no accepted ending-return candidate exists",
+            (
+                f"{ending_return_failed_path.get('base_candidate_packet_id')} remains "
+                "the current candidate base rather than a failed ending attempt"
+            ),
+            (
+                f"{ending_return_failed_path.get('source_authorization_packet_id')} "
+                "is technically unconsumed but should not be reused without strategy review"
+            ),
+            "failed ending packets are diagnostic evidence only and do not authorize ablation or reader-state evaluation",
+            "the next move is synthesis/strategy review, not another ending-return retry",
+        ]
+    elif hostile_scaffold_failed_path.get("stop_test_triggered"):
         recommendation = "pause_hostile_scaffold_generation_path_for_strategy_review"
         next_action = HOSTILE_SCAFFOLD_STRATEGY_ACTION
         do_not_patch = True
@@ -5657,6 +6134,13 @@ def _build_strategic_decision_report(
         "hostile_scaffold_failed_generation_path": hostile_scaffold_failed_path,
         "hostile_scaffold_retry_recommended": False,
         "hostile_scaffold_generation_authorization_reuse_recommended": False,
+        "ending_return_failed_generation_path": ending_return_failed_path,
+        "ending_return_retry_recommended": False,
+        "ending_return_generation_authorization_reuse_recommended": False,
+        "failed_target_status_map": _failed_target_status_map(
+            hostile_scaffold_failed_path,
+            ending_return_failed_path,
+        ),
         "reader_state_evidence_consumed": reader_state_present,
         "reader_state_informed_recomposition_recommended": reader_state_present
         and reader_state_partial
@@ -6385,9 +6869,17 @@ def _build_gate_report(
         failed_repairs.get("hostile_scaffold_failed_generation_path")
         or exhausted_handles.get("hostile_scaffold_failed_generation_path")
     )
+    ending_return_failed_path = _as_dict(
+        failed_repairs.get("ending_return_failed_generation_path")
+        or exhausted_handles.get("ending_return_failed_generation_path")
+    )
     hostile_attempted = bool(hostile_scaffold_failed_path.get("attempted"))
     hostile_stop_test_triggered = bool(
         hostile_scaffold_failed_path.get("stop_test_triggered")
+    )
+    ending_attempted = bool(ending_return_failed_path.get("attempted"))
+    ending_stop_test_triggered = bool(
+        ending_return_failed_path.get("stop_test_triggered")
     )
     gate_results = [
         _gate_result("synthesis_packet_exists", True),
@@ -6517,6 +7009,13 @@ def _build_gate_report(
             else ["hostile scaffold failed attempts observed without stop-test adjudication"],
         ),
         _gate_result(
+            "ending_return_failed_generation_path_adjudicated",
+            ending_stop_test_triggered if ending_attempted else True,
+            []
+            if (ending_stop_test_triggered or not ending_attempted)
+            else ["ending-return failed attempts observed without stop-test adjudication"],
+        ),
+        _gate_result(
             "residual_candidate_supersession_adjudicated",
             residual_candidate_supersession_adjudicated
             if residual_candidate_reader_state_consumed
@@ -6597,6 +7096,10 @@ def _build_gate_report(
         blockers.append(
             "hostile scaffold generation path is paused pending strategy review"
         )
+    if ending_stop_test_triggered:
+        blockers.append(
+            "ending-return generation path is paused pending strategy review"
+        )
     return {
         "passed": False,
         "eligible": False,
@@ -6652,6 +7155,20 @@ def _build_gate_report(
         "hostile_scaffold_next_recommended_action": hostile_scaffold_failed_path.get(
             "next_recommended_action"
         ),
+        "ending_return_failed_generation_path": ending_return_failed_path,
+        "ending_return_failed_generation_path_adjudicated": (
+            ending_stop_test_triggered if ending_attempted else True
+        ),
+        "ending_return_target_status": ending_return_failed_path.get("target_status")
+        if ending_attempted
+        else None,
+        "ending_return_next_recommended_action": ending_return_failed_path.get(
+            "next_recommended_action"
+        ),
+        "failed_target_status_map": _failed_target_status_map(
+            hostile_scaffold_failed_path,
+            ending_return_failed_path,
+        ),
         "residual_candidate_supersession_adjudicated": (
             residual_candidate_supersession_adjudicated
         ),
@@ -6686,6 +7203,11 @@ def _build_packet_summary(
     hostile_scaffold_failed_path = _as_dict(
         payloads["failed_or_rejected_repairs"].get(
             "hostile_scaffold_failed_generation_path"
+        )
+    )
+    ending_return_failed_path = _as_dict(
+        payloads["failed_or_rejected_repairs"].get(
+            "ending_return_failed_generation_path"
         )
     )
     artifact_counts = packet_artifact_count_summary(
@@ -6801,6 +7323,20 @@ def _build_packet_summary(
         ),
         "hostile_scaffold_next_recommended_action": hostile_scaffold_failed_path.get(
             "next_recommended_action"
+        ),
+        "ending_return_failed_generation_path": ending_return_failed_path,
+        "ending_return_target_status": ending_return_failed_path.get("target_status")
+        if ending_return_failed_path.get("attempted")
+        else None,
+        "ending_return_failed_attempt_count": ending_return_failed_path.get(
+            "failed_attempt_count", 0
+        ),
+        "ending_return_next_recommended_action": ending_return_failed_path.get(
+            "next_recommended_action"
+        ),
+        "failed_target_status_map": _failed_target_status_map(
+            hostile_scaffold_failed_path,
+            ending_return_failed_path,
         ),
         "exhausted_handles_identified": payloads["exhausted_handle_report"]["handles"],
         "strategic_decision": decision["recommendation"],
