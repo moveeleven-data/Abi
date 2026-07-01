@@ -1167,6 +1167,11 @@ def _ending_return_generation_feedback(
         "failure_shapes_to_avoid": [
             "explaining what the return means",
             "announcing the opening structure as a thesis",
+            'satisfying the target by saying "the return does not arrive as an explanation"',
+            "announcing that the opening is altered instead of making alteration legible through object relation",
+            'naming object pressure as "pressure" or "presses in" without embodied ring/dust/spoon/saucer/table relations',
+            "using an object list as the proof of return",
+            "making the final sentence a thesis about what the return does",
             "resetting the artifact at the ending",
             "clearing, wiping clean, restarting, making new, or repeating without carry",
             "phrases that make return sound like erasure rather than pressure carried by objects",
@@ -1179,6 +1184,13 @@ def _ending_return_generation_feedback(
             'Negated reset language such as "nothing resets" is allowed.',
             "Do not make the scene cleared, wiped clean, restarted, made new, or merely repeated.",
             "If clearing language appears, it must clearly preserve prior pressure and object-field carry.",
+        ],
+        "global_relation_feedback": [
+            "Make the opening-return relation perceptible through what the objects carry.",
+            "Do not use negated explanation language as a substitute for enactment.",
+            "Object pressure must be embodied in ring/dust/spoon/saucer/table relations.",
+            "The ending may indicate alteration only when alteration is carried by object sequence, not thesis statement.",
+            "Preserve object-field continuity, proof/no-answer carry, and no-reset pressure.",
         ],
     }
 
@@ -1685,10 +1697,6 @@ def _collect_residual_intervention_validation(
             )
     elif subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         relation_count = _ending_return_relation_count(replacement)
-        if relation_count < 2:
-            failures["opening_return_relation_failures"].append(
-                "ending return relation is not enacted through object pressure"
-            )
     else:
         relation_count = _object_motion_relation_count(
             replacement,
@@ -1771,6 +1779,24 @@ def _collect_residual_intervention_validation(
             opening_return_relation_preserved=(
                 not failures.get("opening_return_relation_failures")
             ),
+        )
+    ending_return_global_relation_report: dict[str, object] | None = None
+    unit_global_alignment_report: dict[str, object] | None = None
+    if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        ending_return_global_relation_report = _ending_return_global_relation_report(
+            replacement,
+            relation_count=relation_count,
+            reset_report=ending_return_reset_report,
+        )
+        if ending_return_global_relation_report["global_relation_passed"] is not True:
+            failures["opening_return_relation_failures"].append(
+                _ending_return_global_relation_failure_message(
+                    ending_return_global_relation_report
+                )
+            )
+        unit_global_alignment_report = _apply_ending_return_unit_global_alignment(
+            unit_reports=unit_reports,
+            global_relation_report=ending_return_global_relation_report,
         )
 
     target_specific_mapping_report: dict[str, object] = {
@@ -1907,6 +1933,8 @@ def _collect_residual_intervention_validation(
             "final_validation_failure_not_captured_by_unit_semantics": (
                 (not passed) and unit_semantics_passed and global_semantic_failure
             ),
+            "ending_return_global_relation_report": ending_return_global_relation_report,
+            "unit_global_alignment_report": unit_global_alignment_report,
             "controller_final_validation_result": "passed" if passed else "refused",
         },
         "object_motion_relation_count": relation_count,
@@ -1918,6 +1946,8 @@ def _collect_residual_intervention_validation(
         "hostile_scaffold_semantic_leakage_report": hostile_semantic_leakage_report,
         "unit_collapse_report": unit_collapse_report,
         "ending_return_reset_diagnostic": ending_return_reset_report,
+        "ending_return_global_relation_report": ending_return_global_relation_report,
+        "unit_global_alignment_report": unit_global_alignment_report,
         "hostile_scaffold_generation_feedback": (
             _hostile_scaffold_generation_feedback(subject)
             if subject.selected_residual_target_id
@@ -2234,6 +2264,8 @@ def _target_unit_materiality_reports(
                 "materiality_failures": materiality_failures,
                 "semantic_passed": semantic["passed"],
                 "semantic_failures": semantic["failures"],
+                "semantic_warnings": [],
+                "semantic_warning_count": 0,
                 "classification": _target_unit_classification(
                     selected_residual_target_id=subject.selected_residual_target_id,
                     target_unit_id=unit.unit_id,
@@ -3956,6 +3988,12 @@ def _failure_result(
             "ending_return_reset_diagnostic": validation_payload.get(
                 "ending_return_reset_diagnostic"
             ),
+            "ending_return_global_relation_report": validation_payload.get(
+                "ending_return_global_relation_report"
+            ),
+            "unit_global_alignment_report": validation_payload.get(
+                "unit_global_alignment_report"
+            ),
             "residual_intervention_validation_report": residual_validation,
             "validation_failure_categories": failure_categories,
             "hostile_scaffold_generation_feedback": validation_payload.get(
@@ -4237,8 +4275,381 @@ def _hostile_scaffold_relation_count(text: str) -> int:
     return count
 
 
+def _ending_return_global_relation_report(
+    replacement: str,
+    *,
+    relation_count: int,
+    reset_report: dict[str, object] | None,
+) -> dict[str, object]:
+    lower = replacement.lower()
+    object_terms = _ending_return_object_terms()
+    pressure_terms = _ending_return_pressure_terms()
+    return_terms = _ending_return_return_terms()
+    risk_diagnostics: list[dict[str, object]] = []
+
+    def add_risk(
+        failure_class: str,
+        span: str,
+        *,
+        reason: str,
+        severity: str,
+        unit_ids: tuple[str, ...],
+    ) -> None:
+        risk_diagnostics.append(
+            {
+                "failure_class": failure_class,
+                "likely_offending_span_or_phrase": " ".join(span.split()),
+                "reason": reason,
+                "severity": severity,
+                "unit_ids": list(unit_ids),
+            }
+        )
+
+    span = _ending_return_sentence_matching_any(
+        replacement,
+        (
+            "does not arrive as an explanation",
+            "does not arrive as explanation",
+            "not arrive as an explanation",
+            "not an explanation",
+            "does not explain",
+        ),
+    )
+    if span:
+        add_risk(
+            "explicit_negated_explanation",
+            span,
+            reason=(
+                "negated explanation language is doing the work the object "
+                "relation should enact"
+            ),
+            severity="failure",
+            unit_ids=("final_return_enacts_not_explains",),
+        )
+
+    for sentence in _sentences(replacement):
+        sentence_lower = sentence.lower()
+        object_count = len(_terms_present(sentence_lower, object_terms))
+        pressure_led_list = any(
+            phrase in sentence_lower
+            for phrase in (
+                "presses in with the",
+                "pressure remains in the",
+                "with the table, the dust",
+            )
+        )
+        if sentence.count(",") >= 3 and object_count >= 4 and pressure_led_list:
+            add_risk(
+                "object_sequence_too_listlike",
+                sentence,
+                reason="object field is introduced as a list instead of an enacted relation",
+                severity="failure",
+                unit_ids=("same_object_field_returns_without_summary",),
+            )
+            break
+
+    span = _ending_return_sentence_matching_any(
+        replacement,
+        (
+            "opening comes back altered",
+            "opening comes back changed",
+            "opening is altered",
+            "opening is changed",
+            "opening returns altered",
+            "opening returns changed",
+        ),
+    )
+    if span and not _ending_return_span_enacts_opening_relation(span):
+        add_risk(
+            "opening_return_stated_not_enacted",
+            span,
+            reason=(
+                "opening-return relation is stated as alteration instead of "
+                "made perceptible through object pressure"
+            ),
+            severity="failure",
+            unit_ids=("opening_return_relation_without_thesis",),
+        )
+
+    span = _ending_return_sentence_matching_any(
+        replacement,
+        (
+            "presses in",
+            "pressure remains",
+            "held the strain",
+            "holds the strain",
+            "carried pressure",
+            "carrying pressure",
+        ),
+    )
+    if span:
+        add_risk(
+            "abstract_pressure_label",
+            span,
+            reason=(
+                "pressure is named directly; it should be embodied in local "
+                "object relations"
+            ),
+            severity="warning",
+            unit_ids=(
+                "final_return_enacts_not_explains",
+                "no_reset_return_pressure",
+            ),
+        )
+
+    span = _ending_return_sentence_matching_any(
+        replacement,
+        (
+            "proof of it is still no answer",
+            "proof is still no answer",
+            "proof/no-answer",
+            "proof now answers",
+            "proof finally answers",
+        ),
+    )
+    if span:
+        add_risk(
+            "proof_no_answer_explained",
+            span,
+            reason=(
+                "proof/no-answer pressure is being named as a concept rather "
+                "than carried by the scene"
+            ),
+            severity="warning",
+            unit_ids=("proof_no_answer_carry_preserved",),
+        )
+
+    span = _ending_return_sentence_matching_any(
+        replacement,
+        (
+            "what the return does",
+            "what the opening means",
+            "this means",
+            "the point is",
+            "the return is",
+        ),
+    )
+    if span:
+        add_risk(
+            "summary_compression",
+            span,
+            reason="final-return pressure is compressed into a summary statement",
+            severity="warning",
+            unit_ids=("same_object_field_returns_without_summary",),
+        )
+
+    if relation_count < 2:
+        add_risk(
+            "object_pressure_too_weak",
+            "ending return relation count below floor 2",
+            reason=(
+                "fewer than two sentences enact return through return/object/"
+                "pressure relation"
+            ),
+            severity="failure",
+            unit_ids=(
+                "final_return_enacts_not_explains",
+                "opening_return_relation_without_thesis",
+            ),
+        )
+
+    controller_span = _ending_return_sentence_matching_any(
+        replacement,
+        (
+            "must stay",
+            "must preserve",
+            "the controller",
+            "external to this output",
+            "this output",
+        ),
+    )
+    if controller_span:
+        add_risk(
+            "controller_overreach_possible",
+            controller_span,
+            reason="operator/controller language appears inside the replacement",
+            severity="failure",
+            unit_ids=("final_return_enacts_not_explains",),
+        )
+
+    failure_risks = [
+        risk for risk in risk_diagnostics if risk["severity"] == "failure"
+    ]
+    first_failure = failure_risks[0] if failure_risks else {}
+    object_field_return_present = len(_terms_present(lower, object_terms)) >= 4 and bool(
+        _terms_present(lower, return_terms)
+    )
+    proof_no_answer_carry_preserved = (
+        "proof" in lower
+        and ("answer" in lower or "no-answer" in lower)
+        and bool(_terms_present(lower, pressure_terms))
+    )
+    no_reset_pressure_preserved = not (
+        reset_report and reset_report.get("failed") is True
+    )
+    opening_return_relation_enacted = relation_count >= 2 and not any(
+        risk["failure_class"] == "opening_return_stated_not_enacted"
+        for risk in failure_risks
+    )
+    warning_map: dict[str, list[dict[str, object]]] = {}
+    for risk in risk_diagnostics:
+        for unit_id in risk["unit_ids"]:
+            warning_map.setdefault(str(unit_id), []).append(
+                {
+                    "warning_class": risk["failure_class"],
+                    "likely_offending_span_or_phrase": risk[
+                        "likely_offending_span_or_phrase"
+                    ],
+                    "reason": risk["reason"],
+                    "severity": risk["severity"],
+                }
+            )
+    return {
+        "global_relation_passed": not failure_risks,
+        "global_failure_class": first_failure.get("failure_class"),
+        "likely_offending_span_or_phrase": first_failure.get(
+            "likely_offending_span_or_phrase"
+        ),
+        "explicit_negated_explanation": any(
+            risk["failure_class"] == "explicit_negated_explanation"
+            for risk in risk_diagnostics
+        ),
+        "abstract_pressure_label": any(
+            risk["failure_class"] == "abstract_pressure_label"
+            for risk in risk_diagnostics
+        ),
+        "object_sequence_too_listlike": any(
+            risk["failure_class"] == "object_sequence_too_listlike"
+            for risk in risk_diagnostics
+        ),
+        "opening_return_stated_not_enacted": any(
+            risk["failure_class"] == "opening_return_stated_not_enacted"
+            for risk in risk_diagnostics
+        ),
+        "object_pressure_too_weak": any(
+            risk["failure_class"] == "object_pressure_too_weak"
+            for risk in risk_diagnostics
+        ),
+        "proof_no_answer_explained": any(
+            risk["failure_class"] == "proof_no_answer_explained"
+            for risk in risk_diagnostics
+        ),
+        "summary_compression": any(
+            risk["failure_class"] == "summary_compression"
+            for risk in risk_diagnostics
+        ),
+        "controller_overreach_possible": any(
+            risk["failure_class"] == "controller_overreach_possible"
+            for risk in risk_diagnostics
+        ),
+        "object_field_return_present": object_field_return_present,
+        "no_reset_pressure_preserved": no_reset_pressure_preserved,
+        "proof_no_answer_carry_preserved": proof_no_answer_carry_preserved,
+        "opening_return_relation_enacted_through_object_pressure": (
+            opening_return_relation_enacted
+        ),
+        "relation_count": relation_count,
+        "required_relation_count": 2,
+        "risk_diagnostics": risk_diagnostics,
+        "cross_unit_warning_map": warning_map,
+    }
+
+
+def _apply_ending_return_unit_global_alignment(
+    *,
+    unit_reports: list[dict[str, object]],
+    global_relation_report: dict[str, object],
+) -> dict[str, object]:
+    warning_map = {
+        str(unit_id): list(warnings)
+        for unit_id, warnings in (
+            global_relation_report.get("cross_unit_warning_map") or {}
+        ).items()
+    }
+    for report in unit_reports:
+        unit_id = str(report.get("target_unit_id") or "")
+        warnings = warning_map.get(unit_id, [])
+        report["semantic_warnings"] = warnings
+        report["semantic_warning_count"] = len(warnings)
+    unit_semantics_passed = all(
+        bool(report.get("semantic_passed")) for report in unit_reports
+    )
+    global_failed = global_relation_report.get("global_relation_passed") is not True
+    return {
+        "unit_semantics_passed": unit_semantics_passed,
+        "global_relation_passed": global_relation_report.get(
+            "global_relation_passed"
+        ),
+        "global_failure_class": global_relation_report.get("global_failure_class"),
+        "final_validation_failure_not_captured_by_unit_semantics": (
+            unit_semantics_passed and global_failed
+        ),
+        "cross_unit_warning_map": warning_map,
+        "warned_unit_ids": sorted(warning_map),
+        "warnings_attached_to_unit_reports": bool(warning_map),
+    }
+
+
+def _ending_return_global_relation_failure_message(
+    report: dict[str, object],
+) -> str:
+    failure_class = report.get("global_failure_class") or "unknown_global_relation_failure"
+    span = report.get("likely_offending_span_or_phrase") or ""
+    return (
+        "ending return relation is not enacted through object pressure; "
+        f"global_failure_class={failure_class}; "
+        f"likely_offending_span_or_phrase={span!r}"
+    )
+
+
+def _ending_return_sentence_matching_any(
+    text: str,
+    phrases: tuple[str, ...],
+) -> str:
+    for sentence in _sentences(text):
+        lower = sentence.lower()
+        if any(phrase in lower for phrase in phrases):
+            return sentence
+    return ""
+
+
+def _ending_return_span_enacts_opening_relation(span: str) -> bool:
+    lower = span.lower()
+    return (
+        len(_terms_present(lower, _ending_return_object_terms())) >= 3
+        and len(_terms_present(lower, _ending_return_pressure_terms())) >= 1
+        and any(
+            phrase in lower
+            for phrase in (
+                "by what has crossed",
+                "by what crossed",
+                "through",
+                "because",
+                "record",
+                "mark",
+            )
+        )
+    )
+
+
 def _ending_return_relation_count(text: str) -> int:
-    return_terms = (
+    return_terms = _ending_return_return_terms()
+    object_terms = _ending_return_object_terms()
+    pressure_terms = _ending_return_pressure_terms()
+    count = 0
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        lower = sentence.lower()
+        if (
+            _terms_present(lower, return_terms)
+            and _terms_present(lower, object_terms)
+            and _terms_present(lower, pressure_terms)
+        ):
+            count += 1
+    return count
+
+
+def _ending_return_return_terms() -> tuple[str, ...]:
+    return (
         "return",
         "again",
         "same table",
@@ -4246,7 +4657,10 @@ def _ending_return_relation_count(text: str) -> int:
         "opening",
         "comes back",
     )
-    object_terms = (
+
+
+def _ending_return_object_terms() -> tuple[str, ...]:
+    return (
         "table",
         "dust",
         "spoon",
@@ -4259,7 +4673,10 @@ def _ending_return_relation_count(text: str) -> int:
         "mark",
         "record",
     )
-    pressure_terms = (
+
+
+def _ending_return_pressure_terms() -> tuple[str, ...]:
+    return (
         "pressure",
         "proof",
         "answer",
@@ -4273,16 +4690,6 @@ def _ending_return_relation_count(text: str) -> int:
         "carried",
         "altered",
     )
-    count = 0
-    for sentence in re.split(r"(?<=[.!?])\s+", text):
-        lower = sentence.lower()
-        if (
-            _terms_present(lower, return_terms)
-            and _terms_present(lower, object_terms)
-            and _terms_present(lower, pressure_terms)
-        ):
-            count += 1
-    return count
 
 
 def _decorative_list_risk(
