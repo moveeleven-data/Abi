@@ -35,6 +35,7 @@ from abi.modules.residual_targets import (
     compile_tactile_target_units,
     extract_object_labels,
     get_residual_target_spec,
+    payload_has_placeholder_generation_contract,
     semantic_preflight_failures_for_work_order,
     target_adapter_metadata,
 )
@@ -721,6 +722,24 @@ def _work_order_supersession_context(
             }
         except (OSError, ValueError, KeyError, TypeError):
             continue
+        handoff_failures = _generation_handoff_metadata_failures(
+            payloads,
+            target_id=target_id,
+        )
+        if handoff_failures:
+            supersession_reason = (
+                "ending_return_generation_handoff_metadata_missing"
+                if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+                else "prior work order generation handoff metadata is stale"
+            )
+            return {
+                **base,
+                "superseded_work_order_packet_id": packet_id,
+                "supersession_reason": supersession_reason,
+                "semantic_preflight_failures": handoff_failures,
+                "new_canonical_work_order_packet_id": "assigned_after_packet_creation",
+                "supersedes_semantically_stale_work_order": True,
+            }
         failures = semantic_preflight_failures_for_work_order(payloads)
         if failures:
             supersession_reason = (
@@ -745,6 +764,66 @@ def _work_order_supersession_context(
             "semantic_preflight_failures": [],
         }
     return base
+
+
+def _generation_handoff_metadata_failures(
+    payloads: dict[str, dict[str, Any]],
+    *,
+    target_id: str,
+) -> list[str]:
+    if target_id != ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return []
+    failures: list[str] = []
+    for artifact_type, payload in payloads.items():
+        if payload_has_placeholder_generation_contract(payload):
+            failures.append(f"{artifact_type} uses placeholder generation metadata")
+    packet = payloads.get("residual_work_order_packet", {})
+    contract = payloads.get("future_generation_contract", {})
+    unit_map = payloads.get("object_motion_target_unit_map", {})
+    plan = payloads.get("ablation_and_reader_eval_plan", {})
+    for name, payload in (
+        ("residual_work_order_packet", packet),
+        ("future_generation_contract", contract),
+        ("object_motion_target_unit_map", unit_map),
+    ):
+        if payload.get("future_generation_authorized") is not False:
+            failures.append(f"{name} missing future_generation_authorized false")
+    if not isinstance(unit_map.get("target_unit_overlap_cluster_report"), dict):
+        failures.append("object_motion_target_unit_map missing overlap cluster report")
+    if not isinstance(contract.get("target_unit_overlap_cluster_report"), dict):
+        failures.append("future_generation_contract missing overlap cluster report")
+    required_controls = {
+        "full_ending_return_intervention",
+        "revert_ending_return_intervention_to_current_best",
+        "isolate_return_enactment_without_extra_explanation",
+        "proof_no_answer_preservation_control",
+        "object_field_return_preservation_control",
+        "strongest_rival_comparison",
+    }
+    controls = set(str(value) for value in contract.get("target_specific_ablation_controls", []))
+    controls.update(str(value) for value in plan.get("future_ablation_controls", []))
+    missing_controls = sorted(required_controls - controls)
+    if missing_controls:
+        failures.append(
+            "ending-return ablation controls missing: " + ", ".join(missing_controls)
+        )
+    required_focus = {
+        "final return enacts rather than explains",
+        "opening-return transformation",
+        "no-reset return pressure",
+        "proof/no-answer carry preservation",
+        "object-field return preservation",
+        "reread transformation",
+        "strongest-rival pressure",
+    }
+    focus = set(str(value) for value in contract.get("target_specific_reader_state_focus", []))
+    focus.update(str(value) for value in plan.get("future_reader_state_eval_focus", []))
+    missing_focus = sorted(required_focus - focus)
+    if missing_focus:
+        failures.append(
+            "ending-return reader-state focus missing: " + ", ".join(missing_focus)
+        )
+    return failures
 
 
 def _build_subject_manifest(
@@ -1707,7 +1786,7 @@ def _build_ending_return_target_unit_map(
                 selected_paragraphs,
                 start=0,
                 end=0,
-                needles=("still", "there", "nothing resets", "not wipe"),
+                needles=("opening", "first", "morning", "again"),
             ),
             weakness=(
                 "the ending can feel like reset or summary if return pressure "
@@ -1763,6 +1842,10 @@ def _build_ending_return_target_unit_map(
         subject=subject,
         selected_region_text=selected_text,
     )
+    overlap_report = _ending_return_overlap_cluster_report(
+        units=units,
+        selected_region_id=selected_region_id,
+    )
     return {
         "selected_residual_target_id": subject.selected_target_id,
         "unit_map_kind": subject.target_spec.work_order_adapter,
@@ -1775,6 +1858,10 @@ def _build_ending_return_target_unit_map(
         "selected_region_id": selected_region_id,
         "target_units": units,
         "target_unit_count": len(units),
+        "target_unit_overlap_cluster_report": overlap_report,
+        "overlap_clusters": overlap_report["overlap_clusters"],
+        "overlap_cluster_count": overlap_report["overlap_cluster_count"],
+        "all_overlap_clusters_allowed": overlap_report["all_overlap_clusters_allowed"],
         "material_target_units_all_inside_selected_region": True,
         "protected_reference_units": protected_references,
         "protected_reference_unit_count": len(protected_references),
@@ -1790,9 +1877,11 @@ def _build_ending_return_target_unit_map(
             subject.selected_target_id
         )["materiality_policy_id"],
         "generation_semantic_validation_contract": [
-            "future generation is not authorized by this packet",
+            "generation requires a separate authorization packet",
             "selected ending region must carry return through object relation",
             "do not explain the return more explicitly",
+            "do not let return reset the artifact",
+            "validate overlapping unit semantics separately",
             "preserve opening, middle recurrence, proof/no-answer, and rival-pressure references",
         ],
         "ablation_control_plan": list(
@@ -1874,6 +1963,69 @@ def _ending_return_unit(
         "material_change_required": True,
         "semantic_contract": list(subject.target_spec.operational_definition),
         "future_generation_authorized": False,
+    }
+
+
+def _ending_return_overlap_cluster_report(
+    *,
+    units: list[dict[str, object]],
+    selected_region_id: str,
+) -> dict[str, object]:
+    by_hash: dict[str, list[dict[str, object]]] = {}
+    for unit in units:
+        before_hash = str(unit.get("before_text_sha256") or "")
+        if before_hash:
+            by_hash.setdefault(before_hash, []).append(unit)
+    clusters: list[dict[str, object]] = []
+    for before_hash, group in by_hash.items():
+        if len(group) < 2:
+            continue
+        first = group[0]
+        source_span = first.get("source_span")
+        source_span = source_span if isinstance(source_span, dict) else {}
+        obligations = {
+            str(unit.get("unit_id") or ""): str(
+                unit.get("target_effect")
+                or unit.get("allowed_operation")
+                or unit.get("weakness")
+                or ""
+            )
+            for unit in group
+        }
+        unit_ids = [str(unit.get("unit_id") or "") for unit in group]
+        clusters.append(
+            {
+                "overlap_cluster_id": f"ending_return_overlap_{before_hash[:12]}",
+                "selected_region_id": selected_region_id,
+                "source_region_id": selected_region_id,
+                "source_span": dict(source_span),
+                "before_text_sha256": before_hash,
+                "shared_before_text": str(first.get("before_text") or ""),
+                "overlapping_unit_ids": unit_ids,
+                "semantic_obligations_by_unit": obligations,
+                "overlap_allowed": True,
+                "one_replacement_may_satisfy_multiple_units": True,
+                "distinct_semantic_checks_required": True,
+                "cluster_instruction": (
+                    "One bounded replacement may satisfy these overlapping "
+                    "ending-return units only if each listed semantic obligation "
+                    "is independently satisfied."
+                ),
+            }
+        )
+    return {
+        "report_id": "ending_return_overlap_cluster_report_v1",
+        "selected_region_id": selected_region_id,
+        "overlap_cluster_count": len(clusters),
+        "overlap_clusters": clusters,
+        "overlap_allowed": True,
+        "all_overlap_clusters_allowed": all(
+            cluster["overlap_allowed"] is True for cluster in clusters
+        ),
+        "one_replacement_may_satisfy_multiple_units": True,
+        "distinct_semantic_checks_required": True,
+        "source_a_b_c_artifacts_may_share_before_text": True,
+        "worker": "ending_return_overlap_cluster_report_v1_controller",
     }
 
 
@@ -2648,6 +2800,11 @@ def _build_future_generation_contract(
             if isinstance(unit, dict)
         },
         "authoritative_target_units": list(unit_map["target_units"]),
+        "target_unit_overlap_cluster_report": dict(
+            unit_map.get("target_unit_overlap_cluster_report", {})
+        ),
+        "overlap_clusters": list(unit_map.get("overlap_clusters", [])),
+        "overlap_cluster_count": int(unit_map.get("overlap_cluster_count") or 0),
         "protected_reference_units": list(unit_map.get("protected_reference_units", [])),
         "future_evaluation_focus": list(unit_map.get("future_evaluation_focus", [])),
         "mechanism_contract": list(subject.target_spec.operational_definition),
@@ -2685,6 +2842,7 @@ def _build_future_generation_contract(
         "must_not": list(subject.target_spec.forbidden_changes),
         "controller_owns_assembly_and_gates": True,
         "future_generation_requires_separate_authorization": True,
+        "future_generation_authorized": False,
         "candidate_generation_authorized": False,
         "live_model_call_authorized": False,
         "candidate_generated": False,
@@ -2964,6 +3122,10 @@ def _build_packet_summary(
             for unit in unit_map["target_units"]
             if isinstance(unit, dict)
         ],
+        "target_unit_overlap_cluster_report": unit_map.get(
+            "target_unit_overlap_cluster_report"
+        ),
+        "overlap_cluster_count": unit_map.get("overlap_cluster_count", 0),
         "target_novelty_distinctness_report": novelty,
         **subject.supersession,
         "new_canonical_work_order_packet_id": (
@@ -2975,6 +3137,7 @@ def _build_packet_summary(
         "candidate_generated": False,
         "model_calls": 0,
         "candidate_generation_authorized": False,
+        "future_generation_authorized": False,
         "future_generation_contract_created": True,
         "next_allowed_action": subject.target_spec.review_action,
         "next_recommended_action": subject.target_spec.review_action,
@@ -3032,6 +3195,7 @@ def _result_payload(
         **subject.routing,
         "candidate_generated": False,
         "candidate_generation_authorized": False,
+        "future_generation_authorized": False,
         "future_generation_contract_created": True,
         "next_allowed_action": subject.target_spec.review_action,
         "finalization_eligible": False,

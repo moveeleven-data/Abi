@@ -33,10 +33,13 @@ ENDING_RETURN_WORK_ORDER_CONTRACT_VERSION = "1"
 OBJECT_MOTION_GENERATION_CONTRACT_VERSION = "1"
 TACTILE_GENERATION_CONTRACT_VERSION = "1"
 HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION = "1"
-ENDING_RETURN_GENERATION_CONTRACT_VERSION = "placeholder_ending_return_planning_only_v1"
+ENDING_RETURN_PLACEHOLDER_GENERATION_CONTRACT_VERSION = (
+    "placeholder_ending_return_planning_only_v1"
+)
+ENDING_RETURN_GENERATION_CONTRACT_VERSION = "1"
 PLACEHOLDER_GENERATION_CONTRACT_VERSIONS = (
     "placeholder_1",
-    ENDING_RETURN_GENERATION_CONTRACT_VERSION,
+    ENDING_RETURN_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
 )
 HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID = (
     "hostile_scaffold_visibility_planning_placeholder_v1"
@@ -44,10 +47,14 @@ HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID = (
 HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID = (
     "hostile_scaffold_visibility_generation_materiality_v1"
 )
-ENDING_RETURN_MATERIALITY_POLICY_ID = "ending_return_risk_planning_placeholder_v1"
+ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID = (
+    "ending_return_risk_planning_placeholder_v1"
+)
+ENDING_RETURN_MATERIALITY_POLICY_ID = "ending_return_risk_generation_materiality_v1"
+ENDING_RETURN_SEMANTIC_VALIDATOR_ID = "ending_return_risk_semantic_validator_v1"
 PLACEHOLDER_MATERIALITY_POLICY_IDS = (
     HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
-    ENDING_RETURN_MATERIALITY_POLICY_ID,
+    ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID,
 )
 
 
@@ -126,6 +133,7 @@ class ResidualTargetAdapter:
     reader_state_evaluation_focus: tuple[str, ...]
     stop_test_policy: dict[str, object]
     materiality_policy: ResidualMaterialityPolicy
+    semantic_validator_id: str = ""
 
     @property
     def adapter_id(self) -> str:
@@ -424,6 +432,8 @@ ENDING_EXPLAINS_RETURN_RISK_SPEC = ResidualTargetSpec(
     ),
     generation_requires_separate_authorization=True,
     target_specific_ablation_controls=(
+        "full_ending_return_intervention",
+        "revert_ending_return_intervention_to_current_best",
         "revert_ending_return_intervention",
         "isolate_return_enactment_without_extra_explanation",
         "proof_no_answer_preservation_control",
@@ -433,7 +443,9 @@ ENDING_EXPLAINS_RETURN_RISK_SPEC = ResidualTargetSpec(
     target_specific_reader_state_focus=(
         "final return enacts rather than explains",
         "opening-return transformation",
+        "no-reset return pressure",
         "proof/no-answer carry preservation",
+        "object-field return preservation",
         "first-read closure pressure",
         "reread transformation",
         "strongest-rival pressure",
@@ -694,49 +706,76 @@ HOSTILE_SCAFFOLD_MATERIALITY_POLICY = ResidualMaterialityPolicy(
 ENDING_RETURN_MATERIALITY_POLICY = ResidualMaterialityPolicy(
     policy_id=ENDING_RETURN_MATERIALITY_POLICY_ID,
     policy_version="1",
-    primary_materiality_scope="planning_only",
+    primary_materiality_scope="target_bearing_scope",
     whole_region_guard={
         "scope": "ending_final_return_region",
-        "planning_only": True,
-        "future_generation_must_define_enforceable_thresholds": True,
+        "near_copy_guard_only": True,
+        "exact_copy_fails": True,
+        "selected_region_copy_fails": True,
+        "do_not_enforce_global_ratio_floor": True,
+        "token_edit_distance_floor": 8,
+        "sequence_similarity_ceiling": 0.96,
     },
     target_bearing_scope={
         "scope": "final-return sentences containing target units",
-        "planning_only": True,
+        "absolute_change_floor": 7,
+        "ratio_floor": 0.10,
+        "token_edit_distance_floor": 8,
+        "sequence_similarity_ceiling": 0.92,
+        "changed_sentence_floor": 1,
         "must_enact_return_without_extra_explanation": True,
+        "must_preserve_proof_no_answer_carry": True,
+        "must_preserve_object_field_return": True,
     },
     target_unit_scope={
         "scope": "each ending-return risk target unit",
-        "planning_only": True,
         "must_be_inside_selected_ending_region": True,
+        "absolute_change_floor": 3,
+        "ratio_floor": 0.08,
+        "token_edit_distance_floor": 3,
+        "sequence_similarity_ceiling": 0.92,
+        "changed_sentence_floor": 1,
+        "must_validate_unit_semantics_separately": True,
     },
     overlap_cluster_policy={
         "detect_shared_before_text_hash": True,
-        "planning_only": True,
-        "future_generation_must_validate_member_semantics_separately": True,
+        "overlap_allowed_when_source_sentence_is_shared": True,
+        "one_replacement_may_satisfy_multiple_units": True,
+        "validate_member_semantics_separately": True,
+        "require_coherent_integrated_replacement": True,
+        "record_semantic_obligations_by_unit": True,
     },
-    absolute_change_floor=0,
-    ratio_floor=0.0,
-    token_edit_distance_floor=0,
-    sequence_similarity_ceiling=1.0,
-    changed_sentence_floor=0,
+    absolute_change_floor=7,
+    ratio_floor=0.10,
+    token_edit_distance_floor=8,
+    sequence_similarity_ceiling=0.92,
+    changed_sentence_floor=1,
     protected_context_exemptions=(
         "opening object field remains protected reference material",
         "middle recurrence object-event gains remain protected reference material",
         "proof/no-answer region remains protected reference material",
     ),
     prompt_feedback=(
-        "planning only; generation requires a later explicit authorization and materiality contract",
         "target the ending/final-return region, not middle recurrence by inertia",
         "make return happen through object relation, local pressure, or reader encounter",
         "do not explain the return more explicitly",
+        "do not let the ending reset the artifact",
+        "the same object field must return without summary",
+        "proof/no-answer pressure must remain pressure, not become answer",
+        "overlapping target units may share one replacement only when each semantic obligation is separately satisfied",
         "preserve proof/no-answer carry, object/tactile field, and strongest-rival pressure",
+        "preserve packet_0063 object/tactile gains as protected reference material",
     ),
     failure_report_fields=(
+        "target_bearing_selected_region_materiality_failures",
+        "target_unit_materiality_failures",
+        "overlap_cluster_failures",
         "ending_return_explanation_leakage_failures",
         "opening_return_relation_failures",
+        "no_reset_return_pressure_failures",
         "proof_no_answer_carry_failures",
         "object_field_preservation_failures",
+        "protected_reference_preservation_failures",
         "rival_pressure_preservation_failures",
         "finality_or_phase_shift_claim_failures",
     ),
@@ -873,12 +912,16 @@ ENDING_RETURN_RISK_ADAPTER = ResidualTargetAdapter(
     work_order_adapter=ENDING_EXPLAINS_RETURN_RISK_SPEC.work_order_adapter,
     generation_schema=RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
     worker_role=WorkerRole.RESIDUAL_INTERVENTION_GENERATOR,
-    prompt_contract_id="autonomous.residual_intervention_generation.v1.ending_return_risk.placeholder",
+    prompt_contract_id="autonomous.residual_intervention_generation.v1.ending_return_risk",
     prompt_instructions=(
-        "planning only; do not generate from this adapter until separately authorized",
-        "future work may replace only the selected ending/final-return region",
+        "replace only the selected ending/final-return region after explicit authorization",
         "make final return enact rather than explain the opening transformation",
+        "carry return through object relation, local pressure, or reader encounter",
+        "do not reset the artifact at the ending",
+        "preserve proof/no-answer pressure as pressure, not answer",
+        "return the same object field without summary or generic vividness",
         "preserve protected opening, middle, proof/no-answer, object-field, and rival-pressure references",
+        "do not imitate the rival, make finality claims, or make phase-shift claims",
     ),
     mechanism_contract=ENDING_EXPLAINS_RETURN_RISK_SPEC.operational_definition,
     ablation_controls=ENDING_EXPLAINS_RETURN_RISK_SPEC.target_specific_ablation_controls,
@@ -897,6 +940,7 @@ ENDING_RETURN_RISK_ADAPTER = ResidualTargetAdapter(
         ],
     },
     materiality_policy=ENDING_RETURN_MATERIALITY_POLICY,
+    semantic_validator_id=ENDING_RETURN_SEMANTIC_VALIDATOR_ID,
 )
 
 RESIDUAL_TARGET_ADAPTERS = {
@@ -1092,6 +1136,7 @@ def target_adapter_metadata(target_id: str) -> dict[str, object]:
         "generation_schema_name": adapter.generation_schema.name,
         "generation_schema_version": adapter.generation_schema.version,
         "prompt_contract_id": adapter.prompt_contract_id,
+        "semantic_validator_id": adapter.semantic_validator_id,
         "canonical_work_order_action": adapter.canonical_work_order_action,
         "review_action": adapter.review_action,
         "ablation_controls": list(adapter.ablation_controls),
@@ -1142,6 +1187,31 @@ def target_generation_readiness_failures(target_id: str) -> list[str]:
             failures.append(
                 "hostile scaffold semantic validation contract is incomplete: "
                 + ", ".join(missing)
+            )
+    if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        required_fields = {
+            "target_bearing_selected_region_materiality_failures",
+            "target_unit_materiality_failures",
+            "overlap_cluster_failures",
+            "ending_return_explanation_leakage_failures",
+            "opening_return_relation_failures",
+            "no_reset_return_pressure_failures",
+            "proof_no_answer_carry_failures",
+            "object_field_preservation_failures",
+            "protected_reference_preservation_failures",
+            "rival_pressure_preservation_failures",
+            "finality_or_phase_shift_claim_failures",
+        }
+        missing = sorted(required_fields - set(adapter.materiality_policy.failure_report_fields))
+        if missing:
+            failures.append(
+                "ending-return semantic validation contract is incomplete: "
+                + ", ".join(missing)
+            )
+        if adapter.semantic_validator_id != ENDING_RETURN_SEMANTIC_VALIDATOR_ID:
+            failures.append(
+                "ending-return semantic validator is missing or stale: "
+                f"{adapter.semantic_validator_id or '<missing>'}"
             )
     return failures
 
@@ -1407,6 +1477,205 @@ def validate_single_region_target_unit_alignment(
     return failures
 
 
+ENDING_RETURN_REQUIRED_UNIT_IDS = {
+    "final_return_enacts_not_explains",
+    "opening_return_relation_without_thesis",
+    "no_reset_return_pressure",
+    "same_object_field_returns_without_summary",
+    "proof_no_answer_carry_preserved",
+}
+
+
+def validate_ending_return_unit_map(unit_map: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    units = [
+        unit
+        for unit in unit_map.get("target_units", [])
+        if isinstance(unit, dict)
+    ]
+    unit_ids = {str(unit.get("unit_id") or "") for unit in units}
+    missing_units = sorted(ENDING_RETURN_REQUIRED_UNIT_IDS - unit_ids)
+    if missing_units:
+        failures.append(f"ending-return unit map missing units: {missing_units}")
+    if unit_map.get("future_generation_authorized") is not False:
+        failures.append("ending-return unit map must record future_generation_authorized false")
+    report = unit_map.get("target_unit_overlap_cluster_report")
+    if not isinstance(report, dict):
+        return failures + ["ending-return overlap cluster report is missing"]
+    clusters = report.get("overlap_clusters")
+    if not isinstance(clusters, list):
+        return failures + ["ending-return overlap_clusters must be a list"]
+    by_hash: dict[str, list[dict[str, Any]]] = {}
+    for unit in units:
+        by_hash.setdefault(str(unit.get("before_text_sha256") or ""), []).append(unit)
+    expected_shared = [
+        group for before_hash, group in by_hash.items() if before_hash and len(group) > 1
+    ]
+    if expected_shared and not clusters:
+        failures.append("ending-return overlap clusters missing for shared before_text")
+    cluster_ids = {
+        frozenset(str(unit_id) for unit_id in cluster.get("overlapping_unit_ids", []))
+        for cluster in clusters
+        if isinstance(cluster, dict)
+    }
+    for group in expected_shared:
+        ids = frozenset(str(unit.get("unit_id") or "") for unit in group)
+        if ids not in cluster_ids:
+            failures.append(
+                "ending-return overlap cluster missing shared unit set: "
+                + ", ".join(sorted(ids))
+            )
+    for index, cluster in enumerate(clusters):
+        if not isinstance(cluster, dict):
+            failures.append(f"ending-return overlap cluster {index} is not an object")
+            continue
+        ids = [
+            str(unit_id)
+            for unit_id in cluster.get("overlapping_unit_ids", [])
+            if isinstance(unit_id, str)
+        ]
+        if len(ids) < 2:
+            failures.append(f"ending-return overlap cluster {index} has fewer than two units")
+        if cluster.get("overlap_allowed") is not True:
+            failures.append(f"ending-return overlap cluster {index} must allow overlap")
+        if cluster.get("one_replacement_may_satisfy_multiple_units") is not True:
+            failures.append(
+                f"ending-return overlap cluster {index} must record integrated replacement allowance"
+            )
+        if cluster.get("distinct_semantic_checks_required") is not True:
+            failures.append(
+                f"ending-return overlap cluster {index} must require distinct semantic checks"
+            )
+        obligations = cluster.get("semantic_obligations_by_unit")
+        if not isinstance(obligations, dict):
+            failures.append(
+                f"ending-return overlap cluster {index} missing semantic obligations"
+            )
+            continue
+        for unit_id in ids:
+            if not str(obligations.get(unit_id) or "").strip():
+                failures.append(
+                    f"ending-return overlap cluster {index} missing obligation for {unit_id}"
+                )
+    return failures
+
+
+def ending_return_mapping_failures(
+    payload: dict[str, object],
+    target_unit_ids: set[str],
+) -> list[str]:
+    failures = hostile_scaffold_mapping_failures(payload, target_unit_ids)
+    notes = _joined_model_notes(payload)
+    if not _contains_any(notes, ("return", "opening", "again", "same table")):
+        failures.append("ending-return mapping does not preserve opening-return relation")
+    if not _contains_any(notes, ("proof", "answer", "no-answer", "outside")):
+        failures.append("ending-return mapping does not preserve proof/no-answer carry")
+    if not _contains_any(notes, HOSTILE_OBJECT_FIELD_TERMS):
+        failures.append("ending-return mapping does not preserve object/tactile field")
+    return failures
+
+
+def replacement_ending_return_failures(
+    *,
+    replacement_text: str,
+    selected_region_before_text: str,
+    target_units: list[dict[str, object]],
+    model_payload: dict[str, object],
+) -> dict[str, list[str]]:
+    replacement = replacement_text.strip()
+    lower = replacement.lower()
+    before_lower = selected_region_before_text.lower()
+    notes = _joined_model_notes(model_payload)
+    failures: dict[str, list[str]] = {
+        "ending_return_explanation_leakage_failures": [],
+        "opening_return_relation_failures": [],
+        "no_reset_return_pressure_failures": [],
+        "proof_no_answer_carry_failures": [],
+        "object_field_preservation_failures": [],
+        "protected_reference_preservation_failures": [],
+        "rival_pressure_preservation_failures": [],
+        "finality_or_phase_shift_claim_failures": [],
+        "vagueness_or_summary_failures": [],
+    }
+    explanation_terms = (
+        "the return means",
+        "return means",
+        "the opening means",
+        "this means",
+        "the point is",
+        "the lesson is",
+        "the theme is",
+        "explains the return",
+        "explains what the return",
+        "symbolizes",
+        "signifies",
+    )
+    if _contains_any(lower, explanation_terms):
+        failures["ending_return_explanation_leakage_failures"].append(
+            "ending explains return rather than enacting it"
+        )
+    before_explanation_count = _term_count(before_lower, HOSTILE_SCAFFOLD_EXPLANATION_TERMS)
+    after_explanation_count = _term_count(lower, HOSTILE_SCAFFOLD_EXPLANATION_TERMS)
+    if before_explanation_count > 0 and after_explanation_count > before_explanation_count:
+        failures["ending_return_explanation_leakage_failures"].append(
+            "replacement increases explanatory return language"
+        )
+    if "reset" in lower and not _contains_any(lower, ("not a reset", "does not reset", "no reset")):
+        failures["no_reset_return_pressure_failures"].append(
+            "ending lets return become reset language"
+        )
+    if not _contains_any(lower, ("return", "again", "same table", "morning", "opening")):
+        failures["opening_return_relation_failures"].append(
+            "opening-return relation is not carried by the replacement"
+        )
+    if _contains_any(lower, ("the opening shows", "the opening proves", "the artifact shows")):
+        failures["opening_return_relation_failures"].append(
+            "opening-return relation is named as thesis rather than enacted"
+        )
+    object_terms_present = _terms_present(lower, HOSTILE_OBJECT_FIELD_TERMS)
+    if len(object_terms_present) < 3:
+        failures["object_field_preservation_failures"].append(
+            "same object field does not return strongly enough"
+        )
+    if _contains_any(lower, HOSTILE_SUMMARY_COMPRESSION_TERMS):
+        failures["vagueness_or_summary_failures"].append(
+            "ending compresses into abstract summary"
+        )
+    if _word_count_for_validation(replacement) < max(
+        35,
+        int(_word_count_for_validation(selected_region_before_text) * 0.45),
+    ):
+        failures["vagueness_or_summary_failures"].append(
+            "replacement is too short to carry ending return pressure"
+        )
+    if "rival" in lower:
+        failures["rival_pressure_preservation_failures"].append(
+            "replacement mentions or claims strongest-rival pressure"
+        )
+    if _contains_any(lower, ("final artifact", "finalization", "phase shift", "phase-shift")):
+        failures["finality_or_phase_shift_claim_failures"].append(
+            "replacement contains finality or phase-shift language"
+        )
+    if not _contains_any(notes, ("proof", "answer", "no-answer", "outside")):
+        failures["proof_no_answer_carry_failures"].append(
+            "model notes do not preserve proof/no-answer pressure"
+        )
+    if not _contains_any(notes, ("opening", "return", "reread", "same table", "final")):
+        failures["opening_return_relation_failures"].append(
+            "model notes do not preserve opening-return/reread gains"
+        )
+    if not _contains_any(notes, ("object", "table", "dust", "spoon", "saucer", "ring")):
+        failures["protected_reference_preservation_failures"].append(
+            "model notes do not preserve protected object/tactile references"
+        )
+    unit_engagement_failures = _hostile_unit_engagement_failures(
+        replacement_lower=lower,
+        target_units=target_units,
+    )
+    failures["object_field_preservation_failures"].extend(unit_engagement_failures)
+    return {key: value for key, value in failures.items() if value}
+
+
 def hostile_scaffold_mapping_failures(
     payload: dict[str, object],
     target_unit_ids: set[str],
@@ -1653,6 +1922,8 @@ def semantic_preflight_failures_for_work_order(payloads: dict[str, dict[str, Any
                 payloads.get("selected_intervention_region", {}),
             )
         )
+    if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        failures.extend(validate_ending_return_unit_map(unit_map))
     return failures
 
 

@@ -30,14 +30,18 @@ from abi.model_schemas import (
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
 )
 from abi.modules.residual_targets import (
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    ENDING_RETURN_REGION_ID,
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     SELECTED_REGION_ID,
     TACTILE_INEVITABILITY_TARGET_ID,
     ResidualMaterialityPolicy,
+    ending_return_mapping_failures,
     hostile_scaffold_mapping_failures,
     materiality_policy_payload,
     payload_has_placeholder_generation_contract,
+    replacement_ending_return_failures,
     replacement_hostile_scaffold_failures,
     replacement_tactile_failures,
     require_residual_target_adapter,
@@ -208,6 +212,12 @@ TERM_STOPWORDS = {
     "two",
     "all",
 }
+
+
+def _expected_selected_region_id(target_id: str) -> str:
+    if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return ENDING_RETURN_REGION_ID
+    return SELECTED_REGION_ID
 
 
 @dataclass(frozen=True)
@@ -921,7 +931,9 @@ def _validate_subject_before_model_call(
                 "not generation-authoritative: "
                 f"{artifact_type}"
             )
-    if subject.selected_region_id != SELECTED_REGION_ID:
+    if subject.selected_region_id != _expected_selected_region_id(
+        subject.selected_residual_target_id
+    ):
         raise ValueError("selected region is missing or invalid")
     if not subject.selected_region_sha256:
         raise ValueError("selected region hash is missing")
@@ -1062,6 +1074,12 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
                 == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
                 else None
             ),
+            "ending_return_generation_feedback": (
+                _ending_return_generation_feedback(subject)
+                if subject.selected_residual_target_id
+                == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+                else None
+            ),
             "target_unit_overlap_feedback": {
                 "overlapping_units_must_be_reconciled": True,
                 "instructions": [
@@ -1120,7 +1138,39 @@ def _materiality_requirement_payload(
         payload["hostile_scaffold_generation_feedback"] = (
             _hostile_scaffold_generation_feedback(subject)
         )
+    if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        payload["ending_return_generation_feedback"] = (
+            _ending_return_generation_feedback(subject)
+        )
     return payload
+
+
+def _ending_return_generation_feedback(
+    subject: ResidualCandidateSubject,
+) -> dict[str, object]:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    return {
+        "target_id": ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        "semantic_validator_id": adapter.semantic_validator_id,
+        "materiality_policy_id": adapter.materiality_policy.policy_id,
+        "selected_region_id": subject.selected_region_id,
+        "required_operation": [
+            "materially re-author the final-return region",
+            "make return happen through object relation, local pressure, or reader encounter",
+            "preserve proof/no-answer pressure as pressure, not an answer",
+            "preserve table/dust/spoon/saucer/ring object-field gains as reference material",
+        ],
+        "overlap_cluster_policy": subject.authorization_payloads[
+            "target_unit_integration_policy"
+        ].get("target_unit_overlap_cluster_report"),
+        "failure_shapes_to_avoid": [
+            "explaining what the return means",
+            "announcing the opening structure as a thesis",
+            "resetting the artifact at the ending",
+            "summarizing the same object field",
+            "claiming finality, phase shift, or strongest-rival defeat",
+        ],
+    }
 
 
 def _hostile_scaffold_generation_feedback(
@@ -1310,6 +1360,13 @@ def _validate_model_payload(
             raise ModelValidationError("; ".join(failures))
     if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
         failures = hostile_scaffold_mapping_failures(
+            payload,
+            {unit.unit_id for unit in subject.target_units},
+        )
+        if failures:
+            raise ModelValidationError("; ".join(failures))
+    if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        failures = ending_return_mapping_failures(
             payload,
             {unit.unit_id for unit in subject.target_units},
         )
@@ -1584,6 +1641,15 @@ def _collect_residual_intervention_validation(
         )
         for category, category_failures in hostile_failures.items():
             failures.setdefault(category, []).extend(category_failures)
+    if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        ending_failures = replacement_ending_return_failures(
+            replacement_text=replacement,
+            selected_region_before_text=subject.selected_region_before_text,
+            target_units=[unit_payload(unit) for unit in subject.target_units],
+            model_payload=model_payload,
+        )
+        for category, category_failures in ending_failures.items():
+            failures.setdefault(category, []).extend(category_failures)
 
     object_terms_present = _terms_present(lower, term_contract["object_terms"])
     motion_terms_present = _terms_present(lower, term_contract["motion_terms"])
@@ -1591,7 +1657,11 @@ def _collect_residual_intervention_validation(
     missing_unit_object_terms = _missing_unit_object_terms(subject, lower)
     if (
         missing_unit_object_terms
-        and subject.selected_residual_target_id != HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+        and subject.selected_residual_target_id
+        not in {
+            HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+            ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        }
     ):
         failures["object_motion_relabel_failures"].append(
             "replacement_region_text missing artifact-derived object terms for "
@@ -1602,6 +1672,12 @@ def _collect_residual_intervention_validation(
         if relation_count < 2:
             failures["object_field_preservation_failures"].append(
                 "object/tactile pressure relation missing"
+            )
+    elif subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        relation_count = _ending_return_relation_count(replacement)
+        if relation_count < 2:
+            failures["opening_return_relation_failures"].append(
+                "ending return relation is not enacted through object pressure"
             )
     else:
         relation_count = _object_motion_relation_count(
@@ -1701,6 +1777,24 @@ def _collect_residual_intervention_validation(
                     not failures.get("proof_no_answer_deletion_failures")
                 ),
                 "object_field_preserved": (
+                    not failures.get("object_field_preservation_failures")
+                ),
+            }
+        )
+    if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        target_specific_mapping_report.update(
+            {
+                "ending_return_risk_mapping_exists": True,
+                "final_return_enacts_not_explains": (
+                    not failures.get("ending_return_explanation_leakage_failures")
+                ),
+                "opening_return_relation_preserved": (
+                    not failures.get("opening_return_relation_failures")
+                ),
+                "proof_no_answer_carry_preserved": (
+                    not failures.get("proof_no_answer_carry_failures")
+                ),
+                "object_field_return_preserved": (
                     not failures.get("object_field_preservation_failures")
                 ),
             }
@@ -1813,6 +1907,12 @@ def _empty_failure_buckets() -> dict[str, list[str]]:
         "rival_mimicry_failures": [],
         "finality_or_phase_shift_claim_failures": [],
         "unit_collapse_failures": [],
+        "ending_return_explanation_leakage_failures": [],
+        "opening_return_relation_failures": [],
+        "no_reset_return_pressure_failures": [],
+        "proof_no_answer_carry_failures": [],
+        "protected_reference_preservation_failures": [],
+        "rival_pressure_preservation_failures": [],
     }
 
 
@@ -4043,6 +4143,54 @@ def _hostile_scaffold_relation_count(text: str) -> int:
     return count
 
 
+def _ending_return_relation_count(text: str) -> int:
+    return_terms = (
+        "return",
+        "again",
+        "same table",
+        "morning",
+        "opening",
+        "comes back",
+    )
+    object_terms = (
+        "table",
+        "dust",
+        "spoon",
+        "saucer",
+        "ring",
+        "cup",
+        "crumb",
+        "grain",
+        "surface",
+        "mark",
+        "record",
+    )
+    pressure_terms = (
+        "pressure",
+        "proof",
+        "answer",
+        "no answer",
+        "outside",
+        "record",
+        "mark",
+        "kept",
+        "holds",
+        "carries",
+        "carried",
+        "altered",
+    )
+    count = 0
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        lower = sentence.lower()
+        if (
+            _terms_present(lower, return_terms)
+            and _terms_present(lower, object_terms)
+            and _terms_present(lower, pressure_terms)
+        ):
+            count += 1
+    return count
+
+
 def _decorative_list_risk(
     text: str,
     *,
@@ -4310,6 +4458,8 @@ def _valid_fake_payload_for_subject(subject: ResidualCandidateSubject) -> dict[s
         return _valid_tactile_fake_payload(units)
     if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
         return _valid_hostile_scaffold_fake_payload(units)
+    if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return _valid_ending_return_fake_payload(units)
     return _valid_fake_payload(units)
 
 
@@ -4457,6 +4607,94 @@ def _valid_hostile_scaffold_fake_payload(
             "no nonselected region edits",
             "no rival imitation",
             "no vague summary compression",
+        ],
+        "uncertainty": "fixture output for deterministic tests only",
+    }
+
+
+def _valid_ending_return_fake_payload(
+    units: list[dict[str, object]],
+) -> dict[str, object]:
+    replacement = (
+        "Morning returns to the same table, but the table has kept the pressure "
+        "inside its objects: the cup ring is drier at one edge, the crumb stays "
+        "caught in the grain, and dust gathers along the mark a hand and foot "
+        "left before the room could name it. The opening comes back altered by "
+        "the record already on the surface. The spoon leans toward the saucer's "
+        "split, and the split keeps the fall present without offering an answer.\n\n"
+        "Nothing resets when the light reaches the wood again. The table, dust, "
+        "spoon, saucer, ring, and crumb carry the proof as pressure, not as a "
+        "solution from outside the room. The return is the same place holding a "
+        "different relation: mark touching mark, record pressing record, and the "
+        "reader meeting the morning through what the objects have kept."
+    )
+    mappings = []
+    for unit in units:
+        unit_id = str(unit["unit_id"])
+        labels = " ".join(
+            str(value)
+            for value in unit.get("objects", [])
+            if isinstance(value, str)
+        )
+        mappings.append(
+            {
+                "target_unit_id": unit_id,
+                "before_text_sha256": str(unit.get("before_text_sha256") or ""),
+                "mechanism_operation": (
+                    "make final return happen through object relation and reader encounter"
+                ),
+                "material_relation_or_action": (
+                    labels or "same table object field carries return pressure"
+                ),
+                "visible_consequence": (
+                    "the returned object field keeps proof/no-answer pressure without solving it"
+                ),
+                "intended_first_read_effect": (
+                    "reader feels the final return as altered relation before explanation"
+                ),
+                "protected_effects_preserved": [
+                    "opening-return relation remains active",
+                    "proof/no-answer pressure remains pressure",
+                    "object table dust spoon saucer ring field returns",
+                ],
+                "covered_target_ids": [
+                    unit_id,
+                    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+                ],
+            }
+        )
+    return {
+        "replacement_region_text": replacement,
+        "target_unit_mappings": mappings,
+        "intervention_plan": [
+            "replace only the selected final-return region",
+            "make return happen through the same object field",
+            "preserve proof/no-answer carry without explaining the return",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "replacement_region_text covers only the ending region",
+                "risk_note": "controller assembles the final candidate",
+            },
+            {
+                "constraint_id": "ending_return_risk_generation_materiality_v1",
+                "how_satisfied": "return is carried by table, dust, spoon, saucer, ring, and proof pressure",
+                "risk_note": "requires later ablation and reader-state evaluation",
+            },
+        ],
+        "protected_effects_notes": [
+            "opening-return reread gains preserved",
+            "proof/no-answer pressure preserved as pressure",
+            "object/tactile field with table dust spoon saucer ring preserved",
+            "strongest-rival pressure remains blocking",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no nonselected region edits",
+            "no rival imitation",
+            "no return explanation",
         ],
         "uncertainty": "fixture output for deterministic tests only",
     }

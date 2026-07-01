@@ -24,6 +24,8 @@ from abi.packets import (
     read_json_file,
 )
 from abi.modules.residual_targets import (
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    ENDING_RETURN_REGION_ID,
     SELECTED_REGION_ID,
     payload_has_placeholder_generation_contract,
     require_residual_target_adapter,
@@ -482,6 +484,12 @@ def _load_required_payloads(packet_dir: Path) -> dict[str, dict[str, Any]]:
     return payloads
 
 
+def _expected_selected_region_id(target_id: str) -> str:
+    if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return ENDING_RETURN_REGION_ID
+    return SELECTED_REGION_ID
+
+
 def _validate_work_order_payloads(payloads: dict[str, dict[str, Any]]) -> None:
     packet = payloads["residual_work_order_packet"]
     selected_region = payloads["selected_intervention_region"]
@@ -509,11 +517,19 @@ def _validate_work_order_payloads(payloads: dict[str, dict[str, Any]]) -> None:
             "Residual generation authorization refused; work-order semantic "
             f"preflight failed: {'; '.join(semantic_failures)}"
         )
+    for artifact_type, payload in payloads.items():
+        if payload_has_placeholder_generation_contract(payload):
+            raise ValueError(
+                "Residual generation authorization refused; work order uses "
+                "placeholder generation metadata and is not generation-authoritative: "
+                f"{artifact_type}"
+            )
     selected_region_id = selected_region.get("selected_region_id")
-    if selected_region_id != SELECTED_REGION_ID or packet.get("selected_region_id") != SELECTED_REGION_ID:
+    expected_region_id = _expected_selected_region_id(selected_target)
+    if selected_region_id != expected_region_id or packet.get("selected_region_id") != expected_region_id:
         raise ValueError(
             "Residual generation authorization refused; selected region is not "
-            f"{SELECTED_REGION_ID}: {selected_region_id}"
+            f"{expected_region_id}: {selected_region_id}"
         )
     target_units = unit_map.get("target_units")
     if not isinstance(target_units, list) or not target_units:
@@ -548,6 +564,8 @@ def _validate_work_order_payloads(payloads: dict[str, dict[str, Any]]) -> None:
             "Residual generation authorization refused; future generation "
             "contract was not created."
         )
+    if selected_target == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        _validate_ending_return_generation_handoff(payloads)
     if packet.get("future_generation_contract_created") is not True:
         raise ValueError(
             "Residual generation authorization refused; packet does not record "
@@ -577,6 +595,76 @@ def _validate_work_order_payloads(payloads: dict[str, dict[str, Any]]) -> None:
         raise ValueError(
             "Residual generation authorization refused; work order carries a "
             "finality or phase-shift claim."
+        )
+
+
+def _validate_ending_return_generation_handoff(
+    payloads: dict[str, dict[str, Any]],
+) -> None:
+    packet = payloads["residual_work_order_packet"]
+    unit_map = payloads["object_motion_target_unit_map"]
+    contract = payloads["future_generation_contract"]
+    plan = payloads["ablation_and_reader_eval_plan"]
+    failures: list[str] = []
+    for name, payload in (
+        ("residual_work_order_packet", packet),
+        ("object_motion_target_unit_map", unit_map),
+        ("future_generation_contract", contract),
+    ):
+        if payload.get("future_generation_authorized") is not False:
+            failures.append(f"{name} must record future_generation_authorized false")
+    if not isinstance(unit_map.get("target_unit_overlap_cluster_report"), dict):
+        failures.append("ending-return target unit map missing overlap cluster report")
+    if not isinstance(contract.get("target_unit_overlap_cluster_report"), dict):
+        failures.append("ending-return generation contract missing overlap cluster report")
+    required_controls = {
+        "full_ending_return_intervention",
+        "revert_ending_return_intervention_to_current_best",
+        "isolate_return_enactment_without_extra_explanation",
+        "proof_no_answer_preservation_control",
+        "object_field_return_preservation_control",
+        "strongest_rival_comparison",
+    }
+    controls = {
+        str(value)
+        for value in contract.get("target_specific_ablation_controls", [])
+        if isinstance(value, str)
+    }
+    controls.update(
+        str(value)
+        for value in plan.get("future_ablation_controls", [])
+        if isinstance(value, str)
+    )
+    missing_controls = sorted(required_controls - controls)
+    if missing_controls:
+        failures.append("ending-return ablation controls missing: " + ", ".join(missing_controls))
+    required_focus = {
+        "final return enacts rather than explains",
+        "opening-return transformation",
+        "no-reset return pressure",
+        "proof/no-answer carry preservation",
+        "object-field return preservation",
+        "reread transformation",
+        "strongest-rival pressure",
+    }
+    focus = {
+        str(value)
+        for value in contract.get("target_specific_reader_state_focus", [])
+        if isinstance(value, str)
+    }
+    focus.update(
+        str(value)
+        for value in plan.get("future_reader_state_eval_focus", [])
+        if isinstance(value, str)
+    )
+    missing_focus = sorted(required_focus - focus)
+    if missing_focus:
+        failures.append("ending-return reader-state focus missing: " + ", ".join(missing_focus))
+    if failures:
+        raise ValueError(
+            "Residual generation authorization refused; ending-return generation "
+            "handoff metadata is incomplete: "
+            + "; ".join(failures)
         )
 
 
@@ -787,6 +875,14 @@ def _build_target_unit_integration_policy(
         **target_adapter_metadata(subject.selected_residual_target_id),
         "target_unit_ids": list(subject.target_unit_ids),
         "target_unit_count": subject.target_unit_count,
+        "target_unit_overlap_cluster_report": subject.payloads[
+            "object_motion_target_unit_map"
+        ].get("target_unit_overlap_cluster_report"),
+        "overlap_clusters": list(
+            subject.payloads["object_motion_target_unit_map"].get(
+                "overlap_clusters", []
+            )
+        ),
         "future_generator_must_produce_one_bounded_replacement": True,
         "replacement_scope": "selected_region_only",
         "unit_mapping_requirement": (
@@ -871,6 +967,10 @@ def _build_residual_generation_contract(
         "selected_region_id": subject.selected_region_id,
         "selected_region_sha256": subject.selected_region_sha256,
         "authoritative_target_units": target_units,
+        "target_unit_overlap_cluster_report": unit_map.get(
+            "target_unit_overlap_cluster_report"
+        ),
+        "overlap_clusters": list(unit_map.get("overlap_clusters", [])),
         "target_unit_ids": list(subject.target_unit_ids),
         "target_unit_hashes": {
             str(unit.get("unit_id")): str(unit.get("before_text_sha256") or "")
@@ -984,7 +1084,11 @@ def _build_authorization_gate_report(
         _gate_result("work_order_validated", True),
         _gate_result("one_generation_attempt_authorized", generation_authorized),
         _gate_result("base_candidate_identified", bool(subject.current_best_candidate_packet_id)),
-        _gate_result("selected_region_identified", subject.selected_region_id == SELECTED_REGION_ID),
+        _gate_result(
+            "selected_region_identified",
+            subject.selected_region_id
+            == _expected_selected_region_id(subject.selected_residual_target_id),
+        ),
         _gate_result("selected_region_hash_recorded", bool(subject.selected_region_sha256)),
         _gate_result("target_units_identified", subject.target_unit_count >= 1),
         _gate_result("target_unit_integration_policy_recorded", True),

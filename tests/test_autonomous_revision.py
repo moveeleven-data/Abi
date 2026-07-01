@@ -120,7 +120,11 @@ from abi.modules.residual_target_selection import (
 from abi.modules.residual_targets import (
     ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
     ENDING_RETURN_GENERATION_CONTRACT_VERSION,
+    ENDING_RETURN_MATERIALITY_POLICY_ID,
+    ENDING_RETURN_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
+    ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID,
     ENDING_RETURN_REGION_ID,
+    ENDING_RETURN_SEMANTIC_VALIDATOR_ID,
     ENDING_RETURN_WORK_ORDER_CONTRACT_VERSION,
     HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION,
     HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID,
@@ -798,6 +802,25 @@ def build_hostile_scaffold_residual_work_order_chain(tmp_path: Path):
         chain["config"],
         strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
         target=HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert selection.exit_code == 0
+    work_order = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+    assert work_order.exit_code == 0
+    chain["residual_target_selection"] = selection.payload
+    chain["residual_work_order"] = work_order.payload
+    return chain
+
+
+def build_ending_return_residual_work_order_chain(tmp_path: Path):
+    chain = build_residual_target_selection_ready_chain(tmp_path)
+    selection = run_residual_target_selection(
+        chain["config"],
+        strategy_packet=Path(str(chain["selection_strategy"]["packet_dir"])),
+        target=ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
         operator_reviewed=True,
     )
     assert selection.exit_code == 0
@@ -9438,12 +9461,20 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     assert "scaffold_leakage_failures" in (
         hostile_adapter.materiality_policy.failure_report_fields
     )
+    assert ending_adapter.prompt_contract_id == (
+        "autonomous.residual_intervention_generation.v1.ending_return_risk"
+    )
+    assert ending_adapter.semantic_validator_id == ENDING_RETURN_SEMANTIC_VALIDATOR_ID
+    assert ending_adapter.materiality_policy.policy_id == ENDING_RETURN_MATERIALITY_POLICY_ID
     assert ending_adapter.materiality_policy.primary_materiality_scope == (
-        "planning_only"
+        "target_bearing_scope"
+    )
+    assert "ending_return_explanation_leakage_failures" in (
+        ending_adapter.materiality_policy.failure_report_fields
     )
     assert target_generation_readiness_failures(
         ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
-    )
+    ) == []
     assert target_generation_readiness_failures(
         HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
     ) == []
@@ -9562,6 +9593,7 @@ def test_residual_work_order_normalizes_stale_tactile_selection_routing(tmp_path
     assert result.payload["target_unit_count"] > 0
     assert result.payload["candidate_generated"] is False
     assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["future_generation_authorized"] is False
     assert result.payload["counts"]["model_calls"] == 0
     assert result.payload["next_recommended_action"] == (
         "review_tactile_inevitability_work_order_before_generation_authorization"
@@ -9865,6 +9897,9 @@ def test_residual_work_order_accepts_ending_explains_return_risk_selection(
     assert unit_map["unit_map_kind"] == "ending_return_risk"
     assert unit_map["selected_region_id"] == ENDING_RETURN_REGION_ID
     assert unit_map["material_target_units_all_inside_selected_region"] is True
+    assert unit_map["future_generation_authorized"] is False
+    assert unit_map["materiality_policy_id"] == ENDING_RETURN_MATERIALITY_POLICY_ID
+    assert unit_map["semantic_validator_id"] == ENDING_RETURN_SEMANTIC_VALIDATOR_ID
     unit_ids = {unit["unit_id"] for unit in unit_map["target_units"]}
     assert {
         "final_return_enacts_not_explains",
@@ -9881,6 +9916,32 @@ def test_residual_work_order_accepts_ending_explains_return_risk_selection(
         assert unit["before_text_sha256"]
         assert unit["future_generation_authorized"] is False
         assert "explain return more explicitly" in unit["forbidden_operation"]
+    overlap_report = unit_map["target_unit_overlap_cluster_report"]
+    assert overlap_report["overlap_cluster_count"] >= 2
+    cluster_sets = {
+        frozenset(cluster["overlapping_unit_ids"])
+        for cluster in overlap_report["overlap_clusters"]
+    }
+    assert frozenset(
+        {
+            "final_return_enacts_not_explains",
+            "proof_no_answer_carry_preserved",
+        }
+    ) in cluster_sets
+    assert any(
+        {
+            "opening_return_relation_without_thesis",
+            "no_reset_return_pressure",
+        }
+        <= set(cluster)
+        for cluster in cluster_sets
+    )
+    for cluster in overlap_report["overlap_clusters"]:
+        assert cluster["overlap_allowed"] is True
+        assert cluster["one_replacement_may_satisfy_multiple_units"] is True
+        assert cluster["distinct_semantic_checks_required"] is True
+        obligations = cluster["semantic_obligations_by_unit"]
+        assert set(cluster["overlapping_unit_ids"]) <= set(obligations)
 
     protected_reference_ids = {
         unit["reference_unit_id"] for unit in unit_map["protected_reference_units"]
@@ -9899,14 +9960,30 @@ def test_residual_work_order_accepts_ending_explains_return_risk_selection(
     contract = read_payload(packet_dir / "future_generation_contract.json")
     assert contract["selected_region_id"] == ENDING_RETURN_REGION_ID
     assert contract["future_generation_requires_separate_authorization"] is True
+    assert contract["future_generation_authorized"] is False
     assert contract["candidate_generation_authorized"] is False
     assert contract["generation_contract_version"] == (
         ENDING_RETURN_GENERATION_CONTRACT_VERSION
     )
+    assert contract["materiality_policy_id"] == ENDING_RETURN_MATERIALITY_POLICY_ID
+    assert contract["semantic_validator_id"] == ENDING_RETURN_SEMANTIC_VALIDATOR_ID
+    assert contract["target_unit_overlap_cluster_report"][
+        "overlap_cluster_count"
+    ] == overlap_report["overlap_cluster_count"]
+    assert "full_ending_return_intervention" in contract[
+        "target_specific_ablation_controls"
+    ]
+    assert "revert_ending_return_intervention_to_current_best" in contract[
+        "target_specific_ablation_controls"
+    ]
     assert "proof_no_answer_preservation_control" in contract[
         "target_specific_ablation_controls"
     ]
     assert "final return enacts rather than explains" in contract[
+        "target_specific_reader_state_focus"
+    ]
+    assert "no-reset return pressure" in contract["target_specific_reader_state_focus"]
+    assert "object-field return preservation" in contract[
         "target_specific_reader_state_focus"
     ]
 
@@ -9918,9 +9995,14 @@ def test_residual_work_order_accepts_ending_explains_return_risk_selection(
     assert "explaining return more explicitly" in protected["forbidden_changes"]
 
     plan = read_payload(packet_dir / "ablation_and_reader_eval_plan.json")
+    assert "full_ending_return_intervention" in plan["future_ablation_controls"]
+    assert "revert_ending_return_intervention_to_current_best" in plan[
+        "future_ablation_controls"
+    ]
     assert "revert_ending_return_intervention" in plan["future_ablation_controls"]
     assert "strongest_rival_comparison" in plan["future_ablation_controls"]
     assert "reread transformation" in plan["future_reader_state_eval_focus"]
+    assert "no-reset return pressure" in plan["future_reader_state_eval_focus"]
     assert plan["ablation_authorized"] is False
     assert plan["reader_state_eval_authorized"] is False
 
@@ -10064,6 +10146,69 @@ def test_hostile_scaffold_work_order_supersedes_out_of_region_target_units(
         for unit in unit_map["protected_reference_units"]
     )
 
+    successor_payloads = {
+        artifact_type: read_payload(successor_dir / f"{artifact_type}.json")
+        for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    }
+    assert semantic_preflight_failures_for_work_order(successor_payloads) == []
+
+
+def test_ending_return_work_order_supersedes_planning_only_handoff_metadata(
+    tmp_path,
+):
+    chain = build_ending_return_residual_work_order_chain(tmp_path)
+    config = chain["config"]
+    stale_packet_dir = Path(str(chain["residual_work_order"]["packet_dir"]))
+
+    for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES:
+        def _make_planning_only(payload, artifact_type=artifact_type):
+            payload["generation_contract_version"] = (
+                ENDING_RETURN_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+            )
+            payload["materiality_policy_id"] = (
+                ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID
+            )
+            if artifact_type in {
+                "residual_work_order_packet",
+                "future_generation_contract",
+            }:
+                payload["future_generation_authorized"] = None
+
+        rewrite_payload(stale_packet_dir / f"{artifact_type}.json", _make_planning_only)
+
+    payloads = {
+        artifact_type: read_payload(stale_packet_dir / f"{artifact_type}.json")
+        for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    }
+    assert semantic_preflight_failures_for_work_order(payloads) == []
+
+    successor = run_residual_work_order_planning(
+        config,
+        selection_packet=Path(str(chain["residual_target_selection"]["packet_dir"])),
+    )
+
+    assert successor.exit_code == 0
+    assert successor.payload["accepted"] is True
+    assert successor.payload["superseded_work_order_packet_id"] == stale_packet_dir.name
+    assert successor.payload["supersession_reason"] == (
+        "ending_return_generation_handoff_metadata_missing"
+    )
+    assert successor.payload["selected_region_id"] == ENDING_RETURN_REGION_ID
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["candidate_generation_authorized"] is False
+    assert successor.payload["future_generation_authorized"] is False
+    assert successor.payload["counts"]["model_calls"] == 0
+
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    packet = read_payload(successor_dir / "residual_work_order_packet.json")
+    unit_map = read_payload(successor_dir / "object_motion_target_unit_map.json")
+    contract = read_payload(successor_dir / "future_generation_contract.json")
+    assert packet["generation_contract_version"] == ENDING_RETURN_GENERATION_CONTRACT_VERSION
+    assert packet["materiality_policy_id"] == ENDING_RETURN_MATERIALITY_POLICY_ID
+    assert packet["future_generation_authorized"] is False
+    assert contract["future_generation_authorized"] is False
+    assert unit_map["future_generation_authorized"] is False
+    assert unit_map["target_unit_overlap_cluster_report"]["overlap_cluster_count"] >= 2
     successor_payloads = {
         artifact_type: read_payload(successor_dir / f"{artifact_type}.json")
         for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
@@ -10861,6 +11006,114 @@ def test_hostile_scaffold_generation_authorization_uses_real_contract(tmp_path):
     assert final_report.refused is True
 
 
+def test_ending_return_generation_authorization_uses_real_handoff_contract(tmp_path):
+    chain = build_ending_return_residual_work_order_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_generation_authorization(
+        config,
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == (
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
+    )
+    assert result.payload["selected_region_id"] == ENDING_RETURN_REGION_ID
+    assert result.payload["target_adapter_id"] == "ending_return_risk"
+    assert result.payload["generation_contract_version"] == (
+        ENDING_RETURN_GENERATION_CONTRACT_VERSION
+    )
+    assert result.payload["materiality_policy_id"] == ENDING_RETURN_MATERIALITY_POLICY_ID
+    assert result.payload["semantic_validator_id"] == ENDING_RETURN_SEMANTIC_VALIDATOR_ID
+    assert result.payload["target_unit_count"] == 5
+    assert result.payload["generation_authorized"] is True
+    assert result.payload["generation_attempt_budget"] == 1
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    scope = read_payload(packet_dir / "generation_scope_authorization.json")
+    assert scope["authorized_selected_region_id"] == ENDING_RETURN_REGION_ID
+    assert scope["generation_authorized"] is True
+    assert scope["authorization_consumed"] is False
+    policy = read_payload(packet_dir / "target_unit_integration_policy.json")
+    assert policy["target_unit_overlap_cluster_report"]["overlap_cluster_count"] >= 2
+    assert policy["materiality_policy"]["policy_id"] == ENDING_RETURN_MATERIALITY_POLICY_ID
+    contract = read_payload(packet_dir / "residual_generation_contract.json")
+    assert contract["generation_contract_version"] == (
+        ENDING_RETURN_GENERATION_CONTRACT_VERSION
+    )
+    assert contract["target_unit_overlap_cluster_report"][
+        "overlap_cluster_count"
+    ] >= 2
+    assert "full_ending_return_intervention" in contract[
+        "target_specific_ablation_controls"
+    ]
+    assert "object-field return preservation" in contract[
+        "target_specific_reader_state_focus"
+    ]
+    gate = read_payload(packet_dir / "authorization_gate_report.json")
+    gates = {item["gate_name"]: item for item in gate["gate_results"]}
+    assert gates["selected_region_identified"]["passed"] is True
+    assert gate["generation_authorized"] is True
+    assert gate["model_calls"] == 0
+    packet = read_payload(packet_dir / "residual_generation_authorization_packet.json")
+    assert packet["generation_authorized"] is True
+    assert packet["authorization_consumed"] is False
+    assert packet["candidate_generated"] is False
+    assert payload_has_placeholder_generation_contract(packet) is False
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_ending_return_planning_only_work_order_refuses_authorization(tmp_path):
+    chain = build_ending_return_residual_work_order_chain(tmp_path)
+    stale_packet_dir = Path(str(chain["residual_work_order"]["packet_dir"]))
+
+    def _make_placeholder(payload):
+        payload["generation_contract_version"] = (
+            ENDING_RETURN_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+        )
+        payload["materiality_policy_id"] = (
+            ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID
+        )
+
+    for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES:
+        rewrite_payload(stale_packet_dir / f"{artifact_type}.json", _make_placeholder)
+
+    result = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=stale_packet_dir,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "placeholder generation metadata" in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+
+
 def test_hostile_scaffold_placeholder_adapter_refuses_authorization(
     tmp_path,
     monkeypatch,
@@ -10986,6 +11239,37 @@ def test_hostile_scaffold_residual_candidate_openai_refuses_without_allow_live(
     assert "--allow-live-model" in result.payload["message"]
     assert clients == []
     assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+
+
+def test_ending_return_residual_candidate_openai_refuses_without_allow_live(
+    tmp_path,
+):
+    chain = build_ending_return_residual_work_order_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    assert authorization.payload["accepted"] is True
+    clients = []
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(str(authorization.payload["packet_dir"])),
+        allow_live_model=False,
+        client_factory=residual_intervention_stub_factory(clients),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--allow-live-model" in result.payload["message"]
+    assert clients == []
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["authorization_consumed"] is False
     assert result.payload["candidate_generated"] is False
 
 
