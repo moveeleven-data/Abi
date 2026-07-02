@@ -44,6 +44,8 @@ DIAGNOSIS_KIND = "strongest_rival_forensic_diagnosis"
 NEXT_RECOMMENDED_ACTION = (
     "review_strongest_rival_forensic_diagnosis_before_local_law_discovery"
 )
+NEXT_RECOMMENDED_STRATEGY_CLASS = "local_law_discovery_from_rival_forensics"
+DIAGNOSIS_BASIS = "evidence_map_based"
 
 STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_ARTIFACT_TYPES = (
     "source_post_local_strategy_intake_summary",
@@ -80,6 +82,7 @@ REQUIRED_HYPOTHESIS_IDS = (
     "local_patch_diminishing_returns",
     "nonlocal_structure_gap",
 )
+TOP_RANKED_HYPOTHESIS_ID = REQUIRED_HYPOTHESIS_IDS[0]
 
 
 @dataclass(frozen=True)
@@ -557,6 +560,8 @@ def _build_source_post_local_strategy_intake_summary(
         "packet_dir": str(packet_dir),
         "client": subject.client_name,
         "diagnosis_mode": "deterministic_fake_non_model_backed",
+        "model_backed": False,
+        "diagnosis_basis": DIAGNOSIS_BASIS,
         "source_post_local_strategy_packet_id": subject.post_local_strategy_packet_id,
         "source_post_local_strategy_packet_dir": str(
             subject.post_local_strategy_packet_dir
@@ -571,6 +576,7 @@ def _build_source_post_local_strategy_intake_summary(
         "source_architecture_checkpoint_packet_id": packet.get(
             "source_architecture_checkpoint_packet_id"
         ),
+        "direct_rival_text_available": False,
         "selected_checkpoint_direction_id": source_intake.get(
             "selected_checkpoint_direction_id"
         ),
@@ -663,7 +669,8 @@ def _build_current_best_vs_rival_subject_manifest(
         "strongest_rival_still_blocks": True,
         "reader_state_transformation_remains_partial": True,
         "direct_rival_text_available": False,
-        "diagnosis_basis": [
+        "diagnosis_basis": DIAGNOSIS_BASIS,
+        "diagnosis_basis_sources": [
             "synthesis/rival summaries",
             "reader-state comparison reports",
             "ablation summaries",
@@ -806,10 +813,11 @@ def _build_rival_advantage_hypothesis_map(
     return {
         "diagnosis_kind": DIAGNOSIS_KIND,
         "hypotheses": hypotheses,
+        "top_ranked_hypothesis_id": TOP_RANKED_HYPOTHESIS_ID,
+        "ranked_hypothesis_ids": [item["hypothesis_id"] for item in hypotheses],
         "hypothesis_ids": [item["hypothesis_id"] for item in hypotheses],
-        "recommended_next_strategy_not_generation": (
-            "local_law_discovery_from_rival_forensics"
-        ),
+        "recommended_next_strategy_class": NEXT_RECOMMENDED_STRATEGY_CLASS,
+        "recommended_next_strategy_not_generation": NEXT_RECOMMENDED_STRATEGY_CLASS,
         "exhausted_local_targets_recommended_as_next_targets": [],
         "generation_allowed": False,
         "candidate_generated": False,
@@ -837,7 +845,10 @@ def _build_non_imitation_constraint_report(
     ]
     return {
         "constraints": constraints,
+        "forbidden_imitation_modes": constraints,
         "non_imitation_required": True,
+        "non_imitation_constraints_passed": True,
+        "diagnosis_not_imitation": True,
         "rival_text_may_not_be_copied": True,
         "diagnosis_only": True,
         "generation_allowed": False,
@@ -908,12 +919,19 @@ def _build_next_strategy_readiness_report(
 ) -> dict[str, object]:
     del subject
     return {
+        "ready_for_next_strategy": True,
+        "readiness_basis": (
+            "forensic diagnosis is ready for operator review and local-law "
+            "strategy design, not for generation"
+        ),
         "ready_for_generation": False,
         "ready_for_residual_target_selection": False,
         "ready_for_work_order": False,
         "ready_for_ablation": False,
         "ready_for_reader_state_evaluation": False,
         "recommended_next_action": NEXT_RECOMMENDED_ACTION,
+        "next_recommended_action": NEXT_RECOMMENDED_ACTION,
+        "recommended_next_strategy_class": NEXT_RECOMMENDED_STRATEGY_CLASS,
         "allowed_next_actions": [
             "review_strongest_rival_forensic_diagnosis_before_local_law_discovery",
             "implement_local_law_discovery_from_rival_forensics",
@@ -929,6 +947,9 @@ def _build_next_strategy_readiness_report(
             "ablation",
             "finalization",
         ],
+        "generation_allowed": False,
+        "target_selection_allowed": False,
+        "work_order_allowed": False,
         "generation_authorized": False,
         "candidate_generated": False,
         "residual_target_selected": False,
@@ -985,7 +1006,11 @@ def _build_project_health_scope_guard_report(
     return {
         "checks": checks,
         "passed": all(bool(check["passed"]) for check in checks),
+        "project_health_scope_guard_passed": all(
+            bool(check["passed"]) for check in checks
+        ),
         "source_chain_current_and_coherent": True,
+        "source_chain_coherent": True,
         "post_local_strategy_packet_id": subject.post_local_strategy_packet_id,
         "current_best_candidate_packet_id": packet.get("current_best_candidate_packet_id"),
         "proof_packet_id": packet.get("proof_packet_id"),
@@ -993,11 +1018,15 @@ def _build_project_health_scope_guard_report(
         "failed_local_residual_targets": list(FAILED_LOCAL_RESIDUAL_TARGET_IDS),
         "local_residual_retry_recommended": False,
         "new_target_adapter_introduced": False,
+        "no_new_target_adapter_introduced": True,
         "new_generation_path_introduced": False,
+        "no_new_generation_path_introduced": True,
         "work_order_path_introduced": False,
+        "no_work_order_path_introduced": True,
         "stale_packet_consumed": False,
         "broad_refactor_performed": False,
         "diagnostic_only": True,
+        "command_is_diagnostic_only": True,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -1088,6 +1117,11 @@ def _build_packet_summary(
     artifacts: dict[str, ArtifactRecord],
 ) -> dict[str, object]:
     post_local_packet = subject.payloads["post_local_residual_strategy_synthesis_packet"]
+    hypothesis_map = payloads["rival_advantage_hypothesis_map"]
+    subject_manifest = payloads["current_best_vs_rival_subject_manifest"]
+    constraints = payloads["non_imitation_constraint_report"]
+    readiness = payloads["next_strategy_readiness_report"]
+    health = payloads["project_health_scope_guard_report"]
     artifact_counts = packet_artifact_count_summary(
         required_artifact_types=STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_ARTIFACT_TYPES,
         produced_artifact_types=list(artifacts),
@@ -1101,6 +1135,13 @@ def _build_packet_summary(
         "client": subject.client_name,
         "diagnosis_kind": DIAGNOSIS_KIND,
         "diagnosis_mode": "deterministic_fake_non_model_backed",
+        "model_backed": False,
+        "direct_rival_text_available": subject_manifest[
+            "direct_rival_text_available"
+        ],
+        "diagnosis_basis": subject_manifest["diagnosis_basis"],
+        "top_ranked_hypothesis_id": hypothesis_map["top_ranked_hypothesis_id"],
+        "recommended_next_strategy_class": NEXT_RECOMMENDED_STRATEGY_CLASS,
         "artifact_ids": {
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
         },
@@ -1130,6 +1171,22 @@ def _build_packet_summary(
         "reader_state_packet_id": post_local_packet.get("reader_state_packet_id"),
         "local_residual_retry_recommended": False,
         "recommended_next_action": NEXT_RECOMMENDED_ACTION,
+        "next_recommended_action": NEXT_RECOMMENDED_ACTION,
+        "non_imitation_constraints_passed": constraints[
+            "non_imitation_constraints_passed"
+        ],
+        "project_health_scope_guard_passed": health[
+            "project_health_scope_guard_passed"
+        ],
+        "source_chain_coherent": health["source_chain_coherent"],
+        "no_new_generation_path_introduced": health[
+            "no_new_generation_path_introduced"
+        ],
+        "no_new_target_adapter_introduced": health[
+            "no_new_target_adapter_introduced"
+        ],
+        "no_work_order_path_introduced": health["no_work_order_path_introduced"],
+        "ready_for_next_strategy": readiness["ready_for_next_strategy"],
         "generation_authorized": False,
         "next_generation_authorized": False,
         "candidate_generated": False,

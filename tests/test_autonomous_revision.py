@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from abi.cli import main
 import abi.modules.ablation_informed_revision as ablation_informed_revision_module
 import abi.modules.autonomous_revision as autonomous_revision_module
 import abi.modules.residual_targets as residual_targets_module
@@ -18691,9 +18692,28 @@ def test_strongest_rival_forensic_diagnosis_accepts_fake_post_local_packet(tmp_p
     assert result.payload["finalization_eligible"] is False
     assert result.payload["no_final_claim"] is True
     assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["model_backed"] is False
+    assert result.payload["direct_rival_text_available"] is False
+    assert result.payload["diagnosis_basis"] == "evidence_map_based"
+    assert result.payload["top_ranked_hypothesis_id"] == (
+        "first_read_pressure_advantage"
+    )
     assert result.payload["recommended_next_action"] == (
         "review_strongest_rival_forensic_diagnosis_before_local_law_discovery"
     )
+    assert result.payload["next_recommended_action"] == (
+        result.payload["recommended_next_action"]
+    )
+    assert result.payload["recommended_next_strategy_class"] == (
+        "local_law_discovery_from_rival_forensics"
+    )
+    assert result.payload["non_imitation_constraints_passed"] is True
+    assert result.payload["project_health_scope_guard_passed"] is True
+    assert result.payload["source_chain_coherent"] is True
+    assert result.payload["no_new_generation_path_introduced"] is True
+    assert result.payload["no_new_target_adapter_introduced"] is True
+    assert result.payload["no_work_order_path_introduced"] is True
+    assert result.payload["ready_for_next_strategy"] is True
 
     packet_dir = Path(str(result.payload["packet_dir"]))
     assert set(result.payload["artifact_paths"]) == set(
@@ -18731,7 +18751,8 @@ def test_strongest_rival_forensic_diagnosis_accepts_fake_post_local_packet(tmp_p
 
     subject = read_payload(packet_dir / "current_best_vs_rival_subject_manifest.json")
     assert subject["direct_rival_text_available"] is False
-    assert "synthesis/rival summaries" in subject["diagnosis_basis"]
+    assert subject["diagnosis_basis"] == "evidence_map_based"
+    assert "synthesis/rival summaries" in subject["diagnosis_basis_sources"]
     assert "evidence-map based" in subject["limitation"]
     assert subject["strongest_rival_still_blocks"] is True
 
@@ -18739,6 +18760,14 @@ def test_strongest_rival_forensic_diagnosis_accepts_fake_post_local_packet(tmp_p
     assert set(hypotheses["hypothesis_ids"]) == set(
         STRONGEST_RIVAL_REQUIRED_HYPOTHESIS_IDS
     )
+    assert hypotheses["top_ranked_hypothesis_id"] == "first_read_pressure_advantage"
+    assert hypotheses["ranked_hypothesis_ids"] == list(
+        STRONGEST_RIVAL_REQUIRED_HYPOTHESIS_IDS
+    )
+    assert hypotheses["recommended_next_strategy_class"] == (
+        "local_law_discovery_from_rival_forensics"
+    )
+    assert hypotheses["generation_allowed"] is False
     for hypothesis in hypotheses["hypotheses"]:
         assert hypothesis["generation_allowed"] is False
         assert hypothesis["supporting_evidence"]
@@ -18752,12 +18781,23 @@ def test_strongest_rival_forensic_diagnosis_accepts_fake_post_local_packet(tmp_p
     assert "do not copy rival structure" in constraints["constraints"]
     assert "diagnose causal advantage only" in constraints["constraints"]
     assert constraints["generation_allowed"] is False
+    assert constraints["non_imitation_constraints_passed"] is True
+    assert constraints["diagnosis_not_imitation"] is True
+    assert "do not imitate rival diction" in constraints["forbidden_imitation_modes"]
 
     questions = read_payload(packet_dir / "forensic_question_set.json")
     assert questions["diagnosis_kind"] == STRONGEST_RIVAL_DIAGNOSIS_KIND
     assert "write a revised candidate" in questions["forbidden_question_uses"]
 
     readiness = read_payload(packet_dir / "next_strategy_readiness_report.json")
+    assert readiness["ready_for_next_strategy"] is True
+    assert readiness["recommended_next_strategy_class"] == (
+        "local_law_discovery_from_rival_forensics"
+    )
+    assert readiness["next_recommended_action"] == readiness["recommended_next_action"]
+    assert readiness["generation_allowed"] is False
+    assert readiness["target_selection_allowed"] is False
+    assert readiness["work_order_allowed"] is False
     assert readiness["ready_for_generation"] is False
     assert readiness["ready_for_residual_target_selection"] is False
     assert readiness["ready_for_work_order"] is False
@@ -18767,8 +18807,10 @@ def test_strongest_rival_forensic_diagnosis_accepts_fake_post_local_packet(tmp_p
 
     health = read_payload(packet_dir / "project_health_scope_guard_report.json")
     assert health["passed"] is True
+    assert health["project_health_scope_guard_passed"] is True
     assert all(not check["blocking_defects"] for check in health["checks"])
     assert health["source_chain_current_and_coherent"] is True
+    assert health["source_chain_coherent"] is True
     assert health["current_best_candidate_packet_id"] == "packet_0063"
     assert health["proof_packet_id"] == "packet_0034"
     assert health["reader_state_packet_id"] == "packet_0013"
@@ -18777,11 +18819,15 @@ def test_strongest_rival_forensic_diagnosis_accepts_fake_post_local_packet(tmp_p
     )
     assert health["local_residual_retry_recommended"] is False
     assert health["new_target_adapter_introduced"] is False
+    assert health["no_new_target_adapter_introduced"] is True
     assert health["new_generation_path_introduced"] is False
+    assert health["no_new_generation_path_introduced"] is True
     assert health["work_order_path_introduced"] is False
+    assert health["no_work_order_path_introduced"] is True
     assert health["stale_packet_consumed"] is False
     assert health["broad_refactor_performed"] is False
     assert health["diagnostic_only"] is True
+    assert health["command_is_diagnostic_only"] is True
 
     gate = read_payload(packet_dir / "strongest_rival_forensic_gate_report.json")
     gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
@@ -18806,6 +18852,55 @@ def test_strongest_rival_forensic_diagnosis_accepts_fake_post_local_packet(tmp_p
         )
     assert len(after_calls) == len(before_calls)
     assert finalization.refused is True
+
+
+def test_strongest_rival_forensic_diagnosis_cli_surface_contract(tmp_path, capsys):
+    _config, post_local_packet, _run_id = (
+        build_strongest_rival_forensic_diagnosis_source_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "diagnose-strongest-rival",
+            "--client",
+            "fake",
+            "--post-local-strategy-packet",
+            str(post_local_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["model_calls"] == 0
+    assert payload["model_backed"] is False
+    assert payload["direct_rival_text_available"] is False
+    assert payload["top_ranked_hypothesis_id"] == "first_read_pressure_advantage"
+    assert payload["recommended_next_action"] == (
+        "review_strongest_rival_forensic_diagnosis_before_local_law_discovery"
+    )
+    assert payload["next_recommended_action"] == payload["recommended_next_action"]
+    assert payload["recommended_next_strategy_class"] == (
+        "local_law_discovery_from_rival_forensics"
+    )
+    assert payload["non_imitation_constraints_passed"] is True
+    assert payload["project_health_scope_guard_passed"] is True
+    assert payload["source_chain_coherent"] is True
+    assert payload["no_new_generation_path_introduced"] is True
+    assert payload["no_new_target_adapter_introduced"] is True
+    assert payload["no_work_order_path_introduced"] is True
+    assert payload["ready_for_next_strategy"] is True
+    assert payload["candidate_generated"] is False
+    assert payload["generation_authorized"] is False
+    assert payload["residual_target_selected"] is False
+    assert payload["work_order_created"] is False
+    assert payload["finalization_eligible"] is False
+    assert payload["no_final_claim"] is True
+    assert payload["no_phase_shift_claim"] is True
 
 
 def test_strongest_rival_forensic_diagnosis_refusal_invariants(tmp_path):
