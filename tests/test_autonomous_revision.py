@@ -3339,6 +3339,14 @@ class StubResidualInterventionClient:
             return dump_json(_ending_clearing_reset_residual_payload(units))
         if self.mode == "ending_strong":
             return dump_json(_valid_ending_residual_intervention_payload(units))
+        if self.mode == "proof_packet_0071_like":
+            return dump_json(_proof_packet_0071_like_residual_payload(units))
+        if self.mode == "proof_object_carry_without_answer_absence":
+            return dump_json(
+                _proof_object_carry_without_answer_absence_payload(units)
+            )
+        if self.mode == "proof_strong":
+            return dump_json(_valid_proof_no_answer_residual_payload(units))
         if self.mode == "protected_context_stable":
             prompt = json.loads(request.input_text)
             return dump_json(
@@ -3933,6 +3941,119 @@ def _ending_packet_0070_like_residual_payload(units):
             "risk_note": "same-unit exact copy and object-pressure relation remains too weak",
         }
     ]
+    return payload
+
+
+def _proof_no_answer_intervention_mapping(units):
+    return [
+        {
+            "target_unit_id": str(unit["unit_id"]),
+            "before_text_sha256": str(unit.get("before_text_sha256") or ""),
+            "mechanism_operation": (
+                "make proof/no-answer pressure arrive through object carry"
+            ),
+            "material_relation_or_action": (
+                "room, table, line, mark, dust, spoon, and saucer carry the pressure"
+            ),
+            "visible_consequence": (
+                "the proof remains local and the outside answer remains absent"
+            ),
+            "intended_first_read_effect": (
+                "reader feels the missing outside answer through room/object pressure"
+            ),
+            "protected_effects_preserved": [
+                "packet_0063 object/tactile field",
+                "outside-answer absence",
+                "strongest-rival pressure remains blocking",
+            ],
+            "covered_target_ids": [str(unit["unit_id"]), PROOF_NO_ANSWER_RESIDUE_TARGET_ID],
+        }
+        for unit in units
+    ]
+
+
+def _valid_proof_no_answer_residual_payload(units):
+    return {
+        "replacement_region_text": (
+            "The room gives no answer back; the table keeps the blank place "
+            "where a reply would have landed in the stopped line of dust at "
+            "the ring. The mark holds the proof on the surface, and because "
+            "nothing enters from outside, the spoon and saucer keep the "
+            "question open without turning it into a lesson. Each object "
+            "bears the absence locally: room, line, table, dust, and ring make "
+            "the missing answer readable by what they keep carrying."
+        ),
+        "target_unit_mappings": _proof_no_answer_intervention_mapping(units),
+        "intervention_plan": [
+            "replace only the proof/no-outside-answer selected region",
+            "make proof stay inside object carry",
+            "register answer absence through room/object pressure",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "only replacement_region_text is supplied",
+                "risk_note": "controller owns final assembly",
+            }
+        ],
+        "protected_effects_notes": [
+            "object field carries proof while no outside answer arrives",
+            "strongest-rival pressure remains blocking",
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no outside-answer solution",
+            "no rival mimicry",
+            "no abstract proof thesis",
+        ],
+        "uncertainty": "strong proof/no-answer stub output for tests only",
+    }
+
+
+def _proof_packet_0071_like_residual_payload(units):
+    payload = _valid_proof_no_answer_residual_payload(units)
+    payload["replacement_region_text"] = (
+        "No answer crosses into the room. The table keeps the proof in the "
+        "line of its mark, and the dust at the ring holds that proof where "
+        "the surface can carry it. The line and the mark keep their record "
+        "on the table while the spoon and saucer hold the pressure in place."
+    )
+    payload["intervention_plan"] = [
+        "packet 0071-like proof/no-answer failure shape",
+        "near-synonym no-outside-answer sentence polish",
+    ]
+    payload["constraint_mapping"] = [
+        {
+            "constraint_id": "no_outside_answer_embodied_in_room",
+            "how_satisfied": "not satisfied",
+            "risk_note": "swaps enters for crosses without embodiment",
+        }
+    ]
+    payload["uncertainty"] = "packet 0071-like regression fixture"
+    return payload
+
+
+def _proof_object_carry_without_answer_absence_payload(units):
+    payload = _valid_proof_no_answer_residual_payload(units)
+    payload["replacement_region_text"] = (
+        "The table keeps the proof in the line and the mark holds its record "
+        "on the surface. Dust at the ring and the spoon beside the saucer "
+        "carry the pressure where it belongs. The room keeps each object in "
+        "place without explanation."
+    )
+    payload["intervention_plan"] = [
+        "object carry present",
+        "answer absence not separately registered by objects",
+    ]
+    payload["constraint_mapping"] = [
+        {
+            "constraint_id": "answer_absence_registered_by_objects",
+            "how_satisfied": "not satisfied",
+            "risk_note": "object-carry language appears without outside-answer absence",
+        }
+    ]
+    payload["uncertainty"] = "proof/no-answer overlap semantic failure fixture"
     return payload
 
 
@@ -17542,6 +17663,21 @@ def build_proof_no_answer_residual_work_order_chain(tmp_path: Path) -> dict[str,
     }
 
 
+def authorize_proof_no_answer_residual_generation(
+    tmp_path: Path,
+) -> tuple[dict[str, object], Path]:
+    chain = build_proof_no_answer_residual_work_order_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    assert authorization.payload["accepted"] is True
+    return chain, Path(str(authorization.payload["packet_dir"]))
+
+
 def assert_proof_no_answer_evidence_handoff_metadata(payload: dict[str, object]) -> None:
     expected_controls = {
         "full_proof_no_answer_residue_intervention",
@@ -18354,6 +18490,172 @@ def test_proof_no_answer_guarded_generation_refuses_openai_before_model_calls(
         )
     assert len(after_calls) == len(before_calls)
     assert finalization.refused is True
+
+
+def test_proof_no_answer_packet_0071_like_fails_in_proof_specific_buckets(
+    tmp_path,
+):
+    chain, authorization_packet = authorize_proof_no_answer_residual_generation(
+        tmp_path
+    )
+    clients = []
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-proof-model",
+        client_factory=residual_intervention_stub_factory(
+            clients,
+            mode="proof_packet_0071_like",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_artifact_id"] is None
+    assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["model_calls"][0]["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+
+    categories = result.payload["validation_failure_categories"]
+    assert "tactile_semantic_failures" not in categories
+    assert "proof_no_answer_semantic_failures" in categories
+    assert "proof_no_answer_unit_materiality_failures" in categories
+    failure_text = json.dumps(categories)
+    assert "sentence-polishing / near-synonym" in failure_text
+    assert "enters" in failure_text
+    assert "crosses" in failure_text
+
+    prompt = json.loads(clients[0].requests[0].input_text)
+    feedback_text = json.dumps(prompt["proof_no_answer_generation_feedback"])
+    assert "No answer crosses into the room" in feedback_text
+    assert "object carry is not enough" in feedback_text
+
+    unit_report = result.payload["target_unit_materiality_report"]
+    by_unit = {unit["target_unit_id"]: unit for unit in unit_report["units"]}
+    no_outside = by_unit["no_outside_answer_embodied_in_room"]
+    assert no_outside["materiality_passed"] is False
+    assert no_outside["semantic_passed"] is False
+    assert "sentence-polishing / near-synonym" in json.dumps(no_outside)
+
+    budget = read_payload(authorization_packet / "generation_attempt_budget.json")
+    auth_packet = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+    assert budget["authorization_consumed"] is False
+    assert auth_packet["authorization_consumed"] is False
+
+    with connect(chain["config"].db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+
+
+def test_proof_no_answer_overlap_reports_member_semantic_failure(
+    tmp_path,
+):
+    chain, authorization_packet = authorize_proof_no_answer_residual_generation(
+        tmp_path
+    )
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-proof-model",
+        client_factory=residual_intervention_stub_factory(
+            [],
+            mode="proof_object_carry_without_answer_absence",
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    categories = result.payload["validation_failure_categories"]
+    assert "proof_no_answer_semantic_failures" in categories
+    assert "proof_no_answer_overlap_semantic_failures" in categories
+    assert "answer_absence_registered_by_objects" in json.dumps(categories)
+    assert "object carry present but answer absence is not registered" in json.dumps(
+        categories
+    )
+
+    clusters = result.payload["overlap_cluster_report"]["clusters"]
+    failed_clusters = [
+        cluster
+        for cluster in clusters
+        if cluster["cluster_failure_class"] == "member_semantic_obligation_failed"
+    ]
+    assert failed_clusters
+    cluster = failed_clusters[0]
+    assert cluster["overlap_cluster_materiality_passed"] is True
+    assert cluster["cluster_materiality_passed"] is True
+    assert cluster["all_member_semantics_passed"] is False
+    assert "answer_absence_registered_by_objects" in cluster["failed_member_unit_ids"]
+    assert cluster["next_feedback"] == (
+        "one replacement may satisfy multiple units only if each semantic "
+        "obligation passes"
+    )
+    assert result.payload["overlap_cluster_report"]["all_overlap_clusters_passed"] is False
+
+
+def test_proof_no_answer_strong_stub_passes_unit_and_overlap_validation(
+    tmp_path,
+):
+    chain, authorization_packet = authorize_proof_no_answer_residual_generation(
+        tmp_path
+    )
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        api_key="stub-key",
+        max_model_calls=1,
+        model="stub-proof-model",
+        client_factory=residual_intervention_stub_factory([], mode="proof_strong"),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["candidate_generated"] is True
+    assert result.payload["counts"]["model_calls"] == 1
+
+    diff_payload = read_payload(
+        result.payload["artifact_paths"]["macro_recomposition_diff_report"]
+    )
+    materiality_report = diff_payload["materiality_report"]
+    validation = materiality_report["residual_intervention_validation_report"]
+    assert validation["passed"] is True
+    assert validation["unit_semantics_passed"] is True
+    assert validation["global_semantic_failure"] is False
+
+    unit_report = materiality_report["target_unit_materiality_report"]
+    by_unit = {unit["target_unit_id"]: unit for unit in unit_report["units"]}
+    assert by_unit["no_outside_answer_embodied_in_room"]["materiality_passed"] is True
+    assert by_unit["no_outside_answer_embodied_in_room"]["semantic_passed"] is True
+    assert by_unit["answer_absence_registered_by_objects"]["semantic_passed"] is True
+
+    overlap = materiality_report["overlap_cluster_report"]
+    assert overlap["all_overlap_clusters_passed"] is True
+    assert all(
+        cluster["all_member_semantics_passed"] is True
+        for cluster in overlap["clusters"]
+    )
 
 
 def test_checkpoint_aware_next_target_strategy_requires_checkpoint_when_present(

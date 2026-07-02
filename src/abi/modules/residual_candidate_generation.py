@@ -82,6 +82,17 @@ HOSTILE_ORDINARY_TABLE_SENTENCE_POLISH_FAILURE = (
     'materially re-author the ordinary-table moment rather than swapping '
     '"seems ordinary" for "is just there"'
 )
+PROOF_NO_ANSWER_NO_OUTSIDE_UNIT_ID = "no_outside_answer_embodied_in_room"
+PROOF_NO_ANSWER_ANSWER_ABSENCE_UNIT_ID = "answer_absence_registered_by_objects"
+PROOF_NO_ANSWER_NO_OUTSIDE_SENTENCE_POLISH_FAILURE = (
+    "no_outside_answer_embodied_in_room remained sentence-polishing / near-synonym; "
+    'materially re-author the no-outside-answer moment rather than swapping '
+    '"enters" for "crosses", "arrives", "comes", or "appears"'
+)
+PROOF_NO_ANSWER_OBJECT_ABSENCE_FAILURE = (
+    "object carry present but answer absence is not registered by objects; "
+    "make no outside answer readable through room/object/line/mark pressure"
+)
 
 NEXT_RECOMMENDED_ACTION = "review_object_motion_causality_candidate_before_ablation"
 
@@ -1177,6 +1188,9 @@ def _proof_no_answer_generation_feedback(
             "materially re-author the proof/no-outside-answer region",
             "make proof arrive through object relation, local pressure, line, mark, carry, or reader encounter",
             "make answer absence register through objects or room pressure without supplying an outside answer",
+            "for no_outside_answer_embodied_in_room, do not paraphrase No answer enters from outside the room as No answer crosses into the room",
+            "make the no-outside-answer absence perceptible through room, object, line, mark, or local pressure rather than denial language alone",
+            "for answer_absence_registered_by_objects, object carry is not enough unless the objects also register that no outside answer arrives",
             "keep sky and silence concrete rather than thesis, doctrine, or cosmic signage",
             "preserve packet_0063 object/tactile field and strongest-rival pressure",
         ],
@@ -1187,6 +1201,9 @@ def _proof_no_answer_generation_feedback(
             "outside answer, elder-presence, revelation, rescue, or cosmic solution enters",
             "proof is stated as a thesis instead of carried by line, object, mark, or pressure",
             "answer absence is named abstractly rather than registered by objects or room",
+            "No answer enters from outside the room is lightly paraphrased as No answer crosses into the room",
+            "enters is swapped for crosses, arrives, comes, or appears without room/object pressure embodying the absence",
+            "object field carries proof but does not make the absence of an outside answer readable",
             "sky/silence becomes doctrine, metaphysical signage, or explanation",
             "object/tactile field is weakened or replaced by exposition",
             "failed hostile-scaffold or ending-return paths are retried",
@@ -1195,6 +1212,7 @@ def _proof_no_answer_generation_feedback(
         "overlap_instruction": [
             "proof_stays_in_object_carry and answer_absence_registered_by_objects may share one replacement passage",
             "the shared replacement must still satisfy object-carry and answer-absence checks independently",
+            "one replacement may satisfy multiple units only if each semantic obligation passes separately",
         ],
     }
 
@@ -1993,7 +2011,9 @@ def _collect_residual_intervention_validation(
             "clusters": cluster_reports,
             "overlap_cluster_count": len(cluster_reports),
             "all_overlap_clusters_passed": all(
-                item["cluster_materiality_passed"] for item in cluster_reports
+                item["cluster_materiality_passed"]
+                and item.get("all_member_semantics_passed", True)
+                for item in cluster_reports
             ),
         },
         "residual_intervention_validation_report": {
@@ -2030,6 +2050,11 @@ def _collect_residual_intervention_validation(
             == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
             else None
         ),
+        "proof_no_answer_generation_feedback": (
+            _proof_no_answer_generation_feedback(subject)
+            if subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+            else None
+        ),
         "required_object_term_count": term_contract["required_object_term_count"],
         "required_motion_term_count": term_contract["required_motion_term_count"],
         "required_consequence_term_count": term_contract[
@@ -2049,8 +2074,11 @@ def _empty_failure_buckets() -> dict[str, list[str]]:
         "whole_region_guard_failures": [],
         "target_bearing_materiality_failures": [],
         "target_unit_materiality_failures": [],
+        "proof_no_answer_unit_materiality_failures": [],
         "overlap_cluster_failures": [],
+        "proof_no_answer_overlap_semantic_failures": [],
         "tactile_semantic_failures": [],
+        "proof_no_answer_semantic_failures": [],
         "object_motion_relabel_failures": [],
         "generic_decorative_vividness_failures": [],
         "abstract_inevitability_failures": [],
@@ -2321,9 +2349,22 @@ def _target_unit_materiality_reports(
                     policy=policy,
                 )
             )
+            materiality_failures.extend(
+                _proof_no_answer_unit_specific_materiality_failures(
+                    selected_residual_target_id=subject.selected_residual_target_id,
+                    unit=unit,
+                    replacement_excerpt=excerpt,
+                    measurement=measurement,
+                    policy=policy,
+                )
+            )
             failures["target_unit_materiality_failures"].extend(
                 f"{unit.unit_id}: {failure}" for failure in materiality_failures
             )
+            if subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+                failures["proof_no_answer_unit_materiality_failures"].extend(
+                    f"{unit.unit_id}: {failure}" for failure in materiality_failures
+                )
         semantic = _target_unit_semantic_report(
             unit=unit,
             replacement_excerpt=excerpt,
@@ -2334,6 +2375,8 @@ def _target_unit_materiality_reports(
             bucket = "tactile_semantic_failures"
             if subject.selected_residual_target_id == HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID:
                 bucket = "scaffold_leakage_failures"
+            elif subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+                bucket = "proof_no_answer_semantic_failures"
             elif "object-motion relabel" in failure:
                 bucket = "object_motion_relabel_failures"
             failures[bucket].append(f"{unit.unit_id}: {failure}")
@@ -2399,6 +2442,33 @@ def _hostile_unit_specific_materiality_failures(
     return [HOSTILE_ORDINARY_TABLE_SENTENCE_POLISH_FAILURE]
 
 
+def _proof_no_answer_unit_specific_materiality_failures(
+    *,
+    selected_residual_target_id: str,
+    unit: TargetUnit,
+    replacement_excerpt: str,
+    measurement: dict[str, object],
+    policy: ResidualMaterialityPolicy,
+) -> list[str]:
+    if selected_residual_target_id != PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return []
+    if unit.unit_id != PROOF_NO_ANSWER_NO_OUTSIDE_UNIT_ID:
+        return []
+    token_floor = int(
+        policy.target_unit_scope.get(
+            "token_edit_distance_floor",
+            policy.token_edit_distance_floor,
+        )
+    )
+    if _proof_no_answer_no_outside_sentence_polish(
+        replacement_excerpt=replacement_excerpt,
+        token_distance=int(measurement["token_edit_distance"]),
+        token_floor=token_floor,
+    ):
+        return [PROOF_NO_ANSWER_NO_OUTSIDE_SENTENCE_POLISH_FAILURE]
+    return []
+
+
 def _overlap_cluster_reports(
     *,
     subject: ResidualCandidateSubject,
@@ -2444,6 +2514,31 @@ def _overlap_cluster_reports(
             }
             for unit in units
         ]
+        failed_member_unit_ids = [
+            str(item["target_unit_id"])
+            for item in member_results
+            if item["semantic_passed"] is not True
+        ]
+        all_member_semantics_passed = not failed_member_unit_ids
+        cluster_materiality_passed = not cluster_failures
+        cluster_failure_class = None
+        next_feedback = None
+        if cluster_failures:
+            cluster_failure_class = "cluster_materiality_failed"
+        if cluster_materiality_passed and not all_member_semantics_passed:
+            cluster_failure_class = "member_semantic_obligation_failed"
+            next_feedback = (
+                "one replacement may satisfy multiple units only if each semantic "
+                "obligation passes"
+            )
+            if subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+                failures["proof_no_answer_overlap_semantic_failures"].append(
+                    "overlap cluster materiality passed but member semantic "
+                    "obligations failed: "
+                    + ", ".join(failed_member_unit_ids)
+                    + "; next_feedback: "
+                    + next_feedback
+                )
         reports.append(
             {
                 "overlap_cluster_id": f"overlap_{before_hash[:12]}",
@@ -2451,7 +2546,12 @@ def _overlap_cluster_reports(
                 "shared_before_hash": before_hash,
                 "integrated_replacement_found": integrated,
                 "materiality": measurement,
-                "cluster_materiality_passed": not cluster_failures,
+                "cluster_materiality_passed": cluster_materiality_passed,
+                "overlap_cluster_materiality_passed": cluster_materiality_passed,
+                "all_member_semantics_passed": all_member_semantics_passed,
+                "failed_member_unit_ids": failed_member_unit_ids,
+                "cluster_failure_class": cluster_failure_class,
+                "next_feedback": next_feedback,
                 "cluster_failures": cluster_failures,
                 "member_semantic_results": member_results,
             }
@@ -2515,17 +2615,122 @@ def _proof_no_answer_target_unit_semantic_report(
         failures.append(
             "proof/no-answer target unit is not carried by object, line, mark, or room pressure"
         )
+    if unit.unit_id == PROOF_NO_ANSWER_NO_OUTSIDE_UNIT_ID:
+        if _proof_no_answer_no_outside_sentence_polish(
+            replacement_excerpt=replacement_excerpt,
+            token_distance=0,
+            token_floor=0,
+        ):
+            failures.append(PROOF_NO_ANSWER_NO_OUTSIDE_SENTENCE_POLISH_FAILURE)
+        if not _proof_no_answer_absence_embodied_by_objects(lower):
+            failures.append(
+                "no outside answer is not embodied by room/object/line/mark pressure"
+            )
     if unit.unit_id == "proof_stays_in_object_carry":
         if "proof" not in lower and not _terms_present(lower, ("line", "mark", "record")):
             failures.append("proof is not kept inside object-carry language")
-    if unit.unit_id == "answer_absence_registered_by_objects":
-        if not _terms_present(lower, ("answer", "outside", "absence", "no answer", "no-answer")):
-            failures.append("answer absence is not registered in the unit")
+    if unit.unit_id == PROOF_NO_ANSWER_ANSWER_ABSENCE_UNIT_ID:
+        if not _proof_no_answer_absence_embodied_by_objects(lower):
+            failures.append(PROOF_NO_ANSWER_OBJECT_ABSENCE_FAILURE)
     if _terms_present(lower, ("elder", "revelation", "rescue", "finally answers")):
         failures.append("outside answer intrusion appears in proof/no-answer unit")
     if _terms_present(lower, ("the proof is", "this proves that", "the meaning is")):
         failures.append("abstract proof thesis replaces object-carry")
     return {"passed": not failures, "failures": failures}
+
+
+def _proof_no_answer_no_outside_sentence_polish(
+    *,
+    replacement_excerpt: str,
+    token_distance: int,
+    token_floor: int,
+) -> bool:
+    after = _canonical_space(replacement_excerpt)
+    denial_paraphrase = (
+        "no answer" in after
+        and "room" in after
+        and any(
+            term in after
+            for term in (
+                "crosses",
+                "cross into",
+                "arrives",
+                "comes",
+                "appears",
+                "enters",
+            )
+        )
+    )
+    if not denial_paraphrase:
+        return False
+    if _proof_no_answer_absence_embodied_by_objects(after):
+        return False
+    return token_floor == 0 or token_distance < token_floor
+
+
+def _proof_no_answer_absence_embodied_by_objects(text: str) -> bool:
+    object_terms = (
+        "room",
+        "table",
+        "line",
+        "mark",
+        "marks",
+        "thing",
+        "object",
+        "objects",
+        "dust",
+        "spoon",
+        "saucer",
+        "ring",
+        "surface",
+    )
+    carry_terms = (
+        "carry",
+        "carries",
+        "carried",
+        "keeps",
+        "kept",
+        "holds",
+        "held",
+        "bears",
+        "record",
+        "records",
+        "register",
+        "registers",
+        "readable",
+        "legible",
+    )
+    absence_terms = (
+        "no answer",
+        "no-answer",
+        "answer",
+        "absence",
+        "absent",
+        "outside",
+        "nothing arrives",
+        "nothing enters",
+        "nothing comes",
+        "without answering",
+        "without an answer",
+        "missing answer",
+    )
+    pressure_terms = (
+        "pressure",
+        "blank",
+        "unanswered",
+        "unresolved",
+        "withheld",
+        "missing",
+    )
+    for sentence in _sentences(text):
+        lower = sentence.lower()
+        if (
+            _terms_present(lower, object_terms)
+            and _terms_present(lower, absence_terms)
+            and (_terms_present(lower, carry_terms) or _terms_present(lower, pressure_terms))
+        ):
+            return True
+    return False
 
 
 def _hostile_target_unit_semantic_report(
@@ -3061,6 +3266,11 @@ def _unit_replacement_excerpt(unit: TargetUnit, replacement: str) -> str:
     sentences = _sentences(replacement)
     if not sentences:
         return replacement
+    if unit.unit_id == PROOF_NO_ANSWER_NO_OUTSIDE_UNIT_ID:
+        for sentence in sentences:
+            lower = sentence.lower()
+            if "no answer" in lower and "room" in lower:
+                return sentence
     label_terms = _unit_label_terms(unit)
     scored = [
         (len(_terms_present(sentence.lower(), label_terms)), index, sentence)
@@ -4151,6 +4361,9 @@ def _failure_result(
             "validation_failure_categories": failure_categories,
             "hostile_scaffold_generation_feedback": validation_payload.get(
                 "hostile_scaffold_generation_feedback"
+            ),
+            "proof_no_answer_generation_feedback": validation_payload.get(
+                "proof_no_answer_generation_feedback"
             ),
             "failed_materiality_reason": (
                 materiality_payload["failed_materiality_reason"]
