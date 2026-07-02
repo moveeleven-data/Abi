@@ -93,6 +93,11 @@ from abi.modules.architecture_evidence_risk_checkpoint import (
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID as CHECKPOINT_HOSTILE_TARGET_ID,
     run_architecture_evidence_risk_checkpoint,
 )
+from abi.modules.checkpoint_strategy_direction_review import (
+    CHECKPOINT_STRATEGY_DIRECTION_REVIEW_ARTIFACT_TYPES,
+    PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+    run_checkpoint_strategy_direction_review,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -17374,6 +17379,292 @@ def test_checkpoint_aware_next_target_strategy_consumes_checkpoint(tmp_path):
         )
 
     assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def build_checkpoint_strategy_direction_ready_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str]:
+    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(tmp_path)
+    checkpoint = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=True,
+    )
+    assert checkpoint.exit_code == 0
+    strategy = run_next_target_strategy(
+        config,
+        authorization_packet=authorization_packet,
+        architecture_risk_checkpoint=Path(str(checkpoint.payload["packet_dir"])),
+    )
+    assert strategy.exit_code == 0
+    return config, Path(str(strategy.payload["packet_dir"])), run_id
+
+
+def test_checkpoint_strategy_direction_review_accepts_proof_no_answer_direction(
+    tmp_path,
+):
+    config, strategy_packet, run_id = build_checkpoint_strategy_direction_ready_chain(
+        tmp_path
+    )
+    work_order_dir = config.run_dir(run_id) / "residual_work_order"
+    before_work_order_packets = (
+        {path.name for path in work_order_dir.glob("packet_*") if path.is_dir()}
+        if work_order_dir.exists()
+        else set()
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_strategy_packet_id"] == strategy_packet.name
+    assert result.payload["source_architecture_checkpoint_packet_id"]
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["selected_checkpoint_direction_id"] == (
+        PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID
+    )
+    assert result.payload["selected_direction_status"] == (
+        "operator_reviewed_checkpoint_direction"
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        "implement_proof_no_answer_residue_target_planning"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert set(result.payload["artifact_paths"]) == set(
+        CHECKPOINT_STRATEGY_DIRECTION_REVIEW_ARTIFACT_TYPES
+    )
+    for artifact_type in CHECKPOINT_STRATEGY_DIRECTION_REVIEW_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    contract = read_payload(packet_dir / "selected_checkpoint_direction_contract.json")
+    assert contract["direction_id"] == PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID
+    assert contract["direction_kind"] == "checkpoint_plausible_direction"
+    assert contract["strategic_reason"] == (
+        "proof/no-answer pressure remains partial_or_unresolved"
+    )
+    assert contract["intended_next_development_step"] == (
+        "implement first-class residual target planning for proof_no_answer_residue"
+    )
+    assert contract["not_residual_target_selection"] is True
+    assert contract["not_work_order"] is True
+    assert contract["generation_authorized"] is False
+    assert "generation" in contract["forbidden_immediate_actions"]
+    assert any("packet_0063" in item for item in contract["protected_effects"])
+    assert any("packet_0034" in item for item in contract["protected_effects"])
+    assert any("packet_0013" in item for item in contract["protected_effects"])
+
+    lock = read_payload(packet_dir / "generation_lock_report.json")
+    assert lock["generation_authorized"] is False
+    assert lock["next_generation_authorized"] is False
+    assert lock["candidate_generated"] is False
+    assert lock["residual_target_selected"] is False
+    assert lock["work_order_created"] is False
+    assert lock["model_calls"] == 0
+
+    readiness = read_payload(packet_dir / "next_step_readiness_report.json")
+    assert readiness["ready_for_generation"] is False
+    assert readiness["ready_for_residual_target_selection"] is False
+    assert readiness["ready_for_work_order"] is False
+    assert readiness["ready_for_next_target_planning"] is True
+    assert readiness["next_recommended_action"] == (
+        "implement_proof_no_answer_residue_target_planning"
+    )
+
+    gate = read_payload(packet_dir / "checkpoint_strategy_direction_gate_report.json")
+    assert gate["passed"] is False
+    assert gate["selected_checkpoint_direction_id"] == (
+        PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID
+    )
+    assert gate["generation_authorized"] is False
+    assert gate["candidate_generated"] is False
+    assert gate["residual_target_selected"] is False
+    assert gate["work_order_created"] is False
+    assert gate["model_calls"] == 0
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    assert not (config.run_dir(run_id) / "residual_target_selection").exists()
+    after_work_order_packets = (
+        {path.name for path in work_order_dir.glob("packet_*") if path.is_dir()}
+        if work_order_dir.exists()
+        else set()
+    )
+    assert after_work_order_packets == before_work_order_packets
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_checkpoint_strategy_direction_review_refusal_invariants(tmp_path):
+    config, strategy_packet, run_id = build_checkpoint_strategy_direction_ready_chain(
+        tmp_path
+    )
+
+    missing_review = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=False,
+    )
+    assert missing_review.exit_code == 1
+    assert "--operator-reviewed" in missing_review.payload["message"]
+    assert missing_review.payload["model_calls"] == 0
+
+    strategy_copy = tmp_path / "not_checkpoint_aware_strategy"
+    shutil.copytree(strategy_packet, strategy_copy)
+
+    def _not_checkpoint_aware(payload):
+        payload["architecture_checkpoint_reviewed"] = False
+
+    rewrite_payload(
+        strategy_copy / "next_target_strategy_packet.json",
+        _not_checkpoint_aware,
+    )
+    not_checkpoint = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_copy,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+    assert not_checkpoint.exit_code == 1
+    assert "did not consume" in not_checkpoint.payload["message"]
+
+    generation_copy = tmp_path / "generation_authorized_strategy"
+    shutil.copytree(strategy_packet, generation_copy)
+
+    def _authorize_generation(payload):
+        payload["next_generation_authorized"] = True
+
+    rewrite_payload(
+        generation_copy / "next_target_strategy_packet.json",
+        _authorize_generation,
+    )
+    generation = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=generation_copy,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+    assert generation.exit_code == 1
+    assert "authorizes generation" in generation.payload["message"]
+
+    candidate_copy = tmp_path / "candidate_generated_strategy"
+    shutil.copytree(strategy_packet, candidate_copy)
+
+    def _candidate_generated(payload):
+        payload["candidate_generated"] = True
+
+    rewrite_payload(
+        candidate_copy / "next_target_strategy_packet.json",
+        _candidate_generated,
+    )
+    candidate = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=candidate_copy,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+    assert candidate.exit_code == 1
+    assert "already generated a candidate" in candidate.payload["message"]
+
+    bad_contract_copy = tmp_path / "bad_contract_strategy"
+    shutil.copytree(strategy_packet, bad_contract_copy)
+
+    def _bad_contract(payload):
+        payload["architecture_checkpoint_intake"][
+            "target_adapter_contract_audit_passed"
+        ] = False
+
+    rewrite_payload(
+        bad_contract_copy / "next_target_strategy_packet.json",
+        _bad_contract,
+    )
+    bad_contract = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=bad_contract_copy,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+    assert bad_contract.exit_code == 1
+    assert "contract audit" in bad_contract.payload["message"]
+
+    unsupported = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction="not_a_checkpoint_direction",
+        operator_reviewed=True,
+    )
+    assert unsupported.exit_code == 1
+    assert "not a checkpoint plausible direction" in unsupported.payload["message"]
+
+    hostile = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=CHECKPOINT_HOSTILE_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert hostile.exit_code == 1
+    assert "paused/exhausted" in hostile.payload["message"]
+
+    object_motion = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert object_motion.exit_code == 1
+    assert "history/current-best-path target" in object_motion.payload["message"]
+
+    tactile = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=TACTILE_INEVITABILITY_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert tactile.exit_code == 1
+    assert "history/current-best-path target" in tactile.payload["message"]
+
+    rival = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction="rival_level_first_read_vividness",
+        operator_reviewed=True,
+    )
+    assert rival.exit_code == 1
+    assert "narrower mechanism" in rival.payload["message"]
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
     assert finalization.refused is True
 
 

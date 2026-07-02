@@ -42,6 +42,9 @@ from abi.modules.autonomous_evidence_synthesis import run_autonomous_evidence_sy
 from abi.modules.architecture_evidence_risk_checkpoint import (
     run_architecture_evidence_risk_checkpoint,
 )
+from abi.modules.checkpoint_strategy_direction_review import (
+    run_checkpoint_strategy_direction_review,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -501,6 +504,26 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         help="Architecture/evidence-risk checkpoint packet directory to consume.",
     )
+    autonomous_review_checkpoint_strategy_parser = autonomous_subparsers.add_parser(
+        "review-checkpoint-strategy",
+        help="Record an operator-reviewed checkpoint direction without generation",
+    )
+    autonomous_review_checkpoint_strategy_parser.add_argument(
+        "--strategy-packet",
+        type=Path,
+        required=True,
+        help="Checkpoint-aware next-target strategy packet directory to consume.",
+    )
+    autonomous_review_checkpoint_strategy_parser.add_argument(
+        "--direction",
+        required=True,
+        help="Checkpoint plausible direction ID to review.",
+    )
+    autonomous_review_checkpoint_strategy_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the checkpoint-aware strategy packet.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -853,6 +876,16 @@ def main(argv: list[str] | None = None) -> int:
             synthesis_packet=args.synthesis_packet,
             authorization_packet=args.authorization_packet,
             architecture_risk_checkpoint=args.architecture_risk_checkpoint,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "review-checkpoint-strategy"
+    ):
+        return _cmd_autonomous_review_checkpoint_strategy(
+            config,
+            strategy_packet=args.strategy_packet,
+            direction=args.direction,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1284,6 +1317,23 @@ def _cmd_autonomous_plan_next_target(
         synthesis_packet=synthesis_packet,
         authorization_packet=authorization_packet,
         architecture_risk_checkpoint=architecture_risk_checkpoint,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_review_checkpoint_strategy(
+    config: AbiConfig,
+    *,
+    strategy_packet: Path,
+    direction: str,
+    operator_reviewed: bool,
+) -> int:
+    result = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=direction,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
