@@ -56,6 +56,20 @@ PLACEHOLDER_MATERIALITY_POLICY_IDS = (
     HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
     ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID,
 )
+TARGET_ARTIFACT_ALIAS_POLICY = {
+    "writes_target_unit_map_alias": True,
+    "writes_target_diagnostic_alias": True,
+    "legacy_target_unit_map_fallback_supported": True,
+    "legacy_target_diagnostic_fallback_supported": True,
+    "consumer_should_prefer_generic_artifact": True,
+}
+GENERATION_READY_SEMANTIC_VALIDATOR_TARGET_IDS = (
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+)
+CURRENT_BEST_PATH_TARGET_IDS = (
+    OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    TACTILE_INEVITABILITY_TARGET_ID,
+)
 
 
 @dataclass(frozen=True)
@@ -1123,6 +1137,318 @@ def require_residual_target_adapter(target_id: str) -> ResidualTargetAdapter:
 
 def supported_residual_target_adapter_ids() -> tuple[str, ...]:
     return tuple(RESIDUAL_TARGET_ADAPTERS)
+
+
+def residual_target_adapter_contracts() -> tuple[dict[str, object], ...]:
+    return tuple(
+        residual_target_adapter_contract(target_id)
+        for target_id in supported_residual_target_ids()
+    )
+
+
+def residual_target_adapter_contract(target_id: str) -> dict[str, object]:
+    spec = require_residual_target_spec(target_id)
+    adapter = get_residual_target_adapter(target_id)
+    readiness_failures = (
+        target_generation_readiness_failures(target_id) if adapter else []
+    )
+    planning_only = adapter is None or (
+        _is_placeholder_generation_contract(
+            adapter.generation_contract_version,
+            adapter.materiality_policy.policy_id,
+        )
+        if adapter
+        else True
+    )
+    generation_support = adapter is not None and not readiness_failures and not planning_only
+    return {
+        "target_id": spec.target_id,
+        "adapter_id": adapter.adapter_id if adapter else spec.work_order_adapter,
+        "adapter_version": adapter.target_spec_version if adapter else None,
+        "target_scope": _target_scope_for_target_id(spec.target_id),
+        "target_movement": spec.mechanism_description,
+        "planning_support": True,
+        "generation_support": generation_support,
+        "planning_only_marker": "planning_only" if planning_only else None,
+        "generation_contract_version": (
+            adapter.generation_contract_version if adapter else None
+        ),
+        "work_order_contract_version": (
+            adapter.work_order_contract_version if adapter else None
+        ),
+        "materiality_policy_id": (
+            adapter.materiality_policy.policy_id if adapter else None
+        ),
+        "materiality_policy_version": (
+            adapter.materiality_policy.policy_version if adapter else None
+        ),
+        "semantic_validator_id": adapter.semantic_validator_id if adapter else None,
+        "semantic_validator_required": (
+            spec.target_id in GENERATION_READY_SEMANTIC_VALIDATOR_TARGET_IDS
+        ),
+        "prompt_contract_id": adapter.prompt_contract_id if adapter else None,
+        "generation_schema_name": adapter.generation_schema.name if adapter else None,
+        "generation_schema_version": (
+            adapter.generation_schema.version if adapter else None
+        ),
+        "worker_role": adapter.worker_role.value if adapter else None,
+        "protected_effects": list(spec.protected_effects),
+        "forbidden_changes": list(spec.forbidden_changes),
+        "target_unit_compiler": f"{spec.work_order_adapter}_target_unit_compiler",
+        "target_unit_contract_support": True,
+        "ablation_controls": list(spec.target_specific_ablation_controls),
+        "ablation_control_plan": list(spec.target_specific_ablation_controls),
+        "reader_state_focus": list(spec.target_specific_reader_state_focus),
+        "reader_state_focus_plan": list(spec.target_specific_reader_state_focus),
+        "stop_test_policy": dict(adapter.stop_test_policy) if adapter else {},
+        "failure_adjudication_policy": _failure_adjudication_policy(spec, adapter),
+        "artifact_alias_policy": dict(TARGET_ARTIFACT_ALIAS_POLICY),
+        "generation_readiness_failures": list(readiness_failures),
+    }
+
+
+def audit_residual_target_adapter_contracts(
+    contracts: tuple[dict[str, object], ...] | list[dict[str, object]] | None = None,
+    *,
+    failed_target_status_map: dict[str, Any] | None = None,
+    current_best_path_target_ids: tuple[str, ...] = CURRENT_BEST_PATH_TARGET_IDS,
+) -> dict[str, object]:
+    contract_rows = list(contracts) if contracts is not None else list(
+        residual_target_adapter_contracts()
+    )
+    failed_statuses = failed_target_status_map or {}
+    rows = [
+        audit_residual_target_adapter_contract(
+            contract,
+            failed_target_status=failed_statuses.get(str(contract.get("target_id") or ""), {}),
+            current_best_path_target_ids=current_best_path_target_ids,
+        )
+        for contract in contract_rows
+    ]
+    blocker_count = len([row for row in rows if row["blocking"]])
+    warning_count = len([row for row in rows if row["warning_count"]])
+    return {
+        "targets": rows,
+        "target_count": len(rows),
+        "audited_target_ids": [row["target_id"] for row in rows],
+        "all_registered_targets_audited": set(supported_residual_target_ids())
+        <= {row["target_id"] for row in rows}
+        if contracts is None
+        else True,
+        "generation_ready_valid_count": len(
+            [row for row in rows if row["classification"] == "generation_ready_valid"]
+        ),
+        "planning_only_valid_count": len(
+            [row for row in rows if row["classification"] == "planning_only_valid"]
+        ),
+        "paused_or_exhausted_but_contract_valid_count": len(
+            [
+                row
+                for row in rows
+                if row["classification"] == "paused_or_exhausted_but_contract_valid"
+            ]
+        ),
+        "adapter_contract_warning_count": len(
+            [row for row in rows if row["classification"] == "adapter_contract_warning"]
+        ),
+        "generation_ready_missing_fields_count": len(
+            [
+                row
+                for row in rows
+                if row["classification"] == "generation_ready_missing_fields"
+            ]
+        ),
+        "blocker_count": blocker_count,
+        "warning_count": warning_count,
+        "passed": blocker_count == 0,
+        "model_calls": 0,
+        "candidate_generated": False,
+        "next_generation_authorized": False,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "worker": "target_adapter_contract_audit_v1_controller",
+    }
+
+
+def audit_residual_target_adapter_contract(
+    contract: dict[str, object],
+    *,
+    failed_target_status: dict[str, Any] | None = None,
+    current_best_path_target_ids: tuple[str, ...] = CURRENT_BEST_PATH_TARGET_IDS,
+) -> dict[str, object]:
+    target_id = str(contract.get("target_id") or "")
+    failed_status = failed_target_status or {}
+    paused = bool(
+        failed_status.get("paused_or_exhausted")
+        or failed_status.get("target_status") == "paused_or_exhausted_pending_strategy_review"
+        or failed_status.get("stop_test_triggered")
+    )
+    history_only = target_id in current_best_path_target_ids
+    required_fields = (
+        "target_id",
+        "adapter_id",
+        "target_scope",
+        "target_movement",
+        "protected_effects",
+        "forbidden_changes",
+        "target_unit_compiler",
+        "ablation_control_plan",
+        "reader_state_focus_plan",
+        "stop_test_policy",
+        "failure_adjudication_policy",
+        "artifact_alias_policy",
+    )
+    missing_required = _missing_contract_fields(contract, required_fields)
+    generation_ready_fields = _missing_generation_ready_contract_fields(contract)
+    warning_fields = _contract_warning_fields(contract)
+    alias_policy = contract.get("artifact_alias_policy")
+    alias_policy_status = (
+        "generic_alias_policy_valid"
+        if isinstance(alias_policy, dict)
+        and alias_policy.get("writes_target_unit_map_alias") is True
+        and alias_policy.get("writes_target_diagnostic_alias") is True
+        and alias_policy.get("legacy_target_unit_map_fallback_supported") is True
+        and alias_policy.get("legacy_target_diagnostic_fallback_supported") is True
+        else "generic_alias_policy_incomplete"
+    )
+    if alias_policy_status != "generic_alias_policy_valid":
+        warning_fields.append("artifact_alias_policy")
+    generation_ready = bool(contract.get("generation_support"))
+    planning_only = bool(contract.get("planning_only_marker"))
+    blocking = bool(missing_required or generation_ready_fields)
+    if missing_required:
+        classification = "adapter_contract_blocker"
+    elif generation_ready_fields and generation_ready:
+        classification = "generation_ready_missing_fields"
+    elif generation_ready_fields:
+        classification = "adapter_contract_blocker"
+    elif blocking:
+        classification = "adapter_contract_blocker"
+    elif warning_fields:
+        classification = "adapter_contract_warning"
+    elif paused:
+        classification = "paused_or_exhausted_but_contract_valid"
+    elif planning_only:
+        classification = "planning_only_valid"
+    elif generation_ready:
+        classification = "generation_ready_valid"
+    else:
+        classification = "contract_complete"
+    usage_state = (
+        "paused_or_exhausted_current_run"
+        if paused
+        else "previous_current_best_path_or_history_only"
+        if history_only
+        else "available_for_future_strategy_review"
+    )
+    return {
+        **contract,
+        "classification": classification,
+        "contract_valid": not blocking,
+        "blocking": blocking,
+        "missing_required_fields": missing_required,
+        "missing_generation_ready_fields": generation_ready_fields,
+        "warning_fields": warning_fields,
+        "warning_count": len(warning_fields),
+        "generation_readiness_status": _generation_readiness_status(contract),
+        "alias_policy_status": alias_policy_status,
+        "failed_or_paused_in_current_run": paused,
+        "current_best_path_or_history_only": history_only,
+        "current_run_usage_state": usage_state,
+        "available_for_immediate_selection": False
+        if paused or history_only
+        else bool(contract.get("planning_support")),
+        "explicit_override_required_before_reuse": paused or history_only,
+        "candidate_generated": False,
+        "model_calls": 0,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+    }
+
+
+def _target_scope_for_target_id(target_id: str) -> str:
+    if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+        return ENDING_RETURN_REGION_ID
+    return SELECTED_REGION_ID
+
+
+def _failure_adjudication_policy(
+    spec: ResidualTargetSpec,
+    adapter: ResidualTargetAdapter | None,
+) -> dict[str, object]:
+    return {
+        "policy_id": f"{spec.work_order_adapter}_failure_adjudication_v1",
+        "failed_generation_is_diagnostic_only": True,
+        "failed_generation_does_not_create_candidate": True,
+        "failed_generation_does_not_authorize_retry": True,
+        "requires_strategy_or_operator_review_after_stop_test": True,
+        "stop_test_policy_id": adapter.stop_test_policy.get("cycle_kind")
+        if adapter
+        else "planning_only",
+        "pause_action": adapter.stop_test_policy.get("pause_action")
+        if adapter
+        else "planning_only",
+    }
+
+
+def _missing_contract_fields(
+    contract: dict[str, object],
+    field_names: tuple[str, ...],
+) -> list[str]:
+    return [
+        field_name
+        for field_name in field_names
+        if _contract_value_missing(contract.get(field_name))
+    ]
+
+
+def _missing_generation_ready_contract_fields(
+    contract: dict[str, object],
+) -> list[str]:
+    if not bool(contract.get("generation_support")):
+        return []
+    required = [
+        "generation_contract_version",
+        "materiality_policy_id",
+        "prompt_contract_id",
+        "generation_schema_name",
+        "worker_role",
+    ]
+    if bool(contract.get("semantic_validator_required")):
+        required.append("semantic_validator_id")
+    missing = _missing_contract_fields(contract, tuple(required))
+    if payload_has_placeholder_generation_contract(contract):
+        missing.append("non_placeholder_generation_contract")
+    return missing
+
+
+def _contract_warning_fields(contract: dict[str, object]) -> list[str]:
+    warnings: list[str] = []
+    readiness_failures = contract.get("generation_readiness_failures")
+    if isinstance(readiness_failures, list) and readiness_failures:
+        warnings.append("generation_readiness_failures")
+    return warnings
+
+
+def _generation_readiness_status(contract: dict[str, object]) -> str:
+    if bool(contract.get("planning_only_marker")):
+        return "planning_only"
+    if bool(contract.get("generation_support")):
+        return "generation_ready"
+    failures = contract.get("generation_readiness_failures")
+    if isinstance(failures, list) and failures:
+        return "generation_readiness_failed"
+    return "generation_not_registered"
+
+
+def _contract_value_missing(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, dict, set)):
+        return not value
+    return False
 
 
 def target_adapter_metadata(target_id: str) -> dict[str, object]:

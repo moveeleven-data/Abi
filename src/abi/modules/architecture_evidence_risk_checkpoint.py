@@ -18,6 +18,8 @@ from abi.controller.state import (
 )
 from abi.db import connect, initialize_database
 from abi.modules.residual_targets import (
+    CURRENT_BEST_PATH_TARGET_IDS,
+    audit_residual_target_adapter_contracts,
     get_residual_target_adapter,
     get_residual_target_spec,
     supported_residual_target_ids,
@@ -47,6 +49,7 @@ ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_CREATED_BY = (
 ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ARTIFACT_TYPES = (
     "active_evidence_chain_summary",
     "failed_target_memory_report",
+    "target_adapter_contract_audit",
     "target_adapter_inventory",
     "legacy_artifact_name_audit",
     "hardcoded_packet_id_audit",
@@ -176,14 +179,27 @@ def run_architecture_evidence_risk_checkpoint(
             parent_ids=[artifacts["active_evidence_chain_summary"].id],
         )
 
+        payloads["target_adapter_contract_audit"] = _build_target_adapter_contract_audit(
+            payloads["failed_target_memory_report"],
+        )
+        artifacts["target_adapter_contract_audit"] = writer.write_artifact(
+            "target_adapter_contract_audit",
+            payloads["target_adapter_contract_audit"],
+            parent_ids=[artifacts["failed_target_memory_report"].id],
+        )
+
         payloads["target_adapter_inventory"] = _build_target_adapter_inventory(
             subject,
             payloads["failed_target_memory_report"],
+            payloads["target_adapter_contract_audit"],
         )
         artifacts["target_adapter_inventory"] = writer.write_artifact(
             "target_adapter_inventory",
             payloads["target_adapter_inventory"],
-            parent_ids=[artifacts["failed_target_memory_report"].id],
+            parent_ids=[
+                artifacts["failed_target_memory_report"].id,
+                artifacts["target_adapter_contract_audit"].id,
+            ],
         )
 
         payloads["legacy_artifact_name_audit"] = _build_legacy_artifact_name_audit(
@@ -240,6 +256,7 @@ def run_architecture_evidence_risk_checkpoint(
                 artifacts["generation_lock_and_authorization_audit"].id,
                 artifacts["unresolved_creative_blocker_summary"].id,
                 artifacts["target_adapter_inventory"].id,
+                artifacts["target_adapter_contract_audit"].id,
             ],
         )
 
@@ -598,8 +615,14 @@ def _build_failed_target_memory_report(
 def _build_target_adapter_inventory(
     subject: ArchitectureEvidenceRiskSubject,
     failed_memory: dict[str, object],
+    contract_audit: dict[str, object],
 ) -> dict[str, object]:
     failed_targets = failed_memory["failed_targets"]
+    audit_rows = {
+        str(row.get("target_id") or ""): row
+        for row in contract_audit.get("targets", [])
+        if isinstance(row, dict)
+    }
     inventory = []
     for target_id in supported_residual_target_ids():
         spec = get_residual_target_spec(target_id)
@@ -609,12 +632,21 @@ def _build_target_adapter_inventory(
             readiness_failures = target_generation_readiness_failures(target_id)
         failed_status = failed_targets.get(target_id, {})
         paused = bool(failed_status.get("paused_or_exhausted"))
+        audit_row = audit_rows.get(target_id, {})
+        available_for_immediate_selection = bool(
+            audit_row.get("available_for_immediate_selection")
+        )
         inventory.append(
             {
                 "target_id": target_id,
                 "adapter_id": adapter.adapter_id if adapter else spec.work_order_adapter if spec else None,
+                "adapter_version": audit_row.get("adapter_version"),
+                "target_scope": audit_row.get("target_scope"),
+                "target_movement": audit_row.get("target_movement"),
                 "planning_support": spec is not None,
-                "generation_support": adapter is not None and not readiness_failures,
+                "generation_support": bool(audit_row.get("generation_support"))
+                if audit_row
+                else adapter is not None and not readiness_failures,
                 "generation_readiness_failures": readiness_failures,
                 "materiality_policy_id": adapter.materiality_policy.policy_id
                 if adapter
@@ -622,13 +654,25 @@ def _build_target_adapter_inventory(
                 "semantic_validator_id": adapter.semantic_validator_id
                 if adapter
                 else None,
+                "prompt_contract_id": audit_row.get("prompt_contract_id"),
+                "contract_audit_classification": audit_row.get("classification"),
+                "contract_valid": audit_row.get("contract_valid"),
+                "contract_missing_required_fields": list(
+                    audit_row.get("missing_required_fields", [])
+                ),
+                "contract_missing_generation_ready_fields": list(
+                    audit_row.get("missing_generation_ready_fields", [])
+                ),
+                "alias_policy_status": audit_row.get("alias_policy_status"),
+                "current_run_usage_state": audit_row.get("current_run_usage_state"),
+                "explicit_override_required_before_reuse": bool(
+                    audit_row.get("explicit_override_required_before_reuse")
+                ),
                 "failed_or_paused_in_current_run": paused,
                 "target_status": failed_status.get("target_status")
                 if failed_status
                 else "not_paused_by_checkpoint",
-                "available_for_immediate_selection": (
-                    spec is not None and not paused
-                ),
+                "available_for_immediate_selection": available_for_immediate_selection,
                 "available_for_generation": False,
                 "known_technical_debt_or_compatibility_notes": _target_notes(target_id),
             }
@@ -645,10 +689,24 @@ def _build_target_adapter_inventory(
                 ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
             )
         ),
+        "target_adapter_contract_audit_passed": contract_audit.get("passed") is True,
+        "target_adapter_contract_blocker_count": contract_audit.get(
+            "blocker_count", 0
+        ),
         "next_generation_authorized": False,
         "no_target_selected": True,
         "worker": "target_adapter_inventory_v1_controller",
     }
+
+
+def _build_target_adapter_contract_audit(
+    failed_memory: dict[str, object],
+) -> dict[str, object]:
+    failed_targets = failed_memory.get("failed_targets")
+    return audit_residual_target_adapter_contracts(
+        failed_target_status_map=failed_targets if isinstance(failed_targets, dict) else {},
+        current_best_path_target_ids=CURRENT_BEST_PATH_TARGET_IDS,
+    )
 
 
 def _build_legacy_artifact_name_audit(
@@ -938,6 +996,7 @@ def _build_next_strategy_readiness_report(
 def _build_gate_report(payloads: dict[str, dict[str, object]]) -> dict[str, object]:
     chain = payloads["active_evidence_chain_summary"]
     failed_memory = payloads["failed_target_memory_report"]
+    contract_audit = payloads["target_adapter_contract_audit"]
     inventory = payloads["target_adapter_inventory"]
     legacy = payloads["legacy_artifact_name_audit"]
     hardcoded = payloads["hardcoded_packet_id_audit"]
@@ -951,6 +1010,14 @@ def _build_gate_report(payloads: dict[str, dict[str, object]]) -> dict[str, obje
         _gate_result(
             "failed_target_memory_visible",
             bool(failed_memory.get("paused_or_exhausted_target_ids")),
+        ),
+        _gate_result(
+            "target_adapter_contract_audit_completed",
+            contract_audit.get("passed") is True,
+            [
+                "target adapter contract blockers present"
+                for _ in range(int(contract_audit.get("blocker_count", 0) or 0))
+            ],
         ),
         _gate_result("target_adapter_inventory_created", bool(inventory.get("target_count"))),
         _gate_result("legacy_artifact_name_audit_completed", bool(legacy.get("passed"))),
@@ -972,6 +1039,8 @@ def _build_gate_report(payloads: dict[str, dict[str, object]]) -> dict[str, obje
         "failed_gates": blocking_defects,
         "blocking_defects": blocking_defects,
         "legacy_artifact_name_warnings": legacy.get("warning_count", 0),
+        "target_adapter_contract_blockers": contract_audit.get("blocker_count", 0),
+        "target_adapter_contract_warnings": contract_audit.get("warning_count", 0),
         "suspicious_hardcoded_packet_id_warnings": hardcoded.get(
             "suspicious_production_finding_count",
             0,
@@ -1024,6 +1093,7 @@ def _build_packet_summary(
         "candidate_generated": False,
         "model_calls": 0,
         "failed_target_memory_report": payloads["failed_target_memory_report"],
+        "target_adapter_contract_audit": payloads["target_adapter_contract_audit"],
         "target_adapter_inventory": payloads["target_adapter_inventory"],
         "legacy_artifact_name_audit": payloads["legacy_artifact_name_audit"],
         "hardcoded_packet_id_audit": payloads["hardcoded_packet_id_audit"],

@@ -88,6 +88,7 @@ REQUIRED_LOOP_CLEANUP_FILES = LOOP_INTEGRITY_CLEANUP_ARTIFACT_TYPES
 REQUIRED_ARCHITECTURE_CHECKPOINT_FILES = (
     "active_evidence_chain_summary",
     "failed_target_memory_report",
+    "target_adapter_contract_audit",
     "target_adapter_inventory",
     "legacy_artifact_name_audit",
     "hardcoded_packet_id_audit",
@@ -1273,6 +1274,9 @@ def _architecture_checkpoint_intake(subject: StrategySubject) -> dict[str, objec
         "architecture_evidence_risk_checkpoint_packet"
     ]
     legacy = subject.architecture_checkpoint_payloads["legacy_artifact_name_audit"]
+    contract_audit = subject.architecture_checkpoint_payloads[
+        "target_adapter_contract_audit"
+    ]
     hardcoded = subject.architecture_checkpoint_payloads["hardcoded_packet_id_audit"]
     blockers = subject.architecture_checkpoint_payloads[
         "unresolved_creative_blocker_summary"
@@ -1304,6 +1308,13 @@ def _architecture_checkpoint_intake(subject: StrategySubject) -> dict[str, objec
         "proof_packet_id": packet.get("proof_packet_id"),
         "reader_state_packet_id": packet.get("reader_state_packet_id"),
         "legacy_artifact_name_warning_count": legacy.get("warning_count", 0),
+        "target_adapter_contract_blocker_count": contract_audit.get(
+            "blocker_count", 0
+        ),
+        "target_adapter_contract_warning_count": contract_audit.get(
+            "warning_count", 0
+        ),
+        "target_adapter_contract_audit_passed": contract_audit.get("passed") is True,
         "hardcoded_packet_id_unacceptable_count": hardcoded.get(
             "unacceptable_hardcode_count",
             0,

@@ -10253,6 +10253,121 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     assert_strict_object_schema(response_format["schema"], path="ResidualIntervention")
 
 
+def test_residual_target_adapter_contract_audit_covers_registered_targets():
+    audit = residual_targets_module.audit_residual_target_adapter_contracts()
+    rows = {row["target_id"]: row for row in audit["targets"]}
+
+    assert audit["passed"] is True
+    assert audit["model_calls"] == 0
+    assert audit["candidate_generated"] is False
+    assert audit["all_registered_targets_audited"] is True
+    assert set(rows) == set(residual_targets_module.supported_residual_target_ids())
+
+    for target_id, row in rows.items():
+        assert row["target_id"] == target_id
+        assert row["adapter_id"]
+        assert row["adapter_version"]
+        assert row["target_scope"]
+        assert row["target_movement"]
+        assert row["planning_support"] is True
+        assert row["protected_effects"]
+        assert row["forbidden_changes"]
+        assert row["target_unit_compiler"]
+        assert row["target_unit_contract_support"] is True
+        assert row["ablation_control_plan"]
+        assert row["reader_state_focus_plan"]
+        assert row["stop_test_policy"]
+        assert row["failure_adjudication_policy"]
+        assert row["alias_policy_status"] == "generic_alias_policy_valid"
+        assert row["artifact_alias_policy"]["writes_target_unit_map_alias"] is True
+        assert row["artifact_alias_policy"]["writes_target_diagnostic_alias"] is True
+        assert row["artifact_alias_policy"][
+            "legacy_target_unit_map_fallback_supported"
+        ] is True
+        assert row["artifact_alias_policy"][
+            "legacy_target_diagnostic_fallback_supported"
+        ] is True
+        assert row["contract_valid"] is True
+        assert row["blocking"] is False
+        assert row["finalization_eligible"] is False
+        assert row["no_phase_shift_claim"] is True
+        if row["generation_support"]:
+            assert row["generation_contract_version"]
+            assert row["materiality_policy_id"]
+            assert row["prompt_contract_id"]
+            assert row["generation_schema_name"]
+            assert row["worker_role"]
+
+
+def test_residual_target_adapter_contract_audit_flags_blockers_and_warnings():
+    base_contract = dict(
+        residual_targets_module.residual_target_adapter_contract(
+            HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
+        )
+    )
+    missing_scope = dict(base_contract)
+    missing_scope["target_id"] = "missing_scope_fixture"
+    missing_scope.pop("target_scope")
+
+    missing_prompt = dict(base_contract)
+    missing_prompt["target_id"] = "missing_prompt_fixture"
+    missing_prompt["prompt_contract_id"] = None
+
+    alias_warning = dict(base_contract)
+    alias_warning["target_id"] = "alias_warning_fixture"
+    alias_warning["artifact_alias_policy"] = {
+        "writes_target_unit_map_alias": True,
+        "writes_target_diagnostic_alias": False,
+        "legacy_target_unit_map_fallback_supported": True,
+        "legacy_target_diagnostic_fallback_supported": True,
+    }
+
+    planning_only = dict(base_contract)
+    planning_only.update(
+        {
+            "target_id": "planning_only_fixture",
+            "generation_support": False,
+            "planning_only_marker": "planning_only",
+            "generation_readiness_failures": [],
+            "generation_contract_version": None,
+            "materiality_policy_id": None,
+            "prompt_contract_id": None,
+            "generation_schema_name": None,
+            "worker_role": None,
+        }
+    )
+
+    audit = residual_targets_module.audit_residual_target_adapter_contracts(
+        [missing_scope, missing_prompt, alias_warning, planning_only]
+    )
+    rows = {row["target_id"]: row for row in audit["targets"]}
+
+    assert audit["passed"] is False
+    assert audit["blocker_count"] == 2
+    assert audit["warning_count"] == 1
+    assert rows["missing_scope_fixture"]["classification"] == "adapter_contract_blocker"
+    assert rows["missing_scope_fixture"]["blocking"] is True
+    assert "target_scope" in rows["missing_scope_fixture"]["missing_required_fields"]
+    assert rows["missing_prompt_fixture"]["classification"] == (
+        "generation_ready_missing_fields"
+    )
+    assert rows["missing_prompt_fixture"]["blocking"] is True
+    assert "prompt_contract_id" in rows["missing_prompt_fixture"][
+        "missing_generation_ready_fields"
+    ]
+    assert rows["alias_warning_fixture"]["classification"] == (
+        "adapter_contract_warning"
+    )
+    assert rows["alias_warning_fixture"]["blocking"] is False
+    assert rows["alias_warning_fixture"]["alias_policy_status"] == (
+        "generic_alias_policy_incomplete"
+    )
+    assert "artifact_alias_policy" in rows["alias_warning_fixture"]["warning_fields"]
+    assert rows["planning_only_fixture"]["classification"] == "planning_only_valid"
+    assert rows["planning_only_fixture"]["contract_valid"] is True
+    assert rows["planning_only_fixture"]["missing_generation_ready_fields"] == []
+
+
 def test_residual_work_order_refuses_invalid_target_selection(tmp_path):
     chain = build_residual_work_order_ready_chain(tmp_path)
     invalid_packet = tmp_path / "invalid_residual_selection_target"
@@ -16910,6 +17025,54 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert failed_memory["hostile_scaffold_retry_recommended"] is False
     assert failed_memory["ending_return_retry_recommended"] is False
 
+    contract_audit = read_payload(packet_dir / "target_adapter_contract_audit.json")
+    audit_rows = {row["target_id"]: row for row in contract_audit["targets"]}
+    assert contract_audit["passed"] is True
+    assert contract_audit["model_calls"] == 0
+    assert contract_audit["candidate_generated"] is False
+    assert contract_audit["all_registered_targets_audited"] is True
+    assert contract_audit["blocker_count"] == 0
+    assert contract_audit["warning_count"] == 0
+    assert set(audit_rows) == set(residual_targets_module.supported_residual_target_ids())
+    for row in audit_rows.values():
+        assert row["target_id"]
+        assert row["adapter_id"]
+        assert row["target_scope"]
+        assert row["target_movement"]
+        assert row["protected_effects"]
+        assert row["forbidden_changes"]
+        assert row["target_unit_compiler"]
+        assert row["ablation_control_plan"]
+        assert row["reader_state_focus_plan"]
+        assert row["alias_policy_status"] == "generic_alias_policy_valid"
+        assert row["contract_valid"] is True
+        assert row["finalization_eligible"] is False
+        assert row["no_phase_shift_claim"] is True
+    assert audit_rows[CHECKPOINT_HOSTILE_TARGET_ID]["classification"] == (
+        "paused_or_exhausted_but_contract_valid"
+    )
+    assert audit_rows[CHECKPOINT_ENDING_TARGET_ID]["classification"] == (
+        "paused_or_exhausted_but_contract_valid"
+    )
+    assert audit_rows[OBJECT_MOTION_CAUSALITY_TARGET_ID][
+        "current_run_usage_state"
+    ] == "previous_current_best_path_or_history_only"
+    assert audit_rows[TACTILE_INEVITABILITY_TARGET_ID][
+        "current_run_usage_state"
+    ] == "previous_current_best_path_or_history_only"
+    assert audit_rows[OBJECT_MOTION_CAUSALITY_TARGET_ID][
+        "available_for_immediate_selection"
+    ] is False
+    assert audit_rows[TACTILE_INEVITABILITY_TARGET_ID][
+        "available_for_immediate_selection"
+    ] is False
+    assert audit_rows[OBJECT_MOTION_CAUSALITY_TARGET_ID][
+        "explicit_override_required_before_reuse"
+    ] is True
+    assert audit_rows[TACTILE_INEVITABILITY_TARGET_ID][
+        "explicit_override_required_before_reuse"
+    ] is True
+
     inventory = read_payload(packet_dir / "target_adapter_inventory.json")
     target_rows = {row["target_id"]: row for row in inventory["targets"]}
     assert CHECKPOINT_HOSTILE_TARGET_ID in target_rows
@@ -16921,6 +17084,26 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert target_rows[CHECKPOINT_ENDING_TARGET_ID][
         "failed_or_paused_in_current_run"
     ] is True
+    assert target_rows[CHECKPOINT_HOSTILE_TARGET_ID][
+        "contract_audit_classification"
+    ] == "paused_or_exhausted_but_contract_valid"
+    assert target_rows[CHECKPOINT_ENDING_TARGET_ID][
+        "contract_audit_classification"
+    ] == "paused_or_exhausted_but_contract_valid"
+    assert target_rows[OBJECT_MOTION_CAUSALITY_TARGET_ID][
+        "current_run_usage_state"
+    ] == "previous_current_best_path_or_history_only"
+    assert target_rows[TACTILE_INEVITABILITY_TARGET_ID][
+        "current_run_usage_state"
+    ] == "previous_current_best_path_or_history_only"
+    assert target_rows[OBJECT_MOTION_CAUSALITY_TARGET_ID][
+        "available_for_immediate_selection"
+    ] is False
+    assert target_rows[TACTILE_INEVITABILITY_TARGET_ID][
+        "available_for_immediate_selection"
+    ] is False
+    assert inventory["target_adapter_contract_audit_passed"] is True
+    assert inventory["target_adapter_contract_blocker_count"] == 0
     assert all(row["available_for_generation"] is False for row in target_rows.values())
 
     legacy_audit = read_payload(packet_dir / "legacy_artifact_name_audit.json")
@@ -16976,6 +17159,8 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert gate["finalization_eligible"] is False
     assert gate["legacy_artifact_name_warnings"] == 2
     assert gate["suspicious_hardcoded_packet_id_warnings"] >= 1
+    assert gate["target_adapter_contract_blockers"] == 0
+    assert gate["target_adapter_contract_warnings"] == 0
 
     packet = read_payload(packet_dir / "architecture_evidence_risk_checkpoint_packet.json")
     assert packet["accepted"] is True
@@ -16984,6 +17169,7 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert packet["counts"]["candidate_artifacts_created"] == 0
     assert packet["current_best_candidate_packet_id"] == "packet_0063"
     assert packet["not_finalization_eligible"] is True
+    assert packet["target_adapter_contract_audit"]["passed"] is True
 
     for artifact_type in ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ARTIFACT_TYPES:
         envelope = json.loads(
@@ -17104,6 +17290,9 @@ def test_checkpoint_aware_next_target_strategy_consumes_checkpoint(tmp_path):
     assert intake["checkpoint_packet_id"] == checkpoint.payload["packet_id"]
     assert intake["legacy_artifact_name_warning_count"] == 2
     assert intake["hardcoded_packet_id_unacceptable_count"] == 0
+    assert intake["target_adapter_contract_audit_passed"] is True
+    assert intake["target_adapter_contract_blocker_count"] == 0
+    assert intake["target_adapter_contract_warning_count"] == 0
     assert set(intake["failed_local_residual_generation_targets"]) == {
         CHECKPOINT_HOSTILE_TARGET_ID,
         CHECKPOINT_ENDING_TARGET_ID,
