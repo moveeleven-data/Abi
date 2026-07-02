@@ -105,6 +105,12 @@ from abi.modules.post_local_residual_strategy_synthesis import (
     RECOMMENDED_STRATEGY_CLASS as POST_LOCAL_RECOMMENDED_STRATEGY_CLASS,
     run_post_local_residual_strategy_synthesis,
 )
+from abi.modules.strongest_rival_forensic_diagnosis import (
+    DIAGNOSIS_KIND as STRONGEST_RIVAL_DIAGNOSIS_KIND,
+    REQUIRED_HYPOTHESIS_IDS as STRONGEST_RIVAL_REQUIRED_HYPOTHESIS_IDS,
+    STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_ARTIFACT_TYPES,
+    run_strongest_rival_forensic_diagnosis,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -17765,6 +17771,30 @@ def build_post_local_strategy_direction_review_chain(
     return config, Path(str(direction.payload["packet_dir"])), run_id
 
 
+def build_strongest_rival_forensic_diagnosis_source_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str]:
+    config, direction_packet, run_id = build_post_local_strategy_direction_review_chain(
+        tmp_path
+    )
+    post_local = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=direction_packet,
+        operator_reviewed=True,
+    )
+    assert post_local.exit_code == 0
+    post_local_packet = Path(str(post_local.payload["packet_dir"]))
+
+    def _blank_display_alias(payload):
+        payload["recommended_next_strategy_class"] = ""
+
+    rewrite_payload(
+        post_local_packet / "post_local_residual_strategy_synthesis_packet.json",
+        _blank_display_alias,
+    )
+    return config, post_local_packet, run_id
+
+
 def write_checkpoint_fixture_current_best_candidate(config: AbiConfig, run_id: str) -> Path:
     candidate_dir = config.run_dir(run_id) / "bounded_macro_recomposition" / "packet_0063"
     candidate_text = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
@@ -18607,6 +18637,337 @@ def test_post_local_residual_strategy_synthesis_refusal_invariants(tmp_path):
         config,
         direction_review_packet=work_order_created,
         operator_reviewed=True,
+    )
+    assert refused_work_order.exit_code == 1
+    assert "created a work order" in refused_work_order.payload["message"]
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+
+
+def test_strongest_rival_forensic_diagnosis_accepts_fake_post_local_packet(tmp_path):
+    config, post_local_packet, run_id = (
+        build_strongest_rival_forensic_diagnosis_source_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="fake",
+        post_local_strategy_packet=post_local_packet,
+        operator_reviewed=True,
+        allow_live_model=False,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["client"] == "fake"
+    assert result.payload["diagnosis_kind"] == STRONGEST_RIVAL_DIAGNOSIS_KIND
+    assert result.payload["source_post_local_strategy_packet_id"] == (
+        post_local_packet.name
+    )
+    assert result.payload["source_direction_review_packet_id"]
+    assert result.payload["source_strategy_packet_id"]
+    assert result.payload["source_architecture_checkpoint_packet_id"]
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["local_residual_retry_recommended"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["ablation_authorized"] is False
+    assert result.payload["reader_state_eval_authorized"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["recommended_next_action"] == (
+        "review_strongest_rival_forensic_diagnosis_before_local_law_discovery"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert set(result.payload["artifact_paths"]) == set(
+        STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_ARTIFACT_TYPES
+    )
+    for artifact_type in STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    intake = read_payload(packet_dir / "source_post_local_strategy_intake_summary.json")
+    assert intake["canonical_recommended_strategy_class"] == (
+        POST_LOCAL_RECOMMENDED_STRATEGY_CLASS
+    )
+    assert intake["display_alias_recommended_next_strategy_class"] == ""
+    assert intake["display_alias_warning"] is None
+    assert intake["model_calls"] == 0
+
+    evidence = read_payload(packet_dir / "current_best_evidence_state.json")
+    assert evidence["current_best_candidate_packet_id"] == "packet_0063"
+    assert evidence["proof_packet_id"] == "packet_0034"
+    assert evidence["reader_state_packet_id"] == "packet_0013"
+    assert evidence["strongest_rival_still_blocks"] is True
+    assert evidence["reader_state_transformation_status"] == "partial"
+    assert evidence["local_residual_targets_are_exhausted_or_paused"] is True
+
+    failed_memory = read_payload(
+        packet_dir / "failed_local_residual_memory_summary.json"
+    )
+    assert set(failed_memory["failed_local_residual_targets"]) == {
+        CHECKPOINT_HOSTILE_TARGET_ID,
+        CHECKPOINT_ENDING_TARGET_ID,
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    }
+    assert failed_memory["local_residual_retry_recommended"] is False
+    assert failed_memory["failed_packets_are_diagnostic_only"] is True
+
+    subject = read_payload(packet_dir / "current_best_vs_rival_subject_manifest.json")
+    assert subject["direct_rival_text_available"] is False
+    assert "synthesis/rival summaries" in subject["diagnosis_basis"]
+    assert "evidence-map based" in subject["limitation"]
+    assert subject["strongest_rival_still_blocks"] is True
+
+    hypotheses = read_payload(packet_dir / "rival_advantage_hypothesis_map.json")
+    assert set(hypotheses["hypothesis_ids"]) == set(
+        STRONGEST_RIVAL_REQUIRED_HYPOTHESIS_IDS
+    )
+    for hypothesis in hypotheses["hypotheses"]:
+        assert hypothesis["generation_allowed"] is False
+        assert hypothesis["supporting_evidence"]
+        assert hypothesis["contrary_or_uncertain_evidence"]
+        assert hypothesis["forbidden_response"]
+    assert hypotheses["exhausted_local_targets_recommended_as_next_targets"] == []
+
+    constraints = read_payload(packet_dir / "non_imitation_constraint_report.json")
+    assert "do not imitate rival diction" in constraints["constraints"]
+    assert "do not transplant rival scenes" in constraints["constraints"]
+    assert "do not copy rival structure" in constraints["constraints"]
+    assert "diagnose causal advantage only" in constraints["constraints"]
+    assert constraints["generation_allowed"] is False
+
+    questions = read_payload(packet_dir / "forensic_question_set.json")
+    assert questions["diagnosis_kind"] == STRONGEST_RIVAL_DIAGNOSIS_KIND
+    assert "write a revised candidate" in questions["forbidden_question_uses"]
+
+    readiness = read_payload(packet_dir / "next_strategy_readiness_report.json")
+    assert readiness["ready_for_generation"] is False
+    assert readiness["ready_for_residual_target_selection"] is False
+    assert readiness["ready_for_work_order"] is False
+    assert "local residual retry" in readiness["forbidden_next_actions"]
+    assert "immediate generation" in readiness["forbidden_next_actions"]
+    assert "finalization" in readiness["forbidden_next_actions"]
+
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["passed"] is True
+    assert all(not check["blocking_defects"] for check in health["checks"])
+    assert health["source_chain_current_and_coherent"] is True
+    assert health["current_best_candidate_packet_id"] == "packet_0063"
+    assert health["proof_packet_id"] == "packet_0034"
+    assert health["reader_state_packet_id"] == "packet_0013"
+    assert set(health["failed_local_residual_targets"]) == set(
+        FAILED_LOCAL_RESIDUAL_TARGET_IDS
+    )
+    assert health["local_residual_retry_recommended"] is False
+    assert health["new_target_adapter_introduced"] is False
+    assert health["new_generation_path_introduced"] is False
+    assert health["work_order_path_introduced"] is False
+    assert health["stale_packet_consumed"] is False
+    assert health["broad_refactor_performed"] is False
+    assert health["diagnostic_only"] is True
+
+    gate = read_payload(packet_dir / "strongest_rival_forensic_gate_report.json")
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate["passed"] is False
+    assert gate_results["canonical_strategy_class_valid"]["passed"] is True
+    assert gate_results["project_health_scope_guard_passed"]["passed"] is True
+    assert gate_results["no_candidate_generated"]["passed"] is True
+    assert gate_results["no_model_calls"]["passed"] is True
+    assert gate_results["no_residual_target_selected"]["passed"] is True
+    assert gate_results["no_work_order_created"]["passed"] is True
+    assert gate["generation_authorized"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    assert not (config.run_dir(run_id) / "residual_target_selection").exists()
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_strongest_rival_forensic_diagnosis_refusal_invariants(tmp_path):
+    config, post_local_packet, run_id = (
+        build_strongest_rival_forensic_diagnosis_source_chain(tmp_path)
+    )
+
+    missing_review = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="fake",
+        post_local_strategy_packet=post_local_packet,
+        operator_reviewed=False,
+        allow_live_model=False,
+    )
+    assert missing_review.exit_code == 1
+    assert "--operator-reviewed" in missing_review.payload["message"]
+    assert missing_review.payload["model_calls"] == 0
+
+    openai_refusal = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="openai",
+        post_local_strategy_packet=post_local_packet,
+        operator_reviewed=True,
+        allow_live_model=False,
+    )
+    assert openai_refusal.exit_code == 1
+    assert "--allow-live-model" in openai_refusal.payload["message"]
+    assert openai_refusal.payload["model_calls"] == 0
+    assert openai_refusal.payload["candidate_generated"] is False
+    assert openai_refusal.payload["generation_authorized"] is False
+
+    wrong_strategy = tmp_path / "wrong_rival_strategy_class"
+    shutil.copytree(post_local_packet, wrong_strategy)
+
+    def _wrong_strategy(payload):
+        payload["recommended_strategy_class"] = "local_law_discovery_strengthening"
+
+    rewrite_payload(
+        wrong_strategy / "post_local_residual_strategy_synthesis_packet.json",
+        _wrong_strategy,
+    )
+    refused_wrong_strategy = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="fake",
+        post_local_strategy_packet=wrong_strategy,
+        operator_reviewed=True,
+        allow_live_model=False,
+    )
+    assert refused_wrong_strategy.exit_code == 1
+    assert "does not canonically recommend" in refused_wrong_strategy.payload["message"]
+
+    for target_id, name in (
+        (CHECKPOINT_HOSTILE_TARGET_ID, "missing_hostile_memory"),
+        (CHECKPOINT_ENDING_TARGET_ID, "missing_ending_memory"),
+        (PROOF_NO_ANSWER_RESIDUE_TARGET_ID, "missing_proof_memory"),
+    ):
+        missing_target = tmp_path / name
+        shutil.copytree(post_local_packet, missing_target)
+
+        def _remove_target(payload, *, target_id=target_id):
+            payload["failed_local_residual_targets"] = [
+                item
+                for item in payload.get("failed_local_residual_targets", [])
+                if item != target_id
+            ]
+
+        rewrite_payload(
+            missing_target / "post_local_residual_strategy_synthesis_packet.json",
+            _remove_target,
+        )
+        refused_missing_target = run_strongest_rival_forensic_diagnosis(
+            config,
+            client_name="fake",
+            post_local_strategy_packet=missing_target,
+            operator_reviewed=True,
+            allow_live_model=False,
+        )
+        assert refused_missing_target.exit_code == 1
+        assert "failed local residual target memory is incomplete" in (
+            refused_missing_target.payload["message"]
+        ) or "failed local residual target missing" in (
+            refused_missing_target.payload["message"]
+        )
+
+    local_retry = tmp_path / "local_retry_recommended"
+    shutil.copytree(post_local_packet, local_retry)
+
+    def _local_retry(payload):
+        payload["local_residual_retry_recommended"] = True
+
+    rewrite_payload(
+        local_retry / "post_local_residual_strategy_synthesis_packet.json",
+        _local_retry,
+    )
+    refused_local_retry = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="fake",
+        post_local_strategy_packet=local_retry,
+        operator_reviewed=True,
+        allow_live_model=False,
+    )
+    assert refused_local_retry.exit_code == 1
+    assert "local residual retry is recommended" in refused_local_retry.payload[
+        "message"
+    ]
+
+    generation = tmp_path / "forensic_generation_authorized"
+    shutil.copytree(post_local_packet, generation)
+
+    def _authorize_generation(payload):
+        payload["generation_authorized"] = True
+
+    rewrite_payload(
+        generation / "post_local_residual_strategy_synthesis_packet.json",
+        _authorize_generation,
+    )
+    refused_generation = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="fake",
+        post_local_strategy_packet=generation,
+        operator_reviewed=True,
+        allow_live_model=False,
+    )
+    assert refused_generation.exit_code == 1
+    assert "authorizes generation" in refused_generation.payload["message"]
+
+    candidate = tmp_path / "forensic_candidate_generated"
+    shutil.copytree(post_local_packet, candidate)
+
+    def _candidate_generated(payload):
+        payload["candidate_generated"] = True
+
+    rewrite_payload(
+        candidate / "post_local_residual_strategy_synthesis_packet.json",
+        _candidate_generated,
+    )
+    refused_candidate = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="fake",
+        post_local_strategy_packet=candidate,
+        operator_reviewed=True,
+        allow_live_model=False,
+    )
+    assert refused_candidate.exit_code == 1
+    assert "generated a candidate" in refused_candidate.payload["message"]
+
+    work_order = tmp_path / "forensic_work_order_created"
+    shutil.copytree(post_local_packet, work_order)
+
+    def _work_order_created(payload):
+        payload["work_order_created"] = True
+
+    rewrite_payload(
+        work_order / "post_local_residual_strategy_synthesis_packet.json",
+        _work_order_created,
+    )
+    refused_work_order = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="fake",
+        post_local_strategy_packet=work_order,
+        operator_reviewed=True,
+        allow_live_model=False,
     )
     assert refused_work_order.exit_code == 1
     assert "created a work order" in refused_work_order.payload["message"]

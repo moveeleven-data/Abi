@@ -48,6 +48,10 @@ from abi.modules.checkpoint_strategy_direction_review import (
 from abi.modules.post_local_residual_strategy_synthesis import (
     run_post_local_residual_strategy_synthesis,
 )
+from abi.modules.strongest_rival_forensic_diagnosis import (
+    STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_CLIENTS,
+    run_strongest_rival_forensic_diagnosis,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -545,6 +549,32 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm the operator reviewed the post-local strategy direction.",
     )
+    autonomous_strongest_rival_diagnosis_parser = autonomous_subparsers.add_parser(
+        "diagnose-strongest-rival",
+        help="Diagnose why the strongest rival still blocks without generation",
+    )
+    autonomous_strongest_rival_diagnosis_parser.add_argument(
+        "--client",
+        choices=STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_CLIENTS,
+        required=True,
+        help="Forensic diagnosis client path to use.",
+    )
+    autonomous_strongest_rival_diagnosis_parser.add_argument(
+        "--post-local-strategy-packet",
+        type=Path,
+        required=True,
+        help="Post-local residual strategy synthesis packet directory to consume.",
+    )
+    autonomous_strongest_rival_diagnosis_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the post-local strategy packet.",
+    )
+    autonomous_strongest_rival_diagnosis_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -920,6 +950,17 @@ def main(argv: list[str] | None = None) -> int:
             config,
             direction_review_packet=args.direction_review_packet,
             operator_reviewed=args.operator_reviewed,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "diagnose-strongest-rival"
+    ):
+        return _cmd_autonomous_diagnose_strongest_rival(
+            config,
+            client_name=args.client,
+            post_local_strategy_packet=args.post_local_strategy_packet,
+            operator_reviewed=args.operator_reviewed,
+            allow_live_model=args.allow_live_model,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1384,6 +1425,25 @@ def _cmd_autonomous_synthesize_post_local_residual_strategy(
         config,
         direction_review_packet=direction_review_packet,
         operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_diagnose_strongest_rival(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    post_local_strategy_packet: Path,
+    operator_reviewed: bool,
+    allow_live_model: bool,
+) -> int:
+    result = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name=client_name,
+        post_local_strategy_packet=post_local_strategy_packet,
+        operator_reviewed=operator_reviewed,
+        allow_live_model=allow_live_model,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
