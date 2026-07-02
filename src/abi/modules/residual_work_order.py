@@ -898,6 +898,15 @@ def _generation_handoff_metadata_failures(
             failures.append("proof/no-answer generation schema name missing from contract")
         if contract.get("generation_schema_version") != "1":
             failures.append("proof/no-answer generation schema version missing from contract")
+        failures.extend(
+            _proof_no_answer_evidence_handoff_metadata_failures(
+                packet=packet,
+                contract=contract,
+                plan=plan,
+                required_controls=required_controls,
+                required_focus=required_focus,
+            )
+        )
     focus = set(str(value) for value in contract.get("target_specific_reader_state_focus", []))
     focus.update(str(value) for value in plan.get("future_reader_state_eval_focus", []))
     missing_focus = sorted(required_focus - focus)
@@ -905,6 +914,105 @@ def _generation_handoff_metadata_failures(
         failures.append(
             f"{target_label} reader-state focus missing: " + ", ".join(missing_focus)
         )
+    return failures
+
+
+def _proof_no_answer_evidence_handoff_metadata_failures(
+    *,
+    packet: dict[str, Any],
+    contract: dict[str, Any],
+    plan: dict[str, Any],
+    required_controls: set[str],
+    required_focus: set[str],
+) -> list[str]:
+    failures: list[str] = []
+    failures.extend(
+        _required_metadata_field_failures(
+            packet,
+            fields=("ablation_controls", "target_specific_ablation_controls"),
+            required_values=required_controls,
+            label="residual_work_order_packet proof/no-answer ablation controls",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            packet,
+            fields=(
+                "reader_state_focus",
+                "reader_state_evaluation_focus",
+                "target_specific_reader_state_focus",
+            ),
+            required_values=required_focus,
+            label="residual_work_order_packet proof/no-answer reader-state focus",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            contract,
+            fields=("ablation_controls", "target_specific_ablation_controls"),
+            required_values=required_controls,
+            label="future_generation_contract proof/no-answer ablation controls",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            contract,
+            fields=(
+                "reader_state_focus",
+                "reader_state_evaluation_focus",
+                "target_specific_reader_state_focus",
+            ),
+            required_values=required_focus,
+            label="future_generation_contract proof/no-answer reader-state focus",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            plan,
+            fields=(
+                "ablation_controls",
+                "target_specific_ablation_controls",
+                "future_ablation_controls",
+            ),
+            required_values=required_controls,
+            label="ablation_and_reader_eval_plan proof/no-answer ablation controls",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            plan,
+            fields=(
+                "reader_state_focus",
+                "reader_state_evaluation_focus",
+                "target_specific_reader_state_focus",
+                "future_reader_state_eval_focus",
+            ),
+            required_values=required_focus,
+            label="ablation_and_reader_eval_plan proof/no-answer reader-state focus",
+        )
+    )
+    return failures
+
+
+def _required_metadata_field_failures(
+    payload: dict[str, Any],
+    *,
+    fields: tuple[str, ...],
+    required_values: set[str],
+    label: str,
+) -> list[str]:
+    failures: list[str] = []
+    for field in fields:
+        values = {
+            str(value)
+            for value in payload.get(field, [])
+            if isinstance(value, str) and value
+        }
+        missing = sorted(required_values - values)
+        if missing:
+            failures.append(
+                f"{label} field {field} missing: " + ", ".join(missing)
+            )
     return failures
 
 
@@ -3489,20 +3597,23 @@ def _build_future_generation_contract(
 
 
 def _build_ablation_and_reader_eval_plan(subject: ResidualWorkOrderSubject) -> dict[str, object]:
+    ablation_controls = list(subject.target_spec.target_specific_ablation_controls)
+    reader_state_focus = list(subject.target_spec.target_specific_reader_state_focus)
     return {
         "if_future_candidate_is_generated": [
             f"execute ablation against {subject.candidate.packet_id}",
-            *subject.target_spec.target_specific_ablation_controls,
+            *ablation_controls,
             "run strongest-rival comparison",
             "run reader-state evaluation focused on selected residual target",
             "verify preservation of partial reread transformation",
         ],
-        "future_ablation_controls": list(
-            subject.target_spec.target_specific_ablation_controls
-        ),
-        "future_reader_state_eval_focus": list(
-            subject.target_spec.target_specific_reader_state_focus
-        ),
+        "ablation_controls": list(ablation_controls),
+        "target_specific_ablation_controls": list(ablation_controls),
+        "future_ablation_controls": list(ablation_controls),
+        "reader_state_focus": list(reader_state_focus),
+        "reader_state_evaluation_focus": list(reader_state_focus),
+        "target_specific_reader_state_focus": list(reader_state_focus),
+        "future_reader_state_eval_focus": list(reader_state_focus),
         "selected_residual_target_id": subject.selected_target_id,
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
@@ -3824,6 +3935,7 @@ def _result_payload(
         "target_adapter_id": packet.get("target_adapter_id"),
         "target_adapter_version": packet.get("target_adapter_version"),
         "work_order_contract_version": packet.get("work_order_contract_version"),
+        **target_adapter_metadata(subject.selected_target_id),
         "superseded_work_order_packet_id": packet.get("superseded_work_order_packet_id"),
         "supersession_reason": packet.get("supersession_reason"),
         "semantic_preflight_failures": packet.get("semantic_preflight_failures", []),

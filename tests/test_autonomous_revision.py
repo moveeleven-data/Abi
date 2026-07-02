@@ -17542,6 +17542,51 @@ def build_proof_no_answer_residual_work_order_chain(tmp_path: Path) -> dict[str,
     }
 
 
+def assert_proof_no_answer_evidence_handoff_metadata(payload: dict[str, object]) -> None:
+    expected_controls = {
+        "full_proof_no_answer_residue_intervention",
+        "revert_proof_no_answer_residue_to_current_best",
+        "isolate_object_carry_without_outside_answer",
+        "abstract_proof_language_control",
+        "outside_answer_intrusion_control",
+        "strongest_rival_comparison",
+    }
+    expected_focus = {
+        "proof/no-answer pressure embodied",
+        "outside-answer absence preserved",
+        "object field carries proof",
+        "thesis visibility reduced",
+        "first-read clarity without explanation",
+        "reread carry preserved",
+        "strongest-rival pressure",
+    }
+    for field in ("ablation_controls", "target_specific_ablation_controls"):
+        values = set(payload.get(field) or [])
+        assert expected_controls <= values, field
+    for field in (
+        "reader_state_focus",
+        "reader_state_evaluation_focus",
+        "target_specific_reader_state_focus",
+    ):
+        values = set(payload.get(field) or [])
+        assert expected_focus <= values, field
+
+
+def remove_proof_no_answer_evidence_handoff_aliases(packet_dir: Path) -> None:
+    def _remove_aliases(payload):
+        payload.pop("target_specific_ablation_controls", None)
+        payload.pop("target_specific_reader_state_focus", None)
+        payload.pop("reader_state_focus", None)
+        if payload.get("worker") == "ablation_and_reader_eval_plan_v1_controller":
+            payload.pop("ablation_controls", None)
+            payload.pop("reader_state_evaluation_focus", None)
+
+    for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES:
+        path = packet_dir / f"{artifact_type}.json"
+        if path.exists():
+            rewrite_payload(path, _remove_aliases)
+
+
 def test_checkpoint_strategy_direction_review_accepts_proof_no_answer_direction(
     tmp_path,
 ):
@@ -17976,6 +18021,7 @@ def test_proof_no_answer_work_order_uses_proof_region_and_aliases(tmp_path):
     assert result.payload["future_generation_authorized"] is False
     assert result.payload["model_calls"] == 0
     assert result.payload["counts"]["model_calls"] == 0
+    assert_proof_no_answer_evidence_handoff_metadata(result.payload)
     assert result.payload["next_recommended_action"] == (
         "review_proof_no_answer_residue_work_order_before_generation_authorization"
     )
@@ -18064,6 +18110,21 @@ def test_proof_no_answer_work_order_uses_proof_region_and_aliases(tmp_path):
         "target_specific_reader_state_focus"
     ]
     assert contract["target_unit_overlap_cluster_report"]["overlap_cluster_count"] >= 1
+    assert_proof_no_answer_evidence_handoff_metadata(contract)
+
+    plan = read_payload(packet_dir / "ablation_and_reader_eval_plan.json")
+    assert "outside_answer_intrusion_control" in plan["future_ablation_controls"]
+    assert "outside_answer_intrusion_control" in plan["ablation_controls"]
+    assert "outside_answer_intrusion_control" in plan[
+        "target_specific_ablation_controls"
+    ]
+    assert "proof/no-answer pressure embodied" in plan[
+        "future_reader_state_eval_focus"
+    ]
+    assert_proof_no_answer_evidence_handoff_metadata(plan)
+
+    packet = read_payload(packet_dir / "residual_work_order_packet.json")
+    assert_proof_no_answer_evidence_handoff_metadata(packet)
 
     preflight_payloads = {
         artifact_type: read_payload(packet_dir / f"{artifact_type}.json")
@@ -18087,6 +18148,51 @@ def test_proof_no_answer_work_order_uses_proof_region_and_aliases(tmp_path):
         )
     assert len(after_calls) == len(before_calls)
     assert finalization.refused is True
+
+
+def test_proof_no_answer_replanning_supersedes_missing_evidence_handoff(
+    tmp_path,
+):
+    chain = build_proof_no_answer_residual_work_order_chain(tmp_path)
+    stale_packet_dir = Path(str(chain["residual_work_order"]["packet_dir"]))
+    remove_proof_no_answer_evidence_handoff_aliases(stale_packet_dir)
+
+    result = run_residual_work_order_planning(
+        chain["config"],
+        selection_packet=Path(str(chain["selection"]["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == (
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    )
+    assert result.payload["selected_region_id"] == PROOF_NO_ANSWER_REGION_ID
+    assert result.payload["superseded_work_order_packet_id"] == chain[
+        "residual_work_order"
+    ]["packet_id"]
+    assert result.payload["supersession_reason"] == (
+        "proof_no_answer_generation_handoff_metadata_missing"
+    )
+    assert any(
+        "proof/no-answer reader-state focus" in failure
+        for failure in result.payload["semantic_preflight_failures"]
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["future_generation_authorized"] is False
+    assert result.payload["model_calls"] == 0
+
+    successor_dir = Path(str(result.payload["packet_dir"]))
+    assert successor_dir != stale_packet_dir
+    assert_proof_no_answer_evidence_handoff_metadata(
+        read_payload(successor_dir / "residual_work_order_packet.json")
+    )
+    assert_proof_no_answer_evidence_handoff_metadata(
+        read_payload(successor_dir / "future_generation_contract.json")
+    )
+    assert_proof_no_answer_evidence_handoff_metadata(
+        read_payload(successor_dir / "ablation_and_reader_eval_plan.json")
+    )
 
 
 def test_proof_no_answer_generation_authorization_accepts_corrected_handoff(
@@ -18120,11 +18226,15 @@ def test_proof_no_answer_generation_authorization_accepts_corrected_handoff(
     assert result.payload["authorization_consumed"] is False
     assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0
+    assert_proof_no_answer_evidence_handoff_metadata(result.payload)
 
     packet_dir = Path(str(result.payload["packet_dir"]))
+    packet = read_payload(packet_dir / "residual_generation_authorization_packet.json")
+    assert_proof_no_answer_evidence_handoff_metadata(packet)
     policy = read_payload(packet_dir / "target_unit_integration_policy.json")
     assert policy["target_unit_overlap_cluster_report"]["overlap_cluster_count"] >= 1
     assert policy["materiality_policy"]["policy_id"] == PROOF_NO_ANSWER_MATERIALITY_POLICY_ID
+    assert_proof_no_answer_evidence_handoff_metadata(policy)
     contract = read_payload(packet_dir / "residual_generation_contract.json")
     assert contract["prompt_contract_id"] == (
         "autonomous.residual_intervention_generation.v1.proof_no_answer_residue"
@@ -18133,6 +18243,7 @@ def test_proof_no_answer_generation_authorization_accepts_corrected_handoff(
     assert "outside_answer_intrusion_control" in contract[
         "target_specific_ablation_controls"
     ]
+    assert_proof_no_answer_evidence_handoff_metadata(contract)
 
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
@@ -18176,6 +18287,32 @@ def test_proof_no_answer_authorization_refuses_planning_only_placeholder(
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
     assert "placeholder generation metadata" in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_proof_no_answer_authorization_refuses_missing_evidence_handoff(
+    tmp_path,
+):
+    chain = build_proof_no_answer_residual_work_order_chain(tmp_path)
+    invalid_packet = tmp_path / "proof_no_answer_missing_evidence_handoff"
+    shutil.copytree(Path(str(chain["residual_work_order"]["packet_dir"])), invalid_packet)
+    remove_proof_no_answer_evidence_handoff_aliases(invalid_packet)
+
+    result = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=invalid_packet,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "proof/no-answer generation handoff metadata is incomplete" in result.payload[
+        "message"
+    ]
+    assert "proof/no-answer reader-state focus" in result.payload["message"]
     assert result.payload["generation_authorized"] is False
     assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0

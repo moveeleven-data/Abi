@@ -779,12 +779,120 @@ def _validate_proof_no_answer_generation_handoff(
         failures.append(
             "proof/no-answer reader-state focus missing: " + ", ".join(missing_focus)
         )
+    failures.extend(
+        _proof_no_answer_evidence_handoff_metadata_failures(
+            packet=packet,
+            contract=contract,
+            plan=plan,
+            required_controls=required_controls,
+            required_focus=required_focus,
+        )
+    )
     if failures:
         raise ValueError(
             "Residual generation authorization refused; proof/no-answer generation "
             "handoff metadata is incomplete: "
             + "; ".join(failures)
         )
+
+
+def _proof_no_answer_evidence_handoff_metadata_failures(
+    *,
+    packet: dict[str, Any],
+    contract: dict[str, Any],
+    plan: dict[str, Any],
+    required_controls: set[str],
+    required_focus: set[str],
+) -> list[str]:
+    failures: list[str] = []
+    failures.extend(
+        _required_metadata_field_failures(
+            packet,
+            fields=("ablation_controls", "target_specific_ablation_controls"),
+            required_values=required_controls,
+            label="residual_work_order_packet proof/no-answer ablation controls",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            packet,
+            fields=(
+                "reader_state_focus",
+                "reader_state_evaluation_focus",
+                "target_specific_reader_state_focus",
+            ),
+            required_values=required_focus,
+            label="residual_work_order_packet proof/no-answer reader-state focus",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            contract,
+            fields=("ablation_controls", "target_specific_ablation_controls"),
+            required_values=required_controls,
+            label="future_generation_contract proof/no-answer ablation controls",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            contract,
+            fields=(
+                "reader_state_focus",
+                "reader_state_evaluation_focus",
+                "target_specific_reader_state_focus",
+            ),
+            required_values=required_focus,
+            label="future_generation_contract proof/no-answer reader-state focus",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            plan,
+            fields=(
+                "ablation_controls",
+                "target_specific_ablation_controls",
+                "future_ablation_controls",
+            ),
+            required_values=required_controls,
+            label="ablation_and_reader_eval_plan proof/no-answer ablation controls",
+        )
+    )
+    failures.extend(
+        _required_metadata_field_failures(
+            plan,
+            fields=(
+                "reader_state_focus",
+                "reader_state_evaluation_focus",
+                "target_specific_reader_state_focus",
+                "future_reader_state_eval_focus",
+            ),
+            required_values=required_focus,
+            label="ablation_and_reader_eval_plan proof/no-answer reader-state focus",
+        )
+    )
+    return failures
+
+
+def _required_metadata_field_failures(
+    payload: dict[str, Any],
+    *,
+    fields: tuple[str, ...],
+    required_values: set[str],
+    label: str,
+) -> list[str]:
+    failures: list[str] = []
+    for field in fields:
+        values = {
+            str(value)
+            for value in payload.get(field, [])
+            if isinstance(value, str) and value
+        }
+        missing = sorted(required_values - values)
+        if missing:
+            failures.append(
+                f"{label} field {field} missing: " + ", ".join(missing)
+            )
+    return failures
 
 
 def _build_subject_manifest(

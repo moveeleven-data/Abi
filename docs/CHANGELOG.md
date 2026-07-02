@@ -10,12 +10,13 @@ preserved across the build.
 
 Current documented endpoint in Git history:
 
-- `2c9253b Adjudicate failed hostile scaffold generation path`
-- plus the current `fix/next-target-strategy-failed-hostile-awareness`
-  branch update that makes next-target strategy consume failed-hostile
-  adjudication before offering residual targets.
+- `85c7584 Add proof no-answer generation handoff`
+- plus the current `fix/proof-no-answer-evidence-handoff-metadata`
+  branch update that makes proof-no-answer work orders and generation
+  authorizations carry explicit ablation-control and reader-state-focus
+  handoff metadata before live generation.
 - Active branch during latest changelog update:
-  `fix/next-target-strategy-failed-hostile-awareness`
+  `fix/proof-no-answer-evidence-handoff-metadata`
 - The active runtime direction is the autonomous creative-engine path.
 
 ## Standing Invariants
@@ -1628,6 +1629,214 @@ Verification at this endpoint:
   ineligible.
 - `finalize --profile autonomous_creative_candidate` refused.
 
+## Updates Since The Failed-Hostile Strategy Endpoint
+
+This section records the work added after the previous changelog endpoint,
+which ended at failed-hostile awareness in next-target strategy planning.
+
+### README And Presentation Entry Point
+
+Commits:
+
+- `c6d76fb Highlight Abi intro presentation`
+- `49ce921 Make README a visual entry point`
+
+Implemented:
+
+- Added the Abi intro PDF under `docs/abi_intro.pdf`.
+- Simplified the top-level README into a centered, presentation-first entry
+  point.
+- Removed older public-facing operational clutter from the README so the root
+  page functions as a clean visual doorway rather than an internal operator
+  manual.
+
+### Ending-Return Residual Target Support
+
+Commits:
+
+- `e4f57b7 Add ending return residual target planning`
+- `d647b4c Add ending return generation handoff readiness`
+- `1d8e9c2 Tighten ending return reset semantics diagnostics`
+- `3351141 Tighten ending return global relation diagnostics`
+- `da13f80 Adjudicate failed ending return generation path`
+
+Implemented:
+
+- Added `ending_explains_return_risk` as a residual target focused on the
+  final-return/opening-transformation region.
+- Added work-order planning for ending-return risk while keeping generation
+  separately authorized and fail-closed.
+- Added generation handoff readiness with target-specific materiality,
+  semantic validator metadata, ablation controls, reader-state focus, and
+  overlap-cluster reporting.
+- Tightened reset-semantics diagnostics so clearing, erasure, restart, or
+  repeat-without-carry language is rejected when it turns return into reset.
+- Tightened global-relation diagnostics so return must be enacted through
+  object pressure rather than explained as a thesis.
+- Added failed-generation adjudication for ending-return attempts so failed
+  packets remain diagnostic evidence and do not become accepted candidates or
+  consume unrelated authorizations.
+
+Preserved:
+
+- No live model call was required by tests.
+- No candidate was accepted without later ablation/reader-state evidence.
+- No finality, phase-shift, or strongest-rival defeat claim was introduced.
+
+### Architecture/Evidence Risk Checkpoint And Strategy Routing
+
+Commits:
+
+- `27d2965 Add architecture evidence risk checkpoint`
+- `716f71d Make next-target strategy checkpoint-aware`
+- `faf44fc Add checkpoint strategy direction review`
+
+Implemented:
+
+- Added an architecture/evidence-risk checkpoint before further creative
+  strategy.
+- Made next-target strategy checkpoint-aware so stale pre-checkpoint strategy
+  packets cannot continue the loop without the checkpoint.
+- Added checkpoint strategy direction review as an operator-reviewed direction
+  step before selecting sensitive residual targets.
+- Preserved current best `bounded_macro_recomposition/packet_0063`, proof
+  `executed_ablation/packet_0034`, and reader-state
+  `internal_reader_state_evaluation/packet_0013` as the governing evidence
+  references for the new proof/no-answer direction.
+
+### Generic Target Artifact Aliases And Adapter Audit
+
+Commits:
+
+- `c6798a5 Add generic target artifact aliases`
+- `a917399 Add target adapter contract audit`
+
+Implemented:
+
+- Added generic target artifact aliases so consumers can prefer
+  `target_unit_map` and `target_diagnostic` while legacy artifact names remain
+  compatible.
+- Added target-adapter contract audit coverage for residual target adapters,
+  including generation readiness, alias policy status, selected target scope,
+  and current-run usage classification.
+- Preserved legacy packet compatibility while steering new code toward
+  generic target artifacts.
+
+### Proof-No-Answer Residual Target Planning
+
+Commit:
+
+- `afeeb77 Add proof no-answer residue target planning`
+
+Implemented:
+
+- Added `proof_no_answer_residue` as a residual target.
+- Added direction-review-gated selection for proof/no-answer work.
+- Added proof/no-answer work-order planning against the
+  `proof_no_outside_answer_region`.
+- Added five target units:
+  - `no_outside_answer_embodied_in_room`
+  - `sky_silence_without_thesis`
+  - `line_bears_weight_without_abstraction`
+  - `proof_stays_in_object_carry`
+  - `answer_absence_registered_by_objects`
+- Preserved the rule that proof/no-answer work must not retry hostile scaffold,
+  ending-return, object-motion, or tactile paths by inertia.
+- Kept generation out of the planning command.
+
+### Proof-No-Answer Generation Handoff
+
+Commit:
+
+- `85c7584 Add proof no-answer generation handoff`
+
+Implemented:
+
+- Promoted `proof_no_answer_residue` from planning-only metadata to
+  generation-ready handoff metadata.
+- Added:
+  - `generation_contract_version: 1`
+  - `materiality_policy_id:
+    proof_no_answer_residue_generation_materiality_v1`
+  - `semantic_validator_id: proof_no_answer_residue_semantic_validator_v1`
+  - prompt contract
+    `autonomous.residual_intervention_generation.v1.proof_no_answer_residue`
+  - schema `ResidualInterventionGenerationOutput@1`
+- Added proof/no-answer materiality and semantic checks covering:
+  - embodied room/object carry
+  - no outside answer intrusion
+  - sky/silence not becoming thesis or doctrine
+  - proof held in line/object/mark/carry rather than abstraction
+  - answer absence registered through objects/room
+  - object/tactile field preservation
+  - failed-path retry prevention
+  - no rival imitation, finality claim, phase-shift claim, or strongest-rival
+    defeat claim
+- Added overlap-cluster reporting for the shared source sentence used by
+  `proof_stays_in_object_carry` and
+  `answer_absence_registered_by_objects`.
+- Added proof/no-answer authorization support so only corrected,
+  generation-ready work orders can authorize one bounded generation attempt.
+
+Real packet result:
+
+- Re-running proof-no-answer work-order planning from
+  `runs\run_8fa54199f23f3d8e\residual_target_selection\packet_0010`
+  produced `residual_work_order\packet_0015`.
+- `packet_0015` superseded the older placeholder `packet_0014`.
+- Authorization from `packet_0015` produced
+  `residual_generation_authorization\packet_0006`.
+- Guarded OpenAI generation without `--allow-live-model` refused before model
+  calls.
+
+### Proof-No-Answer Evidence Handoff Metadata Fix
+
+Current branch update:
+
+- `fix/proof-no-answer-evidence-handoff-metadata`
+
+Implemented:
+
+- Added missing operator/downstream aliases for proof-no-answer evidence
+  handoff metadata:
+  - `ablation_controls`
+  - `target_specific_ablation_controls`
+  - `reader_state_focus`
+  - `reader_state_evaluation_focus`
+  - `target_specific_reader_state_focus`
+- Hardened proof-no-answer work-order supersession so a work order missing
+  those aliases is considered stale before live generation.
+- Hardened proof-no-answer generation authorization so stale work orders with
+  missing evidence handoff metadata refuse instead of authorizing a live
+  attempt.
+- Ensured corrected work orders, authorization packet summaries, target-unit
+  integration policies, and residual generation contracts carry non-null
+  ablation controls and reader-state focus.
+
+Real packet result:
+
+- Re-running proof-no-answer work-order planning from
+  `runs\run_8fa54199f23f3d8e\residual_target_selection\packet_0010`
+  produced `residual_work_order\packet_0016`.
+- `packet_0016` superseded `packet_0015` with
+  `supersession_reason:
+  proof_no_answer_generation_handoff_metadata_missing`.
+- Authorization from `packet_0016` produced
+  `residual_generation_authorization\packet_0007`.
+- `packet_0007` remains unconsumed, generated no candidate, and recorded
+  `counts.model_calls: 0`.
+- Guarded OpenAI generation from `packet_0007` without `--allow-live-model`
+  refused before model calls.
+
+Verification at this endpoint:
+
+- `ruff check .` passed.
+- `pytest` passed with 466 tests.
+- `gate list` succeeded.
+- `finalization status --profile autonomous_creative_candidate` remained
+  ineligible.
+- `finalize --profile autonomous_creative_candidate` refused.
+
 ## Current Runtime Surface
 
 The current repo includes these active areas:
@@ -1663,6 +1872,14 @@ The current repo includes these active areas:
   inevitability gaps
 - hostile scaffold residual-target planning, validation feedback, and failed
   generation adjudication
+- ending-return residual-target planning, generation handoff, validation
+  feedback, and failed generation adjudication
+- architecture/evidence-risk checkpointing and checkpoint-aware strategy
+  routing
+- generic target artifact aliases and target-adapter contract audit
+- checkpoint direction review for sensitive residual target selection
+- proof-no-answer residual-target planning, generation handoff, authorization,
+  and evidence handoff metadata validation
 - target-aware executed ablation controls and comparator consistency checks
 - model-driver demos and model-call inspection
 - guarded live paths behind explicit opt-in

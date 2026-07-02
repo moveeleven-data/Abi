@@ -1723,7 +1723,12 @@ def target_adapter_metadata(target_id: str) -> dict[str, object]:
         "canonical_work_order_action": adapter.canonical_work_order_action,
         "review_action": adapter.review_action,
         "ablation_controls": list(adapter.ablation_controls),
+        "target_specific_ablation_controls": list(adapter.ablation_controls),
+        "reader_state_focus": list(adapter.reader_state_evaluation_focus),
         "reader_state_evaluation_focus": list(adapter.reader_state_evaluation_focus),
+        "target_specific_reader_state_focus": list(
+            adapter.reader_state_evaluation_focus
+        ),
         "stop_test_policy": dict(adapter.stop_test_policy),
         "materiality_policy_id": adapter.materiality_policy.policy_id,
         "materiality_policy_version": adapter.materiality_policy.policy_version,
