@@ -98,6 +98,13 @@ from abi.modules.checkpoint_strategy_direction_review import (
     PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
     run_checkpoint_strategy_direction_review,
 )
+from abi.modules.post_local_residual_strategy_synthesis import (
+    FAILED_LOCAL_RESIDUAL_TARGET_IDS,
+    POST_LOCAL_RESIDUAL_STRATEGY_SYNTHESIS_ARTIFACT_TYPES,
+    POST_LOCAL_RESIDUAL_STRATEGY_SYNTHESIS_DIRECTION_ID,
+    RECOMMENDED_STRATEGY_CLASS as POST_LOCAL_RECOMMENDED_STRATEGY_CLASS,
+    run_post_local_residual_strategy_synthesis,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -17729,6 +17736,35 @@ def build_checkpoint_strategy_direction_ready_chain(
     return config, Path(str(strategy.payload["packet_dir"])), run_id
 
 
+def build_post_local_strategy_direction_review_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str]:
+    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(
+        tmp_path,
+        include_failed_proof_no_answer=True,
+    )
+    checkpoint = run_architecture_evidence_risk_checkpoint(
+        config,
+        authorization_packet=authorization_packet,
+        operator_reviewed=True,
+    )
+    assert checkpoint.exit_code == 0
+    strategy = run_next_target_strategy(
+        config,
+        authorization_packet=authorization_packet,
+        architecture_risk_checkpoint=Path(str(checkpoint.payload["packet_dir"])),
+    )
+    assert strategy.exit_code == 0
+    direction = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=Path(str(strategy.payload["packet_dir"])),
+        direction=POST_LOCAL_RESIDUAL_STRATEGY_SYNTHESIS_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+    assert direction.exit_code == 0
+    return config, Path(str(direction.payload["packet_dir"])), run_id
+
+
 def write_checkpoint_fixture_current_best_candidate(config: AbiConfig, run_id: str) -> Path:
     candidate_dir = config.run_dir(run_id) / "bounded_macro_recomposition" / "packet_0063"
     candidate_text = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
@@ -18278,6 +18314,302 @@ def test_checkpoint_strategy_direction_review_refusal_invariants(tmp_path):
     )
     assert rival.exit_code == 1
     assert "narrower mechanism" in rival.payload["message"]
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+
+
+def test_post_local_residual_strategy_synthesis_accepts_direction_review(tmp_path):
+    config, direction_packet, run_id = build_post_local_strategy_direction_review_chain(
+        tmp_path
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=direction_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_direction_review_packet_id"] == direction_packet.name
+    assert result.payload["source_strategy_packet_id"]
+    assert result.payload["source_architecture_checkpoint_packet_id"]
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert set(result.payload["failed_local_residual_targets"]) == {
+        CHECKPOINT_HOSTILE_TARGET_ID,
+        CHECKPOINT_ENDING_TARGET_ID,
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    }
+    assert result.payload["integrated_current_best_path_targets"] == [
+        OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        TACTILE_INEVITABILITY_TARGET_ID,
+    ]
+    assert result.payload["local_residual_retry_recommended"] is False
+    assert result.payload["recommended_strategy_class"] == (
+        POST_LOCAL_RECOMMENDED_STRATEGY_CLASS
+    )
+    assert result.payload["recommended_next_action"] == (
+        "review_post_local_strategy_synthesis_before_strongest_rival_forensic_diagnosis"
+    )
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert set(result.payload["artifact_paths"]) == set(
+        POST_LOCAL_RESIDUAL_STRATEGY_SYNTHESIS_ARTIFACT_TYPES
+    )
+    for artifact_type in POST_LOCAL_RESIDUAL_STRATEGY_SYNTHESIS_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    intake = read_payload(packet_dir / "source_direction_review_intake_summary.json")
+    assert intake["selected_checkpoint_direction_id"] == (
+        POST_LOCAL_RESIDUAL_STRATEGY_SYNTHESIS_DIRECTION_ID
+    )
+    assert intake["legacy_direction_rationale_artifact_name_seen"] == (
+        "proof_no_answer_residue_rationale"
+    )
+    assert (
+        intake["legacy_direction_rationale_artifact_ignored_for_direction_resolution"]
+        is True
+    )
+
+    failed_summary = read_payload(
+        packet_dir / "failed_local_residual_path_summary.json"
+    )
+    assert set(failed_summary["failed_local_residual_targets"]) == {
+        CHECKPOINT_HOSTILE_TARGET_ID,
+        CHECKPOINT_ENDING_TARGET_ID,
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    }
+    assert failed_summary["local_residual_retry_recommended"] is False
+    summaries = " ".join(path["summary"] for path in failed_summary["failed_paths"])
+    assert "materiality and semantic attempts" in summaries
+    assert "reset, global-relation" in summaries
+    assert "object-carry and answer-absence" in summaries
+
+    evidence = read_payload(packet_dir / "current_best_evidence_state.json")
+    assert evidence["current_best_candidate_packet_id"] == "packet_0063"
+    assert evidence["proof_packet_id"] == "packet_0034"
+    assert evidence["reader_state_packet_id"] == "packet_0013"
+    assert evidence["strongest_rival_still_blocks"] is True
+    assert evidence["reader_state_transformation_status"] == "partial"
+
+    exhaustion = read_payload(packet_dir / "local_residual_exhaustion_report.json")
+    assert exhaustion[
+        "local_residual_patching_exhausted_or_currently_nonproductive"
+    ] is True
+    assert exhaustion["local_residual_retry_recommended"] is False
+    assert "strongest rival still blocks" in exhaustion["reasons"]
+    assert "reader-state transformation is partial" in exhaustion["reasons"]
+
+    options = read_payload(packet_dir / "higher_order_strategy_option_map.json")
+    option_classes = {option["strategy_class"] for option in options["strategy_options"]}
+    assert "strongest_rival_forensic_diagnosis" in option_classes
+    assert options["recommended_strategy_class"] == POST_LOCAL_RECOMMENDED_STRATEGY_CLASS
+    assert options["exhausted_local_targets_recommended_as_next_targets"] == []
+    assert not (
+        set(FAILED_LOCAL_RESIDUAL_TARGET_IDS)
+        & set(options["recommended_next_targets"])
+    )
+
+    recommendation = read_payload(packet_dir / "recommended_next_strategy_class.json")
+    assert recommendation["recommended_strategy_class"] == (
+        POST_LOCAL_RECOMMENDED_STRATEGY_CLASS
+    )
+    assert recommendation["generation_authorized"] is False
+
+    forbidden = read_payload(packet_dir / "forbidden_next_moves.json")
+    assert "generate candidate" in forbidden["forbidden_next_moves"]
+    assert "select residual target" in forbidden["forbidden_next_moves"]
+    assert "create work order" in forbidden["forbidden_next_moves"]
+
+    lock = read_payload(packet_dir / "generation_lock_report.json")
+    assert lock["generation_authorized"] is False
+    assert lock["next_generation_authorized"] is False
+    assert lock["candidate_generated"] is False
+    assert lock["residual_target_selected"] is False
+    assert lock["work_order_created"] is False
+    assert lock["model_calls"] == 0
+    assert lock["local_residual_retry_recommended"] is False
+
+    gate = read_payload(packet_dir / "post_local_strategy_gate_report.json")
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate["passed"] is False
+    assert gate_results["post_local_direction_selected"]["passed"] is True
+    assert gate_results["failed_local_targets_present"]["passed"] is True
+    assert gate_results["no_candidate_generated"]["passed"] is True
+    assert gate_results["no_model_calls"]["passed"] is True
+    assert gate_results["no_residual_target_selected"]["passed"] is True
+    assert gate_results["no_work_order_created"]["passed"] is True
+    assert gate["generation_authorized"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    assert not (config.run_dir(run_id) / "residual_target_selection").exists()
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_post_local_residual_strategy_synthesis_refusal_invariants(tmp_path):
+    config, direction_packet, run_id = build_post_local_strategy_direction_review_chain(
+        tmp_path
+    )
+
+    missing_review = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=direction_packet,
+        operator_reviewed=False,
+    )
+    assert missing_review.exit_code == 1
+    assert "--operator-reviewed" in missing_review.payload["message"]
+    assert missing_review.payload["model_calls"] == 0
+
+    wrong_direction = tmp_path / "wrong_post_local_direction"
+    shutil.copytree(direction_packet, wrong_direction)
+
+    def _wrong_direction(payload):
+        payload["selected_checkpoint_direction_id"] = (
+            "local_busyness_decorative_detail_risk"
+        )
+
+    rewrite_payload(
+        wrong_direction / "checkpoint_strategy_direction_review_packet.json",
+        _wrong_direction,
+    )
+    rewrite_payload(
+        wrong_direction / "selected_checkpoint_direction_contract.json",
+        _wrong_direction,
+    )
+    rewrite_payload(
+        wrong_direction / "source_strategy_intake_summary.json",
+        _wrong_direction,
+    )
+    rewrite_payload(
+        wrong_direction / "generation_lock_report.json",
+        _wrong_direction,
+    )
+    rewrite_payload(
+        wrong_direction / "checkpoint_strategy_direction_gate_report.json",
+        _wrong_direction,
+    )
+
+    def _wrong_contract_direction(payload):
+        payload["direction_id"] = "local_busyness_decorative_detail_risk"
+
+    rewrite_payload(
+        wrong_direction / "selected_checkpoint_direction_contract.json",
+        _wrong_contract_direction,
+    )
+    refused_wrong_direction = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=wrong_direction,
+        operator_reviewed=True,
+    )
+    assert refused_wrong_direction.exit_code == 1
+    assert "did not select post_local_residual_strategy_synthesis" in (
+        refused_wrong_direction.payload["message"]
+    )
+
+    missing_failed_memory = tmp_path / "missing_failed_proof_memory"
+    shutil.copytree(direction_packet, missing_failed_memory)
+
+    def _remove_proof_failed_target(payload):
+        payload["failed_local_residual_generation_targets"] = [
+            CHECKPOINT_HOSTILE_TARGET_ID,
+            CHECKPOINT_ENDING_TARGET_ID,
+        ]
+
+    rewrite_payload(
+        missing_failed_memory / "source_checkpoint_intake_summary.json",
+        _remove_proof_failed_target,
+    )
+    refused_missing_failed_memory = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=missing_failed_memory,
+        operator_reviewed=True,
+    )
+    assert refused_missing_failed_memory.exit_code == 1
+    assert "all three failed local residual targets" in (
+        refused_missing_failed_memory.payload["message"]
+    )
+
+    generation_authorized = tmp_path / "post_local_generation_authorized"
+    shutil.copytree(direction_packet, generation_authorized)
+
+    def _authorize_generation(payload):
+        payload["next_generation_authorized"] = True
+
+    rewrite_payload(
+        generation_authorized / "generation_lock_report.json",
+        _authorize_generation,
+    )
+    refused_generation = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=generation_authorized,
+        operator_reviewed=True,
+    )
+    assert refused_generation.exit_code == 1
+    assert "authorizes generation" in refused_generation.payload["message"]
+
+    selected_target = tmp_path / "post_local_selected_target"
+    shutil.copytree(direction_packet, selected_target)
+
+    def _selected_target(payload):
+        payload["residual_target_selected"] = True
+
+    rewrite_payload(
+        selected_target / "checkpoint_strategy_direction_review_packet.json",
+        _selected_target,
+    )
+    refused_selected_target = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=selected_target,
+        operator_reviewed=True,
+    )
+    assert refused_selected_target.exit_code == 1
+    assert "selected a residual target" in refused_selected_target.payload["message"]
+
+    work_order_created = tmp_path / "post_local_work_order_created"
+    shutil.copytree(direction_packet, work_order_created)
+
+    def _work_order_created(payload):
+        payload["work_order_created"] = True
+
+    rewrite_payload(
+        work_order_created / "checkpoint_strategy_direction_review_packet.json",
+        _work_order_created,
+    )
+    refused_work_order = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=work_order_created,
+        operator_reviewed=True,
+    )
+    assert refused_work_order.exit_code == 1
+    assert "created a work order" in refused_work_order.payload["message"]
 
     with connect(config.db_path) as connection:
         finalization = check_finalization(

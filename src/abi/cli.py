@@ -45,6 +45,9 @@ from abi.modules.architecture_evidence_risk_checkpoint import (
 from abi.modules.checkpoint_strategy_direction_review import (
     run_checkpoint_strategy_direction_review,
 )
+from abi.modules.post_local_residual_strategy_synthesis import (
+    run_post_local_residual_strategy_synthesis,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -524,6 +527,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm the operator reviewed the checkpoint-aware strategy packet.",
     )
+    autonomous_post_local_strategy_parser = autonomous_subparsers.add_parser(
+        "synthesize-post-local-residual-strategy",
+        help=(
+            "Synthesize a higher-order strategy after local residual paths "
+            "are paused"
+        ),
+    )
+    autonomous_post_local_strategy_parser.add_argument(
+        "--direction-review-packet",
+        type=Path,
+        required=True,
+        help="Checkpoint strategy direction review packet directory to consume.",
+    )
+    autonomous_post_local_strategy_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the post-local strategy direction.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -889,6 +910,15 @@ def main(argv: list[str] | None = None) -> int:
             config,
             strategy_packet=args.strategy_packet,
             direction=args.direction,
+            operator_reviewed=args.operator_reviewed,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "synthesize-post-local-residual-strategy"
+    ):
+        return _cmd_autonomous_synthesize_post_local_residual_strategy(
+            config,
+            direction_review_packet=args.direction_review_packet,
             operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
@@ -1338,6 +1368,21 @@ def _cmd_autonomous_review_checkpoint_strategy(
         config,
         strategy_packet=strategy_packet,
         direction=direction,
+        operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_synthesize_post_local_residual_strategy(
+    config: AbiConfig,
+    *,
+    direction_review_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_post_local_residual_strategy_synthesis(
+        config,
+        direction_review_packet=direction_review_packet,
         operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
