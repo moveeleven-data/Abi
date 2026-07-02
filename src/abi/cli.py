@@ -52,6 +52,7 @@ from abi.modules.strongest_rival_forensic_diagnosis import (
     STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_CLIENTS,
     run_strongest_rival_forensic_diagnosis,
 )
+from abi.modules.local_law_discovery import run_local_law_discovery
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -575,6 +576,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Explicitly allow guarded live-model paths.",
     )
+    autonomous_local_law_parser = autonomous_subparsers.add_parser(
+        "discover-local-law",
+        help="Discover a diagnostic local law from strongest-rival forensics",
+    )
+    autonomous_local_law_parser.add_argument(
+        "--diagnosis-packet",
+        type=Path,
+        required=True,
+        help="Strongest-rival forensic diagnosis packet directory to consume.",
+    )
+    autonomous_local_law_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the source diagnosis packet.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -961,6 +977,12 @@ def main(argv: list[str] | None = None) -> int:
             post_local_strategy_packet=args.post_local_strategy_packet,
             operator_reviewed=args.operator_reviewed,
             allow_live_model=args.allow_live_model,
+        )
+    if args.command == "autonomous" and args.autonomous_command == "discover-local-law":
+        return _cmd_autonomous_discover_local_law(
+            config,
+            diagnosis_packet=args.diagnosis_packet,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1444,6 +1466,21 @@ def _cmd_autonomous_diagnose_strongest_rival(
         post_local_strategy_packet=post_local_strategy_packet,
         operator_reviewed=operator_reviewed,
         allow_live_model=allow_live_model,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_discover_local_law(
+    config: AbiConfig,
+    *,
+    diagnosis_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_local_law_discovery(
+        config,
+        diagnosis_packet=diagnosis_packet,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code

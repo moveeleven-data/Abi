@@ -112,6 +112,13 @@ from abi.modules.strongest_rival_forensic_diagnosis import (
     STRONGEST_RIVAL_FORENSIC_DIAGNOSIS_ARTIFACT_TYPES,
     run_strongest_rival_forensic_diagnosis,
 )
+from abi.modules.local_law_discovery import (
+    DISCOVERED_LOCAL_LAW_ID,
+    LOCAL_LAW_DISCOVERY_ARTIFACT_TYPES,
+    LOCAL_LAW_DISCOVERY_KIND,
+    NEXT_RECOMMENDED_STRATEGY_CLASS as LOCAL_LAW_NEXT_STRATEGY_CLASS,
+    run_local_law_discovery,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -17796,6 +17803,23 @@ def build_strongest_rival_forensic_diagnosis_source_chain(
     return config, post_local_packet, run_id
 
 
+def build_local_law_discovery_source_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str]:
+    config, post_local_packet, run_id = (
+        build_strongest_rival_forensic_diagnosis_source_chain(tmp_path)
+    )
+    diagnosis = run_strongest_rival_forensic_diagnosis(
+        config,
+        client_name="fake",
+        post_local_strategy_packet=post_local_packet,
+        operator_reviewed=True,
+        allow_live_model=False,
+    )
+    assert diagnosis.exit_code == 0
+    return config, Path(str(diagnosis.payload["packet_dir"])), run_id
+
+
 def write_checkpoint_fixture_current_best_candidate(config: AbiConfig, run_id: str) -> Path:
     candidate_dir = config.run_dir(run_id) / "bounded_macro_recomposition" / "packet_0063"
     candidate_text = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
@@ -19066,6 +19090,334 @@ def test_strongest_rival_forensic_diagnosis_refusal_invariants(tmp_path):
     )
     assert refused_work_order.exit_code == 1
     assert "created a work order" in refused_work_order.payload["message"]
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+
+
+def test_local_law_discovery_accepts_reviewed_diagnosis_packet(tmp_path):
+    config, diagnosis_packet, run_id = build_local_law_discovery_source_chain(tmp_path)
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_local_law_discovery(
+        config,
+        diagnosis_packet=diagnosis_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["local_law_discovery_kind"] == LOCAL_LAW_DISCOVERY_KIND
+    assert result.payload["source_diagnosis_packet_id"] == diagnosis_packet.name
+    assert result.payload["source_post_local_strategy_packet_id"]
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["diagnosis_basis"] == "evidence_map_based"
+    assert result.payload["model_backed"] is False
+    assert result.payload["direct_rival_text_available"] is False
+    assert result.payload["top_forensic_hypothesis_id"] == (
+        "first_read_pressure_advantage"
+    )
+    assert result.payload["discovered_local_law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert "first-read pressure" in result.payload["law_statement"]
+    assert "before explanation" in result.payload["law_statement"]
+    assert result.payload["recommended_next_strategy_class"] == (
+        LOCAL_LAW_NEXT_STRATEGY_CLASS
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["project_health_scope_guard_passed"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert set(result.payload["artifact_paths"]) == set(
+        LOCAL_LAW_DISCOVERY_ARTIFACT_TYPES
+    )
+    for artifact_type in LOCAL_LAW_DISCOVERY_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    intake = read_payload(packet_dir / "source_diagnosis_intake_summary.json")
+    assert intake["source_diagnosis_packet_id"] == diagnosis_packet.name
+    assert intake["current_best_candidate_packet_id"] == "packet_0063"
+    assert intake["proof_packet_id"] == "packet_0034"
+    assert intake["reader_state_packet_id"] == "packet_0013"
+    assert intake["top_forensic_hypothesis_id"] == "first_read_pressure_advantage"
+    assert intake["ready_for_next_strategy"] is True
+
+    mapping = read_payload(packet_dir / "forensic_hypothesis_to_law_map.json")
+    assert mapping["top_forensic_hypothesis_id"] == "first_read_pressure_advantage"
+    assert mapping["discovered_local_law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert mapping["generation_allowed"] is False
+
+    law = read_payload(packet_dir / "discovered_local_law_statement.json")
+    assert law["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert "first-read pressure" in law["law_statement"]
+    assert "object-event sequence before explanation" in law["law_statement"]
+    assert law["direct_rival_text_available"] is False
+    assert law["generation_allowed"] is False
+    assert "pressure must be event-first, not explanation-first" in law[
+        "required_concepts"
+    ]
+    assert "proof/no-answer residue must not become thesis language" in law[
+        "required_concepts"
+    ]
+
+    gap = read_payload(packet_dir / "current_best_law_gap_report.json")
+    assert gap["current_best_candidate_packet_id"] == "packet_0063"
+    assert "first-read pressure may still arrive too late or too conceptually" in gap[
+        "likely_gaps"
+    ]
+    assert "table/dust/spoon/saucer/ring object field" in gap["current_strengths"]
+    assert gap["packet_0063_preserved"] is True
+    assert gap["rewrite_performed"] is False
+
+    failed_memory = read_payload(
+        packet_dir / "failed_local_residual_memory_summary.json"
+    )
+    assert set(failed_memory["failed_local_residual_targets"]) == set(
+        FAILED_LOCAL_RESIDUAL_TARGET_IDS
+    )
+    assert failed_memory["local_residual_retry_recommended"] is False
+    assert failed_memory["local_patch_diminishing_returns"] is True
+
+    limitations = read_payload(
+        packet_dir / "evidence_basis_and_limitations_report.json"
+    )
+    assert limitations["direct_rival_text_available"] is False
+    assert "local law is evidence-map-based, not direct textual forensic proof" in (
+        limitations["limitations"]
+    )
+    assert limitations["generation_allowed"] is False
+
+    constraints = read_payload(packet_dir / "non_imitation_constraint_report.json")
+    assert constraints["non_imitation_constraints_passed"] is True
+    assert constraints["diagnosis_not_imitation"] is True
+    assert "do not imitate rival diction" in constraints["forbidden_imitation_modes"]
+
+    options = read_payload(packet_dir / "next_strategy_option_map.json")
+    assert options["recommended_next_strategy_class"] == LOCAL_LAW_NEXT_STRATEGY_CLASS
+    assert options["immediate_generation_recommended"] is False
+    assert options["generation_allowed"] is False
+    assert options["target_selection_allowed"] is False
+    assert options["work_order_allowed"] is False
+
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["passed"] is True
+    assert health["project_health_scope_guard_passed"] is True
+    assert all(not check["blocking_defects"] for check in health["checks"])
+    assert health["source_diagnosis_packet_id"] == diagnosis_packet.name
+    assert health["current_best_candidate_packet_id"] == "packet_0063"
+    assert health["proof_packet_id"] == "packet_0034"
+    assert health["reader_state_packet_id"] == "packet_0013"
+    assert health["no_new_generation_path_introduced"] is True
+    assert health["no_new_target_adapter_introduced"] is True
+    assert health["no_work_order_path_introduced"] is True
+    assert health["command_is_diagnostic_only"] is True
+    assert health["broad_refactor_performed"] is False
+
+    gate = read_payload(packet_dir / "local_law_discovery_gate_report.json")
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate["passed"] is False
+    assert gate_results["discovered_local_law_present"]["passed"] is True
+    assert gate_results["no_candidate_generated"]["passed"] is True
+    assert gate_results["no_generation_authorized"]["passed"] is True
+    assert gate_results["no_residual_target_selected"]["passed"] is True
+    assert gate_results["no_work_order_created"]["passed"] is True
+    assert gate_results["no_model_calls"]["passed"] is True
+    assert gate["finalization_eligible"] is False
+
+    assert not (config.run_dir(run_id) / "residual_target_selection").exists()
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_local_law_discovery_cli_surface_contract(tmp_path, capsys):
+    _config, diagnosis_packet, _run_id = build_local_law_discovery_source_chain(
+        tmp_path
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "discover-local-law",
+            "--diagnosis-packet",
+            str(diagnosis_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["local_law_discovery_kind"] == LOCAL_LAW_DISCOVERY_KIND
+    assert payload["source_diagnosis_packet_id"] == diagnosis_packet.name
+    assert payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert payload["proof_packet_id"] == "packet_0034"
+    assert payload["reader_state_packet_id"] == "packet_0013"
+    assert payload["discovered_local_law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert payload["recommended_next_strategy_class"] == LOCAL_LAW_NEXT_STRATEGY_CLASS
+    assert payload["model_calls"] == 0
+    assert payload["candidate_generated"] is False
+    assert payload["generation_authorized"] is False
+    assert payload["residual_target_selected"] is False
+    assert payload["work_order_created"] is False
+    assert payload["finalization_eligible"] is False
+    assert payload["no_final_claim"] is True
+    assert payload["no_phase_shift_claim"] is True
+
+
+def test_local_law_discovery_refusal_invariants(tmp_path):
+    config, diagnosis_packet, run_id = build_local_law_discovery_source_chain(tmp_path)
+
+    missing_review = run_local_law_discovery(
+        config,
+        diagnosis_packet=diagnosis_packet,
+        operator_reviewed=False,
+    )
+    assert missing_review.exit_code == 1
+    assert "--operator-reviewed" in missing_review.payload["message"]
+    assert missing_review.payload["model_calls"] == 0
+
+    wrong_strategy = tmp_path / "wrong_local_law_strategy"
+    shutil.copytree(diagnosis_packet, wrong_strategy)
+
+    def _wrong_strategy(payload):
+        payload["recommended_next_strategy_class"] = "immediate_generation"
+
+    rewrite_payload(
+        wrong_strategy / "strongest_rival_forensic_diagnosis_packet.json",
+        _wrong_strategy,
+    )
+    refused_wrong_strategy = run_local_law_discovery(
+        config,
+        diagnosis_packet=wrong_strategy,
+        operator_reviewed=True,
+    )
+    assert refused_wrong_strategy.exit_code == 1
+    assert "does not recommend" in refused_wrong_strategy.payload["message"]
+
+    not_ready = tmp_path / "not_ready_local_law"
+    shutil.copytree(diagnosis_packet, not_ready)
+
+    def _not_ready(payload):
+        payload["ready_for_next_strategy"] = False
+
+    rewrite_payload(
+        not_ready / "strongest_rival_forensic_diagnosis_packet.json",
+        _not_ready,
+    )
+    refused_not_ready = run_local_law_discovery(
+        config,
+        diagnosis_packet=not_ready,
+        operator_reviewed=True,
+    )
+    assert refused_not_ready.exit_code == 1
+    assert "not ready for next strategy" in refused_not_ready.payload["message"]
+
+    for field_name, bad_value, message in (
+        ("current_best_candidate_packet_id", "packet_9999", "packet_0063"),
+        ("proof_packet_id", "packet_9999", "packet_0034"),
+        ("reader_state_packet_id", "packet_9999", "packet_0013"),
+    ):
+        wrong_packet = tmp_path / f"wrong_{field_name}"
+        shutil.copytree(diagnosis_packet, wrong_packet)
+
+        def _wrong_packet(payload, *, field_name=field_name, bad_value=bad_value):
+            payload[field_name] = bad_value
+
+        rewrite_payload(
+            wrong_packet / "strongest_rival_forensic_diagnosis_packet.json",
+            _wrong_packet,
+        )
+        refused_wrong_packet = run_local_law_discovery(
+            config,
+            diagnosis_packet=wrong_packet,
+            operator_reviewed=True,
+        )
+        assert refused_wrong_packet.exit_code == 1
+        assert message in refused_wrong_packet.payload["message"]
+
+    for field_name, name, message in (
+        ("generation_authorized", "generation_authorized", "authorizes generation"),
+        ("candidate_generated", "candidate_generated", "generated a candidate"),
+        ("work_order_created", "work_order_created", "created a work order"),
+    ):
+        bad_packet = tmp_path / name
+        shutil.copytree(diagnosis_packet, bad_packet)
+
+        def _mark_true(payload, *, field_name=field_name):
+            payload[field_name] = True
+
+        rewrite_payload(
+            bad_packet / "strongest_rival_forensic_diagnosis_packet.json",
+            _mark_true,
+        )
+        refused_bad_packet = run_local_law_discovery(
+            config,
+            diagnosis_packet=bad_packet,
+            operator_reviewed=True,
+        )
+        assert refused_bad_packet.exit_code == 1
+        assert message in refused_bad_packet.payload["message"]
+
+    no_constraints = tmp_path / "non_imitation_failed"
+    shutil.copytree(diagnosis_packet, no_constraints)
+
+    def _constraints_failed(payload):
+        payload["non_imitation_constraints_passed"] = False
+
+    rewrite_payload(
+        no_constraints / "strongest_rival_forensic_diagnosis_packet.json",
+        _constraints_failed,
+    )
+    refused_constraints = run_local_law_discovery(
+        config,
+        diagnosis_packet=no_constraints,
+        operator_reviewed=True,
+    )
+    assert refused_constraints.exit_code == 1
+    assert "non-imitation constraints" in refused_constraints.payload["message"]
+
+    no_health = tmp_path / "project_health_failed"
+    shutil.copytree(diagnosis_packet, no_health)
+
+    def _health_failed(payload):
+        payload["project_health_scope_guard_passed"] = False
+
+    rewrite_payload(
+        no_health / "strongest_rival_forensic_diagnosis_packet.json",
+        _health_failed,
+    )
+    refused_health = run_local_law_discovery(
+        config,
+        diagnosis_packet=no_health,
+        operator_reviewed=True,
+    )
+    assert refused_health.exit_code == 1
+    assert "project-health guard" in refused_health.payload["message"]
 
     with connect(config.db_path) as connection:
         finalization = check_finalization(
