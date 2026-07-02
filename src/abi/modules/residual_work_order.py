@@ -36,6 +36,8 @@ from abi.modules.residual_targets import (
     ENDING_RETURN_REGION_ID,
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    PROOF_NO_ANSWER_REGION_ID,
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
     SELECTED_REGION_ID,
     TACTILE_INEVITABILITY_TARGET_ID,
     ResidualTargetSpec,
@@ -972,7 +974,7 @@ def _build_region_inventory(subject: ResidualWorkOrderSubject) -> dict[str, obje
             ),
         ),
         _region(
-            region_id="proof_no_outside_answer_region",
+            region_id=PROOF_NO_ANSWER_REGION_ID,
             paragraphs=paragraphs,
             start=8,
             end=9,
@@ -982,8 +984,12 @@ def _build_region_inventory(subject: ResidualWorkOrderSubject) -> dict[str, obje
                 "no external answer enters",
             ],
             modification_risk="high: may slide back into proof compression",
-            eligible=False,
-            reason="protect from renewed proof/no-answer compression by inertia",
+            eligible=subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+            reason=(
+                "operator-reviewed direction review selected proof/no-answer residue"
+                if subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+                else "protect from renewed proof/no-answer compression by inertia"
+            ),
         ),
         _region(
             region_id="final_return_opening_transformation_region",
@@ -1043,6 +1049,9 @@ def _region(
         "eligible_for_hostile_scaffold_visibility_work": eligible,
         "eligible_for_ending_explains_return_risk_work": (
             region_id == ENDING_RETURN_REGION_ID
+        ),
+        "eligible_for_proof_no_answer_residue_work": (
+            region_id == PROOF_NO_ANSWER_REGION_ID and eligible
         ),
         "reason": reason,
     }
@@ -1248,6 +1257,60 @@ def _build_diagnostic(
             "no_phase_shift_claim": True,
             "worker": "ending_explains_return_risk_diagnostic_v1_controller",
         }
+    if subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return {
+            "selected_residual_target_id": subject.selected_target_id,
+            "diagnostic_kind": "proof_no_answer_residue_diagnostic",
+            "legacy_artifact_name": "object_motion_causality_diagnostic",
+            "artifact_name_compatibility_reason": (
+                "residual work-order packet contract still expects this artifact "
+                "filename; target_adapter_id and diagnostic_kind are authoritative"
+            ),
+            "current_best_candidate_packet_id": subject.candidate.packet_id,
+            "diagnostic_findings": [
+                {
+                    "category": "proof_no_answer_residue",
+                    "status": "active_checkpoint_direction",
+                    "evidence": _selected_option_evidence(subject)
+                    or ["direction review selected proof/no-answer residue"],
+                },
+                {
+                    "category": "outside_answer_absence",
+                    "status": "must_remain_pressure_not_explanation",
+                    "evidence": [
+                        "future work must not import an outside answer or elder-presence explanation"
+                    ],
+                },
+                {
+                    "category": "object_field_carries_proof",
+                    "status": "must_preserve_object_tactile_gains",
+                    "evidence": [
+                        "table/dust/spoon/saucer/ring field remains protected context"
+                    ],
+                },
+                {
+                    "category": "strongest_rival_pressure",
+                    "status": "blocking_pressure_preserved",
+                    "evidence": ["strongest rival remains pressure, not defeated evidence"],
+                },
+            ],
+            "likely_strongest_candidate_region": PROOF_NO_ANSWER_REGION_ID,
+            "selected_region_text_excerpt": selected_region.get("text_excerpt"),
+            "opening_middle_final_return_protection": (
+                "opening, middle recurrence, and final-return material are "
+                "protected reference units outside the proof/no-answer region"
+            ),
+            "summary": (
+                "Proof/no-answer residue targets the proof/no-outside-answer "
+                "region so future work can embody pressure without turning it "
+                "into abstract thesis or explanation."
+            ),
+            "candidate_generated": False,
+            "model_calls": 0,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+            "worker": "proof_no_answer_residue_diagnostic_v1_controller",
+        }
     return {
         "selected_residual_target_id": subject.selected_target_id,
         "current_best_candidate_packet_id": subject.candidate.packet_id,
@@ -1411,6 +1474,13 @@ def _build_selected_region(
             "region is the editable planning scope. Opening, middle recurrence, and "
             "proof/no-answer material are protected references, not material target units."
         )
+    elif subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        selection_reason = (
+            "The operator-reviewed checkpoint direction selected proof/no-answer "
+            "residue, so the proof/no-outside-answer region is the editable "
+            "planning scope. Opening, middle recurrence, and final-return material "
+            "are protected references, not material target units."
+        )
     else:
         selection_reason = (
             "This region already contains object motion and implied consequence; "
@@ -1451,8 +1521,12 @@ def _build_selected_region(
                 ),
             },
             {
-                "region_id": "proof_no_outside_answer_region",
-                "reason": "proof/no-answer gains should not be compressed by inertia",
+                "region_id": PROOF_NO_ANSWER_REGION_ID,
+                "reason": (
+                    "proof/no-answer region is selected through the direction review"
+                    if selected_region_id == PROOF_NO_ANSWER_REGION_ID
+                    else "proof/no-answer gains should not be compressed by inertia"
+                ),
             },
             {
                 "region_id": "final_return_opening_transformation_region",
@@ -1483,6 +1557,8 @@ def _build_target_unit_map(
         return _build_hostile_scaffold_target_unit_map(subject, selected_region)
     if subject.selected_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         return _build_ending_return_target_unit_map(subject, selected_region)
+    if subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return _build_proof_no_answer_target_unit_map(subject, selected_region)
     selected_text = str(selected_region["selected_region_before_text"])
     units = [
         _unit(
@@ -2068,6 +2144,228 @@ def _ending_return_unit(
     }
 
 
+def _build_proof_no_answer_target_unit_map(
+    subject: ResidualWorkOrderSubject,
+    selected_region: dict[str, object],
+) -> dict[str, object]:
+    selected_text = str(selected_region["selected_region_before_text"])
+    selected_region_id = str(selected_region["selected_region_id"])
+    selected_paragraphs = _paragraphs(selected_text)
+    units = [
+        _proof_no_answer_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="no_outside_answer_embodied_in_room",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=1,
+                needles=("No answer", "outside", "room", "enters"),
+            ),
+            weakness=(
+                "no-outside-answer pressure can read as an abstract rule unless "
+                "the room/object field carries it"
+            ),
+            allowed_operation=(
+                "make the absence of outside answer register through local object pressure"
+            ),
+            target_effect="reader feels no outside answer from the room before explanation",
+        ),
+        _proof_no_answer_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="sky_silence_without_thesis",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=1,
+                needles=("sky", "silence", "outside", "answer"),
+            ),
+            weakness=(
+                "sky/silence language can become thesis-visible if it announces cosmic absence"
+            ),
+            allowed_operation=(
+                "keep silence concrete and locally encountered rather than slogan-like"
+            ),
+            target_effect="outside absence remains pressure, not metaphysical signage",
+        ),
+        _proof_no_answer_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="line_bears_weight_without_abstraction",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=1,
+                needles=("line", "carry", "bears", "weight"),
+            ),
+            weakness="line/carry language can become abstract proof compression",
+            allowed_operation=(
+                "make the line bear pressure through object relation rather than abstract proof"
+            ),
+            target_effect="reader tracks the proof as carried pressure",
+        ),
+        _proof_no_answer_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="proof_stays_in_object_carry",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=1,
+                needles=("proof", "object", "carry", "table", "record"),
+            ),
+            weakness="proof can replace the artifact if it is named instead of carried",
+            allowed_operation="keep proof inside object carry and visible consequence",
+            target_effect="object field carries proof without explanatory takeover",
+        ),
+        _proof_no_answer_unit(
+            subject=subject,
+            selected_region_id=selected_region_id,
+            selected_region_text=selected_text,
+            unit_id="answer_absence_registered_by_objects",
+            text=_sentence_for_hostile_unit(
+                selected_paragraphs,
+                start=0,
+                end=1,
+                needles=("answer", "objects", "table", "dust", "spoon", "saucer"),
+            ),
+            weakness=(
+                "answer absence can become a claim unless objects register the absence locally"
+            ),
+            allowed_operation="let objects register absence without supplying an answer",
+            target_effect="answer absence is readable through object pressure",
+        ),
+    ]
+    protected_references = _proof_no_answer_protected_reference_units(
+        subject=subject,
+        selected_region_text=selected_text,
+    )
+    return {
+        "selected_residual_target_id": subject.selected_target_id,
+        "unit_map_kind": subject.target_spec.work_order_adapter,
+        "legacy_artifact_name": "object_motion_target_unit_map",
+        "artifact_name_compatibility_reason": (
+            "residual work-order packet contract still expects this artifact "
+            "filename; target_adapter_id and unit_map_kind are authoritative"
+        ),
+        **target_adapter_metadata(subject.selected_target_id),
+        "selected_region_id": selected_region_id,
+        "target_units": units,
+        "target_unit_count": len(units),
+        "material_target_units_all_inside_selected_region": True,
+        "protected_reference_units": protected_references,
+        "protected_reference_unit_count": len(protected_references),
+        "future_evaluation_focus": list(
+            subject.target_spec.target_specific_reader_state_focus
+        ),
+        "target_semantic_contract": list(subject.target_spec.operational_definition),
+        "generation_materiality_policy": target_adapter_metadata(
+            subject.selected_target_id
+        )["materiality_policy_id"],
+        "generation_semantic_validation_contract": [
+            "generation contract is placeholder-only until a future implementation",
+            "future generation requires a separate authorization packet",
+            "selected proof/no-answer region must carry pressure through objects or reader encounter",
+            "do not add outside-answer explanation, elder-presence explanation, or abstract thesis amplification",
+            "preserve opening, middle recurrence, final-return, object/tactile field, and rival-pressure references",
+        ],
+        "ablation_control_plan": list(
+            subject.target_spec.target_specific_ablation_controls
+        ),
+        "reader_state_focus_plan": list(
+            subject.target_spec.target_specific_reader_state_focus
+        ),
+        "stop_test_policy": target_adapter_metadata(subject.selected_target_id).get(
+            "stop_test_policy"
+        ),
+        "future_generation_requires_separate_authorization": True,
+        "future_generation_authorized": False,
+        "candidate_generated": False,
+        "model_calls": 0,
+        "finalization_eligible": False,
+        "no_phase_shift_claim": True,
+        "worker": "proof_no_answer_residue_target_unit_map_v1_controller",
+    }
+
+
+def _proof_no_answer_unit(
+    *,
+    subject: ResidualWorkOrderSubject,
+    selected_region_id: str,
+    selected_region_text: str,
+    unit_id: str,
+    text: str,
+    weakness: str,
+    allowed_operation: str,
+    target_effect: str,
+) -> dict[str, object]:
+    before_text = text or _excerpt(selected_region_text or subject.candidate.text)
+    source_span = _source_span_for_selected_region_text(
+        selected_region_id=selected_region_id,
+        selected_region_text=selected_region_text,
+        before_text=before_text,
+    )
+    object_labels = extract_object_labels(before_text) or [
+        "room",
+        "answer",
+        "line",
+        "proof",
+    ]
+    return {
+        "unit_id": unit_id,
+        "target_unit_id": unit_id,
+        "before_text": before_text,
+        "before_text_sha256": sha256_text(before_text),
+        "objects": object_labels,
+        "involved_object_labels": object_labels,
+        "parent_region_id": selected_region_id,
+        "source_region_id": selected_region_id,
+        "source_span": source_span,
+        "contained_in_selected_region": source_span["contained_in_selected_region"],
+        "source_text_packet_id": subject.candidate.packet_id,
+        "current_best_candidate_packet_id": subject.candidate.packet_id,
+        "current_motion_action_state": allowed_operation,
+        "current_consequence": target_effect,
+        "current_physical_relation": (
+            "proof/no-answer pressure must be carried by object relation, "
+            "local pressure, or reader encounter"
+        ),
+        "source_unit_role": "proof_no_answer_residue_reduction",
+        "weakness": weakness,
+        "allowed_operation": allowed_operation,
+        "forbidden_operation": [
+            "add outside-answer explanation",
+            "add elder-presence explanation",
+            "amplify abstract thesis language",
+            "delete object/tactile causal field",
+            "retry hostile scaffold",
+            "retry ending return",
+            "repeat object-motion target",
+            "repeat tactile target",
+            "imitate the rival",
+            "broad rewrite",
+        ],
+        "protected_effects": [
+            f"{subject.candidate.packet_id} as current best candidate",
+            "object/tactile causal field",
+            "table/dust/spoon/saucer/ring field",
+            "current final-return/opening-return structure",
+            "failed hostile scaffold memory",
+            "failed ending-return memory",
+            "strongest-rival pressure preservation",
+        ],
+        "target_effect": target_effect,
+        "material_change_required": True,
+        "semantic_contract": list(subject.target_spec.operational_definition),
+        "future_generation_authorized": False,
+    }
+
+
 def _ending_return_overlap_cluster_report(
     *,
     units: list[dict[str, object]],
@@ -2129,6 +2427,66 @@ def _ending_return_overlap_cluster_report(
         "source_a_b_c_artifacts_may_share_before_text": True,
         "worker": "ending_return_overlap_cluster_report_v1_controller",
     }
+
+
+def _proof_no_answer_protected_reference_units(
+    *,
+    subject: ResidualWorkOrderSubject,
+    selected_region_text: str,
+) -> list[dict[str, object]]:
+    paragraphs = _paragraphs(subject.candidate.text)
+    references = [
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="opening_table_field_reference",
+            source_region_id="opening_table_dust_spoon_saucer_ring_field",
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=0,
+                end=2,
+                needles=("table", "dust", "spoon", "saucer", "ring"),
+            ),
+            protection_reason=(
+                "opening object field is protected reference material for proof/no-answer work"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="middle_recurrence_object_tactile_reference",
+            source_region_id=SELECTED_REGION_ID,
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=3,
+                end=4,
+                needles=("cup", "ring", "crumb", "spoon", "saucer"),
+            ),
+            protection_reason=(
+                "middle recurrence object/tactile gains are protected; do not repeat object-motion or tactile work"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+        _protected_reference_unit(
+            subject=subject,
+            reference_unit_id="final_return_opening_relation_reference",
+            source_region_id=ENDING_RETURN_REGION_ID,
+            text=_sentence_for_hostile_unit(
+                paragraphs,
+                start=10,
+                end=10,
+                needles=("return", "opening", "same table", "relation"),
+            ),
+            protection_reason=(
+                "final-return/opening-return structure is protected outside the selected proof region"
+            ),
+            selected_region_text=selected_region_text,
+        ),
+    ]
+    return [
+        reference
+        for reference in references
+        if not reference["contained_in_selected_region"]
+    ]
 
 
 def _ending_return_protected_reference_units(
@@ -2751,6 +3109,25 @@ def _prevalidate_target_adapter(subject: ResidualWorkOrderSubject) -> None:
                 f"failed: {'; '.join(failures)}"
             )
         return
+    if subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        unit_map = _build_proof_no_answer_target_unit_map(subject, selected_region)
+        failures = semantic_preflight_failures_for_work_order(
+            {
+                "residual_work_order_packet": {
+                    "selected_residual_target_id": subject.selected_target_id,
+                    **target_adapter_metadata(subject.selected_target_id),
+                },
+                "selected_intervention_region": selected_region,
+                "object_motion_target_unit_map": unit_map,
+            }
+        )
+        if failures:
+            raise ValueError(
+                "Residual work-order planning refused; proof/no-answer "
+                "adapter failed selected-region invariant; semantic preflight "
+                f"failed: {'; '.join(failures)}"
+            )
+        return
     if subject.selected_target_id != TACTILE_INEVITABILITY_TARGET_ID:
         return
     unit_map = _build_tactile_target_unit_map(subject, selected_region)
@@ -3320,6 +3697,8 @@ def _find_region(inventory: dict[str, object], region_id: str) -> dict[str, Any]
 def _selected_region_id(subject: ResidualWorkOrderSubject) -> str:
     if subject.selected_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         return ENDING_RETURN_REGION_ID
+    if subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return PROOF_NO_ANSWER_REGION_ID
     return SELECTED_REGION_ID
 
 
@@ -3338,6 +3717,17 @@ def _strategy_points_to_selected_region(subject: ResidualWorkOrderSubject) -> bo
             return _selected_option_mentions(
                 subject,
                 ("return", "ending", "final", "opening"),
+            )
+        if subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+            selection_packet = subject.payloads["residual_target_selection_packet"]
+            return bool(
+                selection_packet.get("selection_source_kind")
+                == "checkpoint_strategy_direction_review"
+                and selection_packet.get("source_direction_review_packet_id")
+                and _selected_option_mentions(
+                    subject,
+                    ("proof", "answer", "outside", "checkpoint"),
+                )
             )
         return bool(
             region.get("plausible_next_intervention_region") is True
@@ -3368,6 +3758,8 @@ def _region_text(text: str, region_id: str) -> str:
     if region_id == ENDING_RETURN_REGION_ID:
         final_return_start = 10 if len(paragraphs) > 10 else max(len(paragraphs) - 1, 0)
         return "\n\n".join(paragraphs[final_return_start : final_return_start + 1])
+    if region_id == PROOF_NO_ANSWER_REGION_ID:
+        return "\n\n".join(paragraphs[8:10])
     return ""
 
 

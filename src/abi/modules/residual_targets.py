@@ -19,27 +19,35 @@ OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
 TACTILE_INEVITABILITY_TARGET_ID = "tactile_inevitability_gap"
 HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
 ENDING_EXPLAINS_RETURN_RISK_TARGET_ID = "ending_explains_return_risk"
+PROOF_NO_ANSWER_RESIDUE_TARGET_ID = "proof_no_answer_residue"
 REPEATED_BROAD_TARGET_ID = "first_read_object_event_pressure_gap"
 SELECTED_REGION_ID = "middle_recurrence_ordinary_trace_logic"
 ENDING_RETURN_REGION_ID = "final_return_opening_transformation_region"
+PROOF_NO_ANSWER_REGION_ID = "proof_no_outside_answer_region"
 OBJECT_MOTION_TARGET_SPEC_VERSION = "1"
 TACTILE_TARGET_SPEC_VERSION = "2"
 HOSTILE_SCAFFOLD_TARGET_SPEC_VERSION = "1"
 ENDING_RETURN_TARGET_SPEC_VERSION = "1"
+PROOF_NO_ANSWER_TARGET_SPEC_VERSION = "1"
 OBJECT_MOTION_WORK_ORDER_CONTRACT_VERSION = "1"
 TACTILE_WORK_ORDER_CONTRACT_VERSION = "2"
 HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION = "1"
 ENDING_RETURN_WORK_ORDER_CONTRACT_VERSION = "1"
+PROOF_NO_ANSWER_WORK_ORDER_CONTRACT_VERSION = "1"
 OBJECT_MOTION_GENERATION_CONTRACT_VERSION = "1"
 TACTILE_GENERATION_CONTRACT_VERSION = "1"
 HOSTILE_SCAFFOLD_GENERATION_CONTRACT_VERSION = "1"
 ENDING_RETURN_PLACEHOLDER_GENERATION_CONTRACT_VERSION = (
     "placeholder_ending_return_planning_only_v1"
 )
+PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION = (
+    "placeholder_proof_no_answer_planning_only_v1"
+)
 ENDING_RETURN_GENERATION_CONTRACT_VERSION = "1"
 PLACEHOLDER_GENERATION_CONTRACT_VERSIONS = (
     "placeholder_1",
     ENDING_RETURN_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
+    PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
 )
 HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID = (
     "hostile_scaffold_visibility_planning_placeholder_v1"
@@ -50,11 +58,15 @@ HOSTILE_SCAFFOLD_MATERIALITY_POLICY_ID = (
 ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID = (
     "ending_return_risk_planning_placeholder_v1"
 )
+PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID = (
+    "proof_no_answer_residue_planning_placeholder_v1"
+)
 ENDING_RETURN_MATERIALITY_POLICY_ID = "ending_return_risk_generation_materiality_v1"
 ENDING_RETURN_SEMANTIC_VALIDATOR_ID = "ending_return_risk_semantic_validator_v1"
 PLACEHOLDER_MATERIALITY_POLICY_IDS = (
     HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
     ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID,
+    PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID,
 )
 TARGET_ARTIFACT_ALIAS_POLICY = {
     "writes_target_unit_map_alias": True,
@@ -70,6 +82,7 @@ CURRENT_BEST_PATH_TARGET_IDS = (
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
     TACTILE_INEVITABILITY_TARGET_ID,
 )
+DIRECTION_REVIEW_ONLY_TARGET_IDS = (PROOF_NO_ANSWER_RESIDUE_TARGET_ID,)
 
 
 @dataclass(frozen=True)
@@ -522,11 +535,107 @@ ENDING_EXPLAINS_RETURN_RISK_SPEC = ResidualTargetSpec(
     ),
 )
 
+PROOF_NO_ANSWER_RESIDUE_SPEC = ResidualTargetSpec(
+    target_id=PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    canonical_next_action="prepare_proof_no_answer_residue_work_order",
+    review_action="review_proof_no_answer_residue_work_order_before_generation_authorization",
+    work_order_adapter="proof_no_answer_residue",
+    mechanism_description="proof/no-answer pressure embodied rather than abstract",
+    permitted_source_candidate_kinds=("bounded_macro_recomposition",),
+    required_evidence_inputs=(
+        "current best candidate text",
+        "checkpoint strategy direction review packet",
+        "checkpoint-aware strategy packet",
+        "architecture/evidence-risk checkpoint packet",
+        "proof packet reference",
+        "reader-state packet reference",
+    ),
+    generation_requires_separate_authorization=True,
+    target_specific_ablation_controls=(
+        "full_proof_no_answer_residue_intervention",
+        "revert_proof_no_answer_intervention_to_current_best",
+        "isolate_object_carry_without_outside_answer",
+        "abstract_proof_language_control",
+        "strongest_rival_comparison",
+    ),
+    target_specific_reader_state_focus=(
+        "proof/no-answer pressure embodied",
+        "outside-answer absence preserved",
+        "object field carries proof",
+        "thesis visibility reduced",
+        "first-read clarity without explanation",
+        "reread carry preserved",
+        "strongest-rival pressure",
+    ),
+    target_definition={
+        "proof_no_answer_pressure_must_be_embodied": True,
+        "outside_answer_absence_must_remain_unresolved": True,
+        "object_field_must_carry_proof_without_thesis": True,
+        "not_generic_vividness_or_rival_imitation": True,
+        "must_preserve_current_best_macro_and_reader_state_gains": True,
+    },
+    operational_definition=(
+        "select the proof/no-outside-answer region only through an operator-reviewed checkpoint direction review",
+        "make proof/no-answer pressure arrive through object relation, local pressure, or reader encounter",
+        "preserve outside-answer absence as pressure, not answer or elder-presence explanation",
+        "reduce abstract thesis visibility without deleting proof/no-answer structure",
+        "protect opening, middle recurrence, and final-return material outside the selected region",
+        "preserve strongest-rival pressure; do not claim it is defeated",
+    ),
+    forbidden_under_this_target=(
+        "generic vividness",
+        "rival imitation",
+        "broad rewrite",
+        "outside-answer or elder-presence explanation",
+        "abstract thesis amplification",
+        "deleting object/tactile causal field",
+        "retrying hostile scaffold",
+        "retrying ending return",
+        "object-motion repeat",
+        "tactile repeat",
+        "direct candidate generation in this command",
+        "finality claim",
+        "phase-shift claim",
+        "strongest-rival defeat claim",
+    ),
+    protected_effects=(
+        "current best candidate",
+        "executed ablation support",
+        "reader-state support",
+        "object/tactile causal gains already integrated",
+        "table/dust/spoon/saucer/ring field",
+        "proof/no-answer pressure as current blocker",
+        "strongest-rival pressure remains unresolved",
+        "failed hostile scaffold memory",
+        "failed ending-return memory",
+        "current final-return/opening-return structure",
+        "no finalization",
+        "no phase-shift claim",
+    ),
+    forbidden_changes=(
+        "generic vividness",
+        "rival imitation",
+        "broad rewrite",
+        "outside-answer or elder-presence explanation",
+        "abstract thesis amplification",
+        "deleting object/tactile causal field",
+        "retrying hostile scaffold",
+        "retrying ending return",
+        "object-motion repeat",
+        "tactile repeat",
+        "generation in this command",
+        "finality claim",
+        "phase-shift claim",
+        "strongest-rival defeat claim",
+    ),
+)
+
 RESIDUAL_TARGET_SPECS = {
     OBJECT_MOTION_SPEC.target_id: OBJECT_MOTION_SPEC,
     TACTILE_INEVITABILITY_SPEC.target_id: TACTILE_INEVITABILITY_SPEC,
     HOSTILE_SCAFFOLD_VISIBILITY_SPEC.target_id: HOSTILE_SCAFFOLD_VISIBILITY_SPEC,
     ENDING_EXPLAINS_RETURN_RISK_SPEC.target_id: ENDING_EXPLAINS_RETURN_RISK_SPEC,
+    PROOF_NO_ANSWER_RESIDUE_SPEC.target_id: PROOF_NO_ANSWER_RESIDUE_SPEC,
 }
 
 MATERIALITY_FAILURE_REPORT_FIELDS = (
@@ -795,6 +904,53 @@ ENDING_RETURN_MATERIALITY_POLICY = ResidualMaterialityPolicy(
     ),
 )
 
+PROOF_NO_ANSWER_MATERIALITY_POLICY = ResidualMaterialityPolicy(
+    policy_id=PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID,
+    policy_version="1",
+    primary_materiality_scope="whole_selected_region",
+    whole_region_guard={
+        "scope": "proof_no_outside_answer_region",
+        "planning_only": True,
+        "future_generation_requires_separate_authorization": True,
+    },
+    target_bearing_scope={
+        "scope": "proof_no_outside_answer_region",
+        "diagnostic_only": True,
+        "planning_only": True,
+    },
+    target_unit_scope={
+        "scope": "proof_no_answer_target_unit",
+        "diagnostic_only": True,
+        "planning_only": True,
+    },
+    overlap_cluster_policy={
+        "planning_only": True,
+        "future_policy_required_before_generation": True,
+    },
+    absolute_change_floor=0,
+    ratio_floor=0.0,
+    token_edit_distance_floor=0,
+    sequence_similarity_ceiling=1.0,
+    changed_sentence_floor=0,
+    protected_context_exemptions=(
+        "opening table/dust/spoon/saucer/ring field remains protected reference material",
+        "middle recurrence object/tactile gains remain protected reference material",
+        "final-return/opening-return structure remains protected reference material",
+    ),
+    prompt_feedback=(
+        "proof/no-answer work is planning-only until a generation contract is implemented",
+        "future work must embody no-outside-answer pressure through object relation or reader encounter",
+        "do not add outside-answer or elder-presence explanation",
+        "do not amplify abstract proof thesis language",
+        "preserve object/tactile causal field and strongest-rival pressure",
+    ),
+    failure_report_fields=(
+        "planning_only_no_generation_contract",
+        "target_units_must_remain_inside_proof_no_answer_region",
+        "protected_reference_preservation_requirements",
+    ),
+)
+
 OBJECT_MOTION_ADAPTER = ResidualTargetAdapter(
     target_id=OBJECT_MOTION_CAUSALITY_TARGET_ID,
     target_spec_version=OBJECT_MOTION_TARGET_SPEC_VERSION,
@@ -957,11 +1113,53 @@ ENDING_RETURN_RISK_ADAPTER = ResidualTargetAdapter(
     semantic_validator_id=ENDING_RETURN_SEMANTIC_VALIDATOR_ID,
 )
 
+PROOF_NO_ANSWER_RESIDUE_ADAPTER = ResidualTargetAdapter(
+    target_id=PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    target_spec_version=PROOF_NO_ANSWER_TARGET_SPEC_VERSION,
+    work_order_contract_version=PROOF_NO_ANSWER_WORK_ORDER_CONTRACT_VERSION,
+    generation_contract_version=PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
+    canonical_work_order_action=PROOF_NO_ANSWER_RESIDUE_SPEC.canonical_next_action,
+    review_action=PROOF_NO_ANSWER_RESIDUE_SPEC.review_action,
+    work_order_adapter=PROOF_NO_ANSWER_RESIDUE_SPEC.work_order_adapter,
+    generation_schema=RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
+    worker_role=WorkerRole.RESIDUAL_INTERVENTION_GENERATOR,
+    prompt_contract_id=(
+        "autonomous.residual_intervention_generation.v1."
+        "proof_no_answer_residue.placeholder"
+    ),
+    prompt_instructions=(
+        "planning-only placeholder; do not generate from this adapter",
+        "future generation may replace only the proof/no-outside-answer region after separate authorization",
+        "make proof/no-answer pressure embodied rather than abstract",
+        "preserve outside-answer absence without explaining it",
+        "preserve opening, middle recurrence, final-return, object/tactile field, and rival-pressure references",
+        "do not imitate the rival, make finality claims, or make phase-shift claims",
+    ),
+    mechanism_contract=PROOF_NO_ANSWER_RESIDUE_SPEC.operational_definition,
+    ablation_controls=PROOF_NO_ANSWER_RESIDUE_SPEC.target_specific_ablation_controls,
+    reader_state_evaluation_focus=(
+        PROOF_NO_ANSWER_RESIDUE_SPEC.target_specific_reader_state_focus
+    ),
+    stop_test_policy={
+        "cycle_kind": "proof_no_answer_residue_planning_placeholder",
+        "pause_action": "pause_until_generation_contract_implemented",
+        "failure_conditions": [
+            "proof/no-answer pressure becomes an abstract thesis",
+            "outside-answer absence is resolved or explained",
+            "object/tactile field weakens",
+            "strongest-rival pressure is treated as defeated",
+            "finality or phase-shift is claimed",
+        ],
+    },
+    materiality_policy=PROOF_NO_ANSWER_MATERIALITY_POLICY,
+)
+
 RESIDUAL_TARGET_ADAPTERS = {
     OBJECT_MOTION_ADAPTER.target_id: OBJECT_MOTION_ADAPTER,
     TACTILE_INEVITABILITY_ADAPTER.target_id: TACTILE_INEVITABILITY_ADAPTER,
     HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER.target_id: HOSTILE_SCAFFOLD_VISIBILITY_ADAPTER,
     ENDING_RETURN_RISK_ADAPTER.target_id: ENDING_RETURN_RISK_ADAPTER,
+    PROOF_NO_ANSWER_RESIDUE_ADAPTER.target_id: PROOF_NO_ANSWER_RESIDUE_ADAPTER,
 }
 
 TACTILE_FORCE_TERMS = (
@@ -1284,6 +1482,7 @@ def audit_residual_target_adapter_contract(
         or failed_status.get("stop_test_triggered")
     )
     history_only = target_id in current_best_path_target_ids
+    direction_review_only = target_id in DIRECTION_REVIEW_ONLY_TARGET_IDS
     required_fields = (
         "target_id",
         "adapter_id",
@@ -1339,6 +1538,8 @@ def audit_residual_target_adapter_contract(
         if paused
         else "previous_current_best_path_or_history_only"
         if history_only
+        else "direction_review_required"
+        if direction_review_only
         else "available_for_future_strategy_review"
     )
     return {
@@ -1356,9 +1557,11 @@ def audit_residual_target_adapter_contract(
         "current_best_path_or_history_only": history_only,
         "current_run_usage_state": usage_state,
         "available_for_immediate_selection": False
-        if paused or history_only
+        if paused or history_only or direction_review_only
         else bool(contract.get("planning_support")),
-        "explicit_override_required_before_reuse": paused or history_only,
+        "explicit_override_required_before_reuse": (
+            paused or history_only or direction_review_only
+        ),
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
@@ -1369,6 +1572,8 @@ def audit_residual_target_adapter_contract(
 def _target_scope_for_target_id(target_id: str) -> str:
     if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         return ENDING_RETURN_REGION_ID
+    if target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return PROOF_NO_ANSWER_REGION_ID
     return SELECTED_REGION_ID
 
 
@@ -1424,6 +1629,8 @@ def _missing_generation_ready_contract_fields(
 
 def _contract_warning_fields(contract: dict[str, object]) -> list[str]:
     warnings: list[str] = []
+    if bool(contract.get("planning_only_marker")):
+        return warnings
     readiness_failures = contract.get("generation_readiness_failures")
     if isinstance(readiness_failures, list) and readiness_failures:
         warnings.append("generation_readiness_failures")
@@ -2426,6 +2633,7 @@ def semantic_preflight_failures_for_work_order(payloads: dict[str, dict[str, Any
     if target_id in {
         HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
         ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
     }:
         failures.extend(
             validate_single_region_target_unit_alignment(

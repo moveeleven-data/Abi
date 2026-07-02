@@ -597,8 +597,12 @@ def build_parser() -> argparse.ArgumentParser:
     autonomous_select_residual_target_parser.add_argument(
         "--strategy-packet",
         type=Path,
-        required=True,
         help="Next-target strategy packet directory to consume.",
+    )
+    autonomous_select_residual_target_parser.add_argument(
+        "--direction-review-packet",
+        type=Path,
+        help="Checkpoint strategy direction-review packet directory to consume.",
     )
     autonomous_select_residual_target_parser.add_argument(
         "--target",
@@ -922,6 +926,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_select_residual_target(
             config,
             strategy_packet=args.strategy_packet,
+            direction_review_packet=args.direction_review_packet,
             target=args.target,
             operator_reviewed=args.operator_reviewed,
         )
@@ -1401,13 +1406,15 @@ def _cmd_autonomous_architecture_risk_checkpoint(
 def _cmd_autonomous_select_residual_target(
     config: AbiConfig,
     *,
-    strategy_packet: Path,
+    strategy_packet: Path | None,
+    direction_review_packet: Path | None,
     target: str,
     operator_reviewed: bool,
 ) -> int:
     result = run_residual_target_selection(
         config,
         strategy_packet=strategy_packet,
+        direction_review_packet=direction_review_packet,
         target=target,
         operator_reviewed=operator_reviewed,
     )

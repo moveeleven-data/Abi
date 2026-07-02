@@ -149,6 +149,11 @@ from abi.modules.residual_targets import (
     HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION,
     OBJECT_MOTION_GENERATION_CONTRACT_VERSION,
     OBJECT_MOTION_WORK_ORDER_CONTRACT_VERSION,
+    PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
+    PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID,
+    PROOF_NO_ANSWER_REGION_ID,
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    PROOF_NO_ANSWER_WORK_ORDER_CONTRACT_VERSION,
     TACTILE_GENERATION_CONTRACT_VERSION,
     TACTILE_INEVITABILITY_TARGET_ID,
     TACTILE_WORK_ORDER_CONTRACT_VERSION,
@@ -10170,6 +10175,7 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     tactile_adapter = require_residual_target_adapter(TACTILE_INEVITABILITY_TARGET_ID)
     hostile_adapter = require_residual_target_adapter(HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID)
     ending_adapter = require_residual_target_adapter(ENDING_EXPLAINS_RETURN_RISK_TARGET_ID)
+    proof_adapter = require_residual_target_adapter(PROOF_NO_ANSWER_RESIDUE_TARGET_ID)
 
     assert object_adapter.generation_contract_version == (
         OBJECT_MOTION_GENERATION_CONTRACT_VERSION
@@ -10233,12 +10239,30 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     assert "ending_return_explanation_leakage_failures" in (
         ending_adapter.materiality_policy.failure_report_fields
     )
+    assert proof_adapter.adapter_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    assert proof_adapter.work_order_contract_version == (
+        PROOF_NO_ANSWER_WORK_ORDER_CONTRACT_VERSION
+    )
+    assert proof_adapter.generation_contract_version == (
+        PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+    )
+    assert proof_adapter.materiality_policy.policy_id == (
+        PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID
+    )
+    assert proof_adapter.materiality_policy.primary_materiality_scope == (
+        "whole_selected_region"
+    )
     assert target_generation_readiness_failures(
         ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
     ) == []
     assert target_generation_readiness_failures(
         HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
     ) == []
+    proof_failures = target_generation_readiness_failures(
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    )
+    assert proof_failures
+    assert "placeholder-only" in proof_failures[0]
     with pytest.raises(ValueError, match="unsupported selected residual target"):
         require_residual_target_adapter("unsupported_target")
 
@@ -10302,6 +10326,19 @@ def test_residual_target_adapter_contract_audit_covers_registered_targets():
             assert row["prompt_contract_id"]
             assert row["generation_schema_name"]
             assert row["worker_role"]
+    assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["classification"] == (
+        "planning_only_valid"
+    )
+    assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["target_scope"] == (
+        PROOF_NO_ANSWER_REGION_ID
+    )
+    assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["generation_support"] is False
+    assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "available_for_immediate_selection"
+    ] is False
+    assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["current_run_usage_state"] == (
+        "direction_review_required"
+    )
 
 
 def test_residual_target_adapter_contract_audit_flags_blockers_and_warnings():
@@ -10382,7 +10419,7 @@ def test_residual_work_order_refuses_invalid_target_selection(tmp_path):
     )
 
     def _wrong_target(payload):
-        payload["selected_residual_target_id"] = "proof_no_answer_residue"
+        payload["selected_residual_target_id"] = "unsupported_residual_target"
 
     rewrite_payload(invalid_packet / "residual_target_selection_packet.json", _wrong_target)
 
@@ -11523,7 +11560,7 @@ def test_residual_generation_authorization_refuses_invalid_target(tmp_path):
     shutil.copytree(Path(str(chain["residual_work_order"]["packet_dir"])), invalid_packet)
 
     def _wrong_target(payload):
-        payload["selected_residual_target_id"] = "proof_no_answer_residue"
+        payload["selected_residual_target_id"] = "unsupported_residual_target"
 
     rewrite_payload(invalid_packet / "residual_work_order_packet.json", _wrong_target)
 
@@ -13774,7 +13811,7 @@ def test_residual_candidate_generation_refuses_invalid_authorization(tmp_path):
     )
 
     def _wrong_target(payload):
-        payload["selected_residual_target_id"] = "proof_no_answer_residue"
+        payload["selected_residual_target_id"] = "unsupported_residual_target"
 
     rewrite_payload(
         invalid_packet / "residual_generation_authorization_packet.json",
@@ -17071,6 +17108,15 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert audit_rows[TACTILE_INEVITABILITY_TARGET_ID][
         "available_for_immediate_selection"
     ] is False
+    assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["classification"] == (
+        "planning_only_valid"
+    )
+    assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "current_run_usage_state"
+    ] == "direction_review_required"
+    assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "available_for_immediate_selection"
+    ] is False
     assert audit_rows[OBJECT_MOTION_CAUSALITY_TARGET_ID][
         "explicit_override_required_before_reuse"
     ] is True
@@ -17082,6 +17128,7 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     target_rows = {row["target_id"]: row for row in inventory["targets"]}
     assert CHECKPOINT_HOSTILE_TARGET_ID in target_rows
     assert CHECKPOINT_ENDING_TARGET_ID in target_rows
+    assert PROOF_NO_ANSWER_RESIDUE_TARGET_ID in target_rows
     assert "object_motion_causality_specificity" in target_rows
     assert target_rows[CHECKPOINT_HOSTILE_TARGET_ID][
         "failed_or_paused_in_current_run"
@@ -17107,6 +17154,17 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert target_rows[TACTILE_INEVITABILITY_TARGET_ID][
         "available_for_immediate_selection"
     ] is False
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "contract_audit_classification"
+    ] == "planning_only_valid"
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "current_run_usage_state"
+    ] == "direction_review_required"
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "available_for_immediate_selection"
+    ] is False
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["planning_support"] is True
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["generation_support"] is False
     assert inventory["target_adapter_contract_audit_passed"] is True
     assert inventory["target_adapter_contract_blocker_count"] == 0
     assert all(row["available_for_generation"] is False for row in target_rows.values())
@@ -17401,6 +17459,48 @@ def build_checkpoint_strategy_direction_ready_chain(
     return config, Path(str(strategy.payload["packet_dir"])), run_id
 
 
+def write_checkpoint_fixture_current_best_candidate(config: AbiConfig, run_id: str) -> Path:
+    candidate_dir = config.run_dir(run_id) / "bounded_macro_recomposition" / "packet_0063"
+    candidate_text = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
+
+The first record remains ordinary because the surface keeps what crossed it.
+
+The cup leaves a ring; the ring narrows when the cup is lifted.
+
+The crumb moves into the grain before anyone names what the movement means.
+
+The spoon lies beside the saucer, and the saucer's crack keeps the small fall in view.
+
+The table does not become a sign. It stays a place where contact leaves consequence.
+
+The room is small enough that every mark has to answer to the surface that holds it.
+
+No outside hand arrives to settle the question.
+
+A line of life and mind proves itself only by what it can carry here.
+
+No answer enters from outside the kitchen; the silence holds the room to its own evidence.
+
+In the morning the table returns with the same dust, the same spoon, the same saucer, and the same ring, but the opening has been crossed by what the room kept."""
+    write_test_packet_artifact(
+        candidate_dir,
+        run_id=run_id,
+        artifact_type="macro_recomposed_candidate_text",
+        payload={
+            "packet_id": "packet_0063",
+            "packet_dir": str(candidate_dir),
+            "bounded_macro_recomposition": True,
+            "text": candidate_text,
+            "text_sha256": sha256_text(candidate_text),
+            "word_count": len(candidate_text.split()),
+            "candidate_generated": False,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+        },
+    )
+    return candidate_dir
+
+
 def test_checkpoint_strategy_direction_review_accepts_proof_no_answer_direction(
     tmp_path,
 ):
@@ -17665,6 +17765,258 @@ def test_checkpoint_strategy_direction_review_refusal_invariants(tmp_path):
             run_id=run_id,
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
+    assert finalization.refused is True
+
+
+def test_direction_review_residual_target_selection_accepts_proof_no_answer(
+    tmp_path,
+):
+    config, strategy_packet, run_id = build_checkpoint_strategy_direction_ready_chain(
+        tmp_path
+    )
+    direction = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+    assert direction.exit_code == 0
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_target_selection(
+        config,
+        direction_review_packet=Path(str(direction.payload["packet_dir"])),
+        target=PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selection_source_kind"] == (
+        "checkpoint_strategy_direction_review"
+    )
+    assert result.payload["source_direction_review_packet_id"] == direction.payload[
+        "packet_id"
+    ]
+    assert result.payload["source_strategy_packet_id"] == strategy_packet.name
+    assert result.payload["source_architecture_checkpoint_packet_id"] == direction.payload[
+        "source_architecture_checkpoint_packet_id"
+    ]
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["selected_residual_target_id"] == (
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    )
+    assert result.payload["next_allowed_action"] == (
+        "prepare_proof_no_answer_residue_work_order"
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["next_strategy_or_work_order_authorized"] is True
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_phase_shift_claim"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    manifest = read_payload(packet_dir / "residual_target_selection_subject_manifest.json")
+    assert manifest["source_direction_review_packet_id"] == direction.payload["packet_id"]
+    assert manifest["current_best_candidate_packet_id"] == "packet_0063"
+    contract = read_payload(packet_dir / "selected_residual_target_contract.json")
+    assert contract["work_order_adapter"] == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    assert "proof/no-answer pressure embodied" in contract[
+        "target_mechanism_description"
+    ]
+    protected = read_payload(packet_dir / "protected_effects_and_forbidden_changes.json")
+    assert any("packet_0063" in item for item in protected["protected_effects"])
+    assert any("packet_0034" in item for item in protected["protected_effects"])
+    assert any("packet_0013" in item for item in protected["protected_effects"])
+    assert "rival imitation" in protected["forbidden_changes"]
+    scope = read_payload(packet_dir / "next_work_order_scope.json")
+    assert scope["next_allowed_action"] == "prepare_proof_no_answer_residue_work_order"
+    assert scope["candidate_generation_authorized"] is False
+
+    missing_review = run_residual_target_selection(
+        config,
+        direction_review_packet=Path(str(direction.payload["packet_dir"])),
+        target=PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+        operator_reviewed=False,
+    )
+    assert missing_review.exit_code == 1
+    assert "--operator-reviewed" in missing_review.payload["message"]
+
+    invalid_direction_packet = tmp_path / "invalid_direction_selected_other"
+    shutil.copytree(Path(str(direction.payload["packet_dir"])), invalid_direction_packet)
+
+    def _select_other(payload):
+        payload["selected_checkpoint_direction_id"] = "local_busyness_decorative_detail_risk"
+
+    rewrite_payload(
+        invalid_direction_packet / "checkpoint_strategy_direction_review_packet.json",
+        _select_other,
+    )
+    wrong_direction = run_residual_target_selection(
+        config,
+        direction_review_packet=invalid_direction_packet,
+        target=PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert wrong_direction.exit_code == 1
+    assert "different direction" in wrong_direction.payload["message"]
+
+    for blocked_target in (
+        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        OBJECT_MOTION_CAUSALITY_TARGET_ID,
+        TACTILE_INEVITABILITY_TARGET_ID,
+        "rival_level_first_read_vividness",
+    ):
+        blocked = run_residual_target_selection(
+            config,
+            direction_review_packet=Path(str(direction.payload["packet_dir"])),
+            target=blocked_target,
+            operator_reviewed=True,
+        )
+        assert blocked.exit_code == 1
+        assert blocked.payload["model_calls"] == 0
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_proof_no_answer_work_order_uses_proof_region_and_aliases(tmp_path):
+    config, strategy_packet, run_id = build_checkpoint_strategy_direction_ready_chain(
+        tmp_path
+    )
+    write_checkpoint_fixture_current_best_candidate(config, run_id)
+    direction = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+    selection = run_residual_target_selection(
+        config,
+        direction_review_packet=Path(str(direction.payload["packet_dir"])),
+        target=PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert selection.exit_code == 0
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_work_order_planning(
+        config,
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["selected_residual_target_id"] == (
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    )
+    assert result.payload["target_adapter_id"] == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    assert result.payload["selected_region_id"] == PROOF_NO_ANSWER_REGION_ID
+    assert result.payload["target_unit_count"] > 0
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["candidate_generation_authorized"] is False
+    assert result.payload["future_generation_authorized"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["next_recommended_action"] == (
+        "review_proof_no_answer_residue_work_order_before_generation_authorization"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert_residual_target_aliases(packet_dir, PROOF_NO_ANSWER_RESIDUE_TARGET_ID)
+    selected_region = read_payload(packet_dir / "selected_intervention_region.json")
+    selected_region_text = " ".join(
+        selected_region["selected_region_before_text"].split()
+    )
+    assert selected_region["selected_region_id"] == PROOF_NO_ANSWER_REGION_ID
+    assert "proof/no-outside-answer region is the editable planning scope" in (
+        selected_region["selection_reason"]
+    )
+
+    unit_map = read_payload(packet_dir / "target_unit_map.json")
+    assert unit_map["selected_region_id"] == PROOF_NO_ANSWER_REGION_ID
+    assert unit_map["unit_map_kind"] == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    assert unit_map["generation_contract_version"] == (
+        PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+    )
+    assert unit_map["materiality_policy_id"] == (
+        PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID
+    )
+    unit_ids = {unit["unit_id"] for unit in unit_map["target_units"]}
+    assert {
+        "no_outside_answer_embodied_in_room",
+        "sky_silence_without_thesis",
+        "line_bears_weight_without_abstraction",
+        "proof_stays_in_object_carry",
+        "answer_absence_registered_by_objects",
+    } <= unit_ids
+    for unit in unit_map["target_units"]:
+        assert unit["source_region_id"] == PROOF_NO_ANSWER_REGION_ID
+        assert unit["source_span"]["region_id"] == PROOF_NO_ANSWER_REGION_ID
+        assert unit["source_span"]["contained_in_selected_region"] is True
+        assert " ".join(unit["before_text"].split()) in selected_region_text
+        assert unit["future_generation_authorized"] is False
+    protected_reference_ids = {
+        unit["reference_unit_id"] for unit in unit_map["protected_reference_units"]
+    }
+    assert {
+        "opening_table_field_reference",
+        "middle_recurrence_object_tactile_reference",
+        "final_return_opening_relation_reference",
+    } <= protected_reference_ids
+    for unit in unit_map["protected_reference_units"]:
+        assert unit["source_region_id"] != PROOF_NO_ANSWER_REGION_ID
+        assert unit["material_change_required"] is False
+        assert unit["future_generation_authorized"] is False
+
+    contract = read_payload(packet_dir / "future_generation_contract.json")
+    assert contract["generation_contract_version"] == (
+        PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+    )
+    assert contract["future_generation_requires_separate_authorization"] is True
+    assert contract["future_generation_authorized"] is False
+    assert "proof/no-answer pressure embodied" in contract[
+        "target_specific_reader_state_focus"
+    ]
+
+    preflight_payloads = {
+        artifact_type: read_payload(packet_dir / f"{artifact_type}.json")
+        for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES
+    }
+    assert semantic_preflight_failures_for_work_order(preflight_payloads) == []
+
+    gate = read_payload(packet_dir / "residual_work_order_gate_report.json")
+    gates = {item["gate_name"]: item for item in gate["gate_results"]}
+    assert gates["target_units_inside_selected_region"]["passed"] is True
+    assert gates["target_mechanism_distinct"]["passed"] is True
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
     assert finalization.refused is True
 
 

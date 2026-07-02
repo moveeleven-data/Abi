@@ -27,6 +27,7 @@ from abi.modules.residual_targets import (
     ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
     REPEATED_BROAD_TARGET_ID,
     ResidualTargetSpec,
     TACTILE_INEVITABILITY_TARGET_ID,
@@ -65,6 +66,18 @@ REQUIRED_STRATEGY_ARTIFACTS = (
     "next_target_strategy_packet",
 )
 
+REQUIRED_DIRECTION_REVIEW_ARTIFACTS = (
+    "source_strategy_intake_summary",
+    "source_checkpoint_intake_summary",
+    "selected_checkpoint_direction_contract",
+    "rejected_or_deferred_direction_options",
+    "proof_no_answer_residue_rationale",
+    "generation_lock_report",
+    "next_step_readiness_report",
+    "checkpoint_strategy_direction_gate_report",
+    "checkpoint_strategy_direction_review_packet",
+)
+
 NEXT_ALLOWED_ACTION = "prepare_object_motion_causality_specificity_work_order"
 CHECKPOINT_STALE_BLOCKED_TARGET_IDS = (
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
@@ -90,6 +103,12 @@ class ResidualTargetSelectionSubject:
     strategy_packet_artifact_id: str | None
     strategy_artifact_ids: dict[str, str]
     payloads: dict[str, dict[str, Any]]
+    direction_review_payloads: dict[str, dict[str, Any]]
+    selection_source_kind: str
+    direction_review_packet_dir: Path | None
+    direction_review_packet_id: str | None
+    direction_review_packet_artifact_id: str | None
+    direction_review_artifact_ids: dict[str, str]
     selected_target_id: str
     selected_option: dict[str, Any]
     target_spec: ResidualTargetSpec
@@ -99,36 +118,50 @@ class ResidualTargetSelectionSubject:
 def run_residual_target_selection(
     config: AbiConfig,
     *,
-    strategy_packet: Path | str,
+    strategy_packet: Path | str | None = None,
+    direction_review_packet: Path | str | None = None,
     target: str,
     operator_reviewed: bool,
 ) -> ResidualTargetSelectionResult:
     initialize_database(config)
-    strategy_packet_dir = _resolve_path(config, strategy_packet)
+    packet_dir_value = strategy_packet or direction_review_packet
+    source_packet_dir = _resolve_path(config, packet_dir_value) if packet_dir_value else config.root
+    if (strategy_packet is None) == (direction_review_packet is None):
+        return _refusal(
+            strategy_packet=source_packet_dir,
+            target=target,
+            message=(
+                "Residual target selection refused; provide exactly one of "
+                "--strategy-packet or --direction-review-packet."
+            ),
+        )
     if not operator_reviewed:
         return _refusal(
-            strategy_packet=strategy_packet_dir,
+            strategy_packet=source_packet_dir,
             target=target,
             message=(
                 "Residual target selection refused; --operator-reviewed is "
                 "required."
             ),
         )
-    if not strategy_packet_dir.exists() or not strategy_packet_dir.is_dir():
+    if not source_packet_dir.exists() or not source_packet_dir.is_dir():
         return _refusal(
-            strategy_packet=strategy_packet_dir,
+            strategy_packet=source_packet_dir,
             target=target,
             message=(
-                "Residual target selection refused; strategy packet directory "
-                f"not found: {strategy_packet_dir}"
+                "Residual target selection refused; source packet directory "
+                f"not found: {source_packet_dir}"
             ),
         )
 
     try:
-        subject = _load_subject(config, strategy_packet_dir, target)
+        if direction_review_packet is not None:
+            subject = _load_direction_review_subject(config, source_packet_dir, target)
+        else:
+            subject = _load_subject(config, source_packet_dir, target)
     except ValueError as error:
         return _refusal(
-            strategy_packet=strategy_packet_dir,
+            strategy_packet=source_packet_dir,
             target=target,
             message=str(error),
         )
@@ -136,7 +169,7 @@ def run_residual_target_selection(
     with connect(config.db_path) as connection:
         if get_run(connection, subject.run_id) is None:
             return _refusal(
-                strategy_packet=strategy_packet_dir,
+                strategy_packet=source_packet_dir,
                 target=target,
                 message=(
                     "Residual target selection refused; run is not registered: "
@@ -373,11 +406,258 @@ def _load_subject(
         strategy_packet_artifact_id=packet_artifact.id if packet_artifact else None,
         strategy_artifact_ids=strategy_artifact_ids,
         payloads=payloads,
+        direction_review_payloads={},
+        selection_source_kind="strategy_packet",
+        direction_review_packet_dir=None,
+        direction_review_packet_id=None,
+        direction_review_packet_artifact_id=None,
+        direction_review_artifact_ids={},
         selected_target_id=target,
         selected_option=selected_option,
         target_spec=target_spec,
         source_parent_ids=tuple(parent_ids),
     )
+
+
+def _load_direction_review_subject(
+    config: AbiConfig,
+    direction_review_packet_dir: Path,
+    target: str,
+) -> ResidualTargetSelectionSubject:
+    direction_payloads = _load_direction_review_payloads(direction_review_packet_dir)
+    review_packet = direction_payloads["checkpoint_strategy_direction_review_packet"]
+    source_strategy_intake = direction_payloads["source_strategy_intake_summary"]
+    run_id = review_packet.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError(
+            "Residual target selection refused; direction review packet missing run_id."
+        )
+    if target != PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        raise ValueError(
+            "Residual target selection refused; checkpoint direction review can "
+            "only select proof_no_answer_residue for this planning path."
+        )
+    _validate_direction_review_payloads(direction_payloads, target=target)
+    strategy_dir_value = source_strategy_intake.get("source_strategy_packet_dir")
+    if not isinstance(strategy_dir_value, str) or not strategy_dir_value:
+        raise ValueError(
+            "Residual target selection refused; direction review packet missing "
+            "source strategy packet dir."
+        )
+    strategy_packet_dir = _resolve_path(config, strategy_dir_value)
+    if not strategy_packet_dir.exists() or not strategy_packet_dir.is_dir():
+        raise ValueError(
+            "Residual target selection refused; source strategy packet directory "
+            f"not found: {strategy_packet_dir}"
+        )
+    payloads = _load_required_payloads(strategy_packet_dir)
+    packet = payloads["next_target_strategy_packet"]
+    _validate_current_best_consistency(payloads)
+    strategy_packet_id = str(
+        review_packet.get("source_strategy_packet_id")
+        or packet.get("packet_id")
+        or strategy_packet_dir.name
+    )
+    if _strategy_marked_stale_by_latest_cleanup(config, run_id, strategy_packet_id):
+        raise ValueError(
+            "Residual target selection refused; source strategy packet is marked "
+            "stale by the latest loop-integrity cleanup checkpoint."
+        )
+    target_spec = get_residual_target_spec(target)
+    if target_spec is None:
+        raise ValueError(
+            "Residual target selection refused; selected target is unsupported "
+            f"by the residual target registry: {target}"
+        )
+    residual_map = payloads["residual_target_option_map"]
+    options = residual_map.get("specific_residual_options")
+    if not isinstance(options, list):
+        raise ValueError(
+            "Residual target selection refused; source strategy packet has no "
+            "residual options."
+        )
+    selected_option = _find_option(options, target) or _proof_direction_option(
+        direction_payloads
+    )
+    _validate_direction_strategy_consistency(
+        direction_payloads,
+        payloads,
+        target=target,
+    )
+
+    packet_path = strategy_packet_dir / "next_target_strategy_packet.json"
+    review_packet_path = (
+        direction_review_packet_dir / "checkpoint_strategy_direction_review_packet.json"
+    )
+    with connect(config.db_path) as connection:
+        packet_artifact = _artifact_for_path(connection, packet_path)
+        review_artifact = _artifact_for_path(connection, review_packet_path)
+    strategy_artifact_ids = _artifact_ids_from_packet(packet)
+    direction_artifact_ids = _artifact_ids_from_packet(review_packet)
+    parent_ids = _unique(
+        [
+            review_artifact.id if review_artifact else None,
+            packet_artifact.id if packet_artifact else None,
+            *direction_artifact_ids.values(),
+            *strategy_artifact_ids.values(),
+        ]
+    )
+    return ResidualTargetSelectionSubject(
+        run_id=run_id,
+        strategy_packet_dir=strategy_packet_dir,
+        strategy_packet_id=strategy_packet_id,
+        strategy_packet_artifact_id=packet_artifact.id if packet_artifact else None,
+        strategy_artifact_ids=strategy_artifact_ids,
+        payloads=payloads,
+        direction_review_payloads=direction_payloads,
+        selection_source_kind="checkpoint_strategy_direction_review",
+        direction_review_packet_dir=direction_review_packet_dir,
+        direction_review_packet_id=str(
+            review_packet.get("packet_id") or direction_review_packet_dir.name
+        ),
+        direction_review_packet_artifact_id=(
+            review_artifact.id if review_artifact else None
+        ),
+        direction_review_artifact_ids=direction_artifact_ids,
+        selected_target_id=target,
+        selected_option=selected_option,
+        target_spec=target_spec,
+        source_parent_ids=tuple(parent_ids),
+    )
+
+
+def _load_direction_review_payloads(packet_dir: Path) -> dict[str, dict[str, Any]]:
+    payloads: dict[str, dict[str, Any]] = {}
+    for artifact_type in REQUIRED_DIRECTION_REVIEW_ARTIFACTS:
+        path = packet_dir / f"{artifact_type}.json"
+        if not path.exists():
+            raise ValueError(
+                "Residual target selection refused; direction review packet "
+                f"missing {path.name}."
+            )
+        envelope = read_json_file(path)
+        if not isinstance(envelope, dict) or not isinstance(envelope.get("payload"), dict):
+            raise ValueError(
+                "Residual target selection refused; malformed direction review "
+                f"artifact: {path.name}."
+            )
+        payloads[artifact_type] = envelope["payload"]
+    return payloads
+
+
+def _validate_direction_review_payloads(
+    payloads: dict[str, dict[str, Any]],
+    *,
+    target: str,
+) -> None:
+    packet = payloads["checkpoint_strategy_direction_review_packet"]
+    contract = payloads["selected_checkpoint_direction_contract"]
+    lock = payloads["generation_lock_report"]
+    gate = payloads["checkpoint_strategy_direction_gate_report"]
+    selected = _first_string(
+        packet.get("selected_checkpoint_direction_id"),
+        contract.get("selected_checkpoint_direction_id"),
+        contract.get("direction_id"),
+    )
+    if selected != target:
+        raise ValueError(
+            "Residual target selection refused; direction review selected a "
+            f"different direction: {selected or '<missing>'}."
+        )
+    if packet.get("candidate_generated") is True or lock.get("candidate_generated") is True:
+        raise ValueError(
+            "Residual target selection refused; direction review already "
+            "generated a candidate."
+        )
+    if (
+        packet.get("generation_authorized") is True
+        or packet.get("next_generation_authorized") is True
+        or lock.get("generation_authorized") is True
+        or lock.get("next_generation_authorized") is True
+    ):
+        raise ValueError(
+            "Residual target selection refused; direction review authorizes "
+            "generation."
+        )
+    if packet.get("work_order_created") is True or lock.get("work_order_created") is True:
+        raise ValueError(
+            "Residual target selection refused; direction review already "
+            "created a work order."
+        )
+    if _has_final_or_phase_shift_claim(packet) or _has_final_or_phase_shift_claim(gate):
+        raise ValueError(
+            "Residual target selection refused; direction review carries a "
+            "finality or phase-shift claim."
+        )
+    expected_ids = {
+        "current_best_candidate_packet_id": "packet_0063",
+        "proof_packet_id": "packet_0034",
+        "reader_state_packet_id": "packet_0013",
+    }
+    for field, expected in expected_ids.items():
+        value = packet.get(field)
+        if value != expected:
+            raise ValueError(
+                "Residual target selection refused; direction review evidence "
+                f"chain mismatch for {field}: {value!r} != {expected!r}."
+            )
+
+
+def _validate_direction_strategy_consistency(
+    direction_payloads: dict[str, dict[str, Any]],
+    strategy_payloads: dict[str, dict[str, Any]],
+    *,
+    target: str,
+) -> None:
+    packet = direction_payloads["checkpoint_strategy_direction_review_packet"]
+    strategy_packet = strategy_payloads["next_target_strategy_packet"]
+    checks = (
+        "current_best_candidate_packet_id",
+        "proof_packet_id",
+        "reader_state_packet_id",
+    )
+    for field in checks:
+        if strategy_packet.get(field) != packet.get(field):
+            raise ValueError(
+                "Residual target selection refused; source strategy and "
+                f"direction review disagree on {field}."
+            )
+    if strategy_packet.get("candidate_generated") is True:
+        raise ValueError(
+            "Residual target selection refused; source strategy already generated "
+            "a candidate."
+        )
+    if strategy_packet.get("next_generation_authorized") is True:
+        raise ValueError(
+            "Residual target selection refused; source strategy authorizes generation."
+        )
+    if target in CHECKPOINT_STALE_BLOCKED_TARGET_IDS:
+        raise ValueError(
+            "Residual target selection refused; checkpoint direction review "
+            f"cannot revive blocked history or failed target: {target}."
+        )
+
+
+def _proof_direction_option(
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    packet = payloads["checkpoint_strategy_direction_review_packet"]
+    return {
+        "option_id": PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+        "status": "operator_reviewed_checkpoint_direction",
+        "available_for_operator_selection": False,
+        "requires_direction_review_chain": True,
+        "description": (
+            "Make proof/no-answer pressure more embodied while preserving current "
+            "best object/tactile and reader-state gains."
+        ),
+        "source_evidence_basis": [
+            f"direction review packet {packet.get('packet_id')}",
+            f"current best {packet.get('current_best_candidate_packet_id')}",
+            f"proof packet {packet.get('proof_packet_id')}",
+            f"reader-state packet {packet.get('reader_state_packet_id')}",
+        ],
+    }
 
 
 def _load_required_payloads(packet_dir: Path) -> dict[str, dict[str, Any]]:
@@ -640,9 +920,11 @@ def _build_subject_manifest(
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
+        "selection_source_kind": subject.selection_source_kind,
         "source_strategy_packet_id": subject.strategy_packet_id,
         "source_strategy_packet_dir": str(subject.strategy_packet_dir),
         "source_strategy_packet_artifact_id": subject.strategy_packet_artifact_id,
+        **_direction_review_selection_fields(subject),
         "current_best_candidate_packet_id": strategy_packet.get(
             "current_best_candidate_packet_id"
         ),
@@ -675,8 +957,10 @@ def _build_strategy_intake_summary(
     stale_report = _stale_current_best_reference_report(subject)
     return {
         "strategy_packet_consumed": True,
+        "selection_source_kind": subject.selection_source_kind,
         "strategy_packet_id": subject.strategy_packet_id,
         "strategy_packet_dir": str(subject.strategy_packet_dir),
+        **_direction_review_selection_fields(subject),
         "current_best_candidate_packet_id": packet.get("current_best_candidate_packet_id"),
         "proof_packet_id": packet.get("proof_packet_id"),
         "reader_state_packet_id": packet.get("reader_state_packet_id"),
@@ -706,6 +990,8 @@ def _build_available_residual_options_report(
     options = residual_map.get("specific_residual_options", [])
     return {
         "residual_options_loaded": True,
+        "selection_source_kind": subject.selection_source_kind,
+        **_direction_review_selection_fields(subject),
         "broad_blocker_class": _broad_blocker_class(subject),
         "option_count": len(options) if isinstance(options, list) else 0,
         "available_option_ids": [
@@ -729,6 +1015,8 @@ def _build_operator_residual_target_choice(
 ) -> dict[str, object]:
     return {
         "operator_reviewed": True,
+        "selection_source_kind": subject.selection_source_kind,
+        **_direction_review_selection_fields(subject),
         "selected_residual_target_id": subject.selected_target_id,
         "operator_selection_reason": _operator_selection_reason(subject),
         "broad_blocker_class": _broad_blocker_class(subject),
@@ -758,6 +1046,8 @@ def _build_selected_residual_target_contract(
     stale_report = _stale_current_best_reference_report(subject)
     return {
         "selected_residual_target_id": subject.selected_target_id,
+        "selection_source_kind": subject.selection_source_kind,
+        **_direction_review_selection_fields(subject),
         **stale_report,
         "target_definition": subject.target_spec.target_definition,
         "operational_definition": [
@@ -793,6 +1083,8 @@ def _build_protected_effects_and_forbidden_changes(
             *subject.target_spec.protected_effects,
         ],
         "forbidden_changes": list(subject.target_spec.forbidden_changes),
+        "selection_source_kind": subject.selection_source_kind,
+        **_direction_review_selection_fields(subject),
         **stale_report,
         "candidate_generated": False,
         "model_calls": 0,
@@ -808,6 +1100,8 @@ def _build_next_work_order_scope(
     stale_report = _stale_current_best_reference_report(subject)
     return {
         "selected_residual_target_id": subject.selected_target_id,
+        "selection_source_kind": subject.selection_source_kind,
+        **_direction_review_selection_fields(subject),
         "next_allowed_action": subject.target_spec.canonical_next_action,
         "work_order_review_action": subject.target_spec.review_action,
         "work_order_adapter": subject.target_spec.work_order_adapter,
@@ -911,6 +1205,8 @@ def _build_gate_report(
     return {
         "passed": False,
         "eligible": False,
+        "selection_source_kind": subject.selection_source_kind,
+        **_direction_review_selection_fields(subject),
         "finalization_eligible": False,
         "not_finalization_eligible": True,
         "not_human_validated": True,
@@ -967,7 +1263,12 @@ def _build_packet_summary(
             "model_calls": 0,
             "candidate_artifacts_created": 0,
         },
+        "selection_source_kind": subject.selection_source_kind,
+        **_direction_review_selection_fields(subject),
         "source_strategy_packet_id": subject.strategy_packet_id,
+        "source_architecture_checkpoint_packet_id": packet.get(
+            "architecture_checkpoint_packet_id"
+        ),
         "current_best_candidate_packet_id": packet.get("current_best_candidate_packet_id"),
         "proof_packet_id": packet.get("proof_packet_id"),
         "reader_state_packet_id": packet.get("reader_state_packet_id"),
@@ -1020,6 +1321,12 @@ def _result_payload(
             for artifact_type in artifacts
         },
         "counts": packet["counts"],
+        "selection_source_kind": subject.selection_source_kind,
+        **_direction_review_selection_fields(subject),
+        "source_strategy_packet_id": subject.strategy_packet_id,
+        "source_architecture_checkpoint_packet_id": packet.get(
+            "source_architecture_checkpoint_packet_id"
+        ),
         "current_best_candidate_packet_id": packet["current_best_candidate_packet_id"],
         "proof_packet_id": packet["proof_packet_id"],
         "reader_state_packet_id": packet["reader_state_packet_id"],
@@ -1044,6 +1351,12 @@ def _result_payload(
 
 
 def _operator_selection_reason(subject: ResidualTargetSelectionSubject) -> str:
+    if subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return (
+            "proof/no-answer residue was selected through an operator-reviewed "
+            "checkpoint direction review; it narrows the current blocker to "
+            "embodied no-outside-answer pressure without authorizing generation."
+        )
     if subject.selected_target_id == OBJECT_MOTION_CAUSALITY_TARGET_ID:
         return (
             "object motion causality specificity is narrower than the repeated "
@@ -1098,11 +1411,36 @@ def _same_broad_target_allowed(subject: ResidualTargetSelectionSubject) -> bool:
 def _selected_target_is_narrower_than_repeated_broad_target(
     subject: ResidualTargetSelectionSubject,
 ) -> bool:
+    if subject.selection_source_kind == "checkpoint_strategy_direction_review":
+        return subject.selected_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
     return (
         _repeated_broad_target_detected(subject)
         and subject.selected_target_id != _broad_blocker_class(subject)
         and _same_broad_target_allowed(subject) is False
     )
+
+
+def _direction_review_selection_fields(
+    subject: ResidualTargetSelectionSubject,
+) -> dict[str, object]:
+    if subject.selection_source_kind != "checkpoint_strategy_direction_review":
+        return {}
+    packet = subject.direction_review_payloads.get(
+        "checkpoint_strategy_direction_review_packet",
+        {},
+    )
+    return {
+        "source_direction_review_packet_id": subject.direction_review_packet_id,
+        "source_direction_review_packet_dir": str(subject.direction_review_packet_dir)
+        if subject.direction_review_packet_dir
+        else None,
+        "source_direction_review_packet_artifact_id": (
+            subject.direction_review_packet_artifact_id
+        ),
+        "source_direction_review_selected_checkpoint_direction_id": packet.get(
+            "selected_checkpoint_direction_id"
+        ),
+    }
 
 
 def _gate_result(
@@ -1207,6 +1545,7 @@ def _allowed_packet_references(subject: ResidualTargetSelectionSubject) -> set[s
     packet = subject.payloads["next_target_strategy_packet"]
     values = [
         subject.strategy_packet_id,
+        subject.direction_review_packet_id,
         packet.get("packet_id"),
         packet.get("current_best_candidate_packet_id"),
         packet.get("proof_packet_id"),
@@ -1219,6 +1558,20 @@ def _allowed_packet_references(subject: ResidualTargetSelectionSubject) -> set[s
         packet.get("loop_review_packet_id"),
         packet.get("source_loop_review_packet_id"),
     ]
+    direction_packet = subject.direction_review_payloads.get(
+        "checkpoint_strategy_direction_review_packet",
+        {},
+    )
+    values.extend(
+        [
+            direction_packet.get("packet_id"),
+            direction_packet.get("source_strategy_packet_id"),
+            direction_packet.get("source_architecture_checkpoint_packet_id"),
+            direction_packet.get("current_best_candidate_packet_id"),
+            direction_packet.get("proof_packet_id"),
+            direction_packet.get("reader_state_packet_id"),
+        ]
+    )
     current_best = packet.get("current_best_candidate")
     if isinstance(current_best, dict):
         values.append(current_best.get("packet_id"))
@@ -1319,6 +1672,15 @@ def _first_string(*values: object) -> str:
         if isinstance(value, str) and value:
             return value
     return ""
+
+
+def _has_final_or_phase_shift_claim(payload: dict[str, Any]) -> bool:
+    return bool(
+        payload.get("finalization_eligible") is True
+        or payload.get("phase_shift_claim") is True
+        or payload.get("no_phase_shift_claim") is False
+        or payload.get("no_final_claim") is False
+    )
 
 
 def _as_dict(value: object) -> dict[str, Any]:
