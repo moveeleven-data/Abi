@@ -17630,11 +17630,168 @@ In the morning the table returns with the same dust, the same spoon, the same sa
     return candidate_dir
 
 
+def write_checkpoint_fixture_source_chain(config: AbiConfig, run_id: str) -> None:
+    run_dir = config.run_dir(run_id)
+    candidate_dir = write_checkpoint_fixture_current_best_candidate(config, run_id)
+    candidate = read_payload(candidate_dir / "macro_recomposed_candidate_text.json")
+    candidate_sha = candidate["text_sha256"]
+    source_packets = [
+        ("pilot_artifact_set", "packet_0017", "pilot_packet"),
+        ("internal_reader_lab", "packet_0014", "internal_reader_lab_packet"),
+        ("autonomous_revision", "packet_0030", "autonomous_closed_loop_packet"),
+        ("ablation_informed_revision", "packet_0030", "cycle2_packet"),
+    ]
+    for packet_kind, packet_id, artifact_type in source_packets:
+        write_test_packet_artifact(
+            run_dir / packet_kind / packet_id,
+            run_id=run_id,
+            artifact_type=artifact_type,
+            payload={
+                "accepted": True,
+                "run_id": run_id,
+                "packet_id": packet_id,
+                "packet_dir": str(run_dir / packet_kind / packet_id),
+                "artifact_ids": {},
+                "client": "fake",
+                "fixture_only": False,
+                "finalization_eligible": False,
+                "not_finalization_eligible": True,
+                "no_phase_shift_claim": True,
+            },
+        )
+    write_test_packet_artifact(
+        candidate_dir,
+        run_id=run_id,
+        artifact_type="macro_recomposition_packet",
+        payload={
+            "accepted": True,
+            "run_id": run_id,
+            "packet_id": "packet_0063",
+            "packet_dir": str(candidate_dir),
+            "artifact_ids": {"macro_recomposed_candidate_text": "fixture_candidate"},
+            "candidate_text_sha256": candidate_sha,
+            "selected_repair_causal_status": "useful_but_insufficient",
+            "strongest_rival_pressure_remains_blocking": True,
+            "finalization_eligible": False,
+            "not_finalization_eligible": True,
+            "no_phase_shift_claim": True,
+        },
+    )
+    proof_dir = run_dir / "executed_ablation" / "packet_0034"
+    proof_payload = {
+        "accepted": True,
+        "run_id": run_id,
+        "packet_id": "packet_0034",
+        "packet_dir": str(proof_dir),
+        "artifact_ids": {},
+        "client": "openai",
+        "model_call_ids": ["model_call_fixture_proof_0034"],
+        "source_revision_packet_id": "packet_0063",
+        "source_revision_packet_kind": "bounded_macro_recomposition",
+        "source_revision_packet_dir": str(candidate_dir),
+        "selected_repair_causal_status": "useful_but_insufficient",
+        "repair_has_causal_support": True,
+        "revert_performs_same_or_better": False,
+        "comparison_internal_consistency": True,
+        "target_aware_ablation": True,
+        "target_role_consistency_checked": True,
+        "target_role_consistency_passed": True,
+        "strongest_rival_still_beats_candidate": True,
+        "finalization_eligible": False,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+    }
+    write_test_packet_artifact(
+        proof_dir,
+        run_id=run_id,
+        artifact_type="executed_ablation_packet",
+        payload=proof_payload,
+    )
+    write_test_packet_artifact(
+        proof_dir,
+        run_id=run_id,
+        artifact_type="ablation_causal_effect_report",
+        payload={
+            "selected_repair_causal_status": "useful_but_insufficient",
+            "selected_repair_appears_causal": True,
+            "strongest_rival_pressure_remains_blocking": True,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+        },
+    )
+    write_test_packet_artifact(
+        proof_dir,
+        run_id=run_id,
+        artifact_type="ablation_old_new_rival_comparison",
+        payload={
+            "repair_has_causal_support": True,
+            "revert_performs_same_or_better": False,
+            "strongest_rival_still_beats_candidate": True,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+        },
+    )
+    write_test_packet_artifact(
+        proof_dir,
+        run_id=run_id,
+        artifact_type="comparison_consistency_report",
+        payload={
+            "target_role_consistency_checked": True,
+            "target_role_consistency_passed": True,
+            "finalization_eligible": False,
+            "no_phase_shift_claim": True,
+        },
+    )
+    reader_dir = run_dir / "internal_reader_state_evaluation" / "packet_0013"
+    reader_payload = {
+        "accepted": True,
+        "run_id": run_id,
+        "packet_id": "packet_0013",
+        "packet_dir": str(reader_dir),
+        "artifact_ids": {},
+        "client": "openai",
+        "model_call_ids": ["model_call_fixture_reader_0013"],
+        "selected_candidate_packet_id": "packet_0063",
+        "evaluated_candidate_packet_id": "packet_0063",
+        "selected_candidate_packet_dir": str(candidate_dir),
+        "selected_candidate_text_sha256": candidate_sha,
+        "reread_transformation_strength": "partial",
+        "strongest_rival_still_blocks": True,
+        "finalization_eligible": False,
+        "not_finalization_eligible": True,
+        "no_phase_shift_claim": True,
+    }
+    write_test_packet_artifact(
+        reader_dir,
+        run_id=run_id,
+        artifact_type="internal_reader_state_eval_packet",
+        payload=reader_payload,
+    )
+    write_test_packet_artifact(
+        reader_dir,
+        run_id=run_id,
+        artifact_type="reread_reader_state_trace",
+        payload={"reread_transformation_strength": "partial"},
+    )
+    write_test_packet_artifact(
+        reader_dir,
+        run_id=run_id,
+        artifact_type="opening_return_transformation_report",
+        payload={"opening_return_transformation_strength": "partial"},
+    )
+    write_test_packet_artifact(
+        reader_dir,
+        run_id=run_id,
+        artifact_type="rival_reader_state_comparison",
+        payload={"strongest_rival_still_blocks": True},
+    )
+
+
 def build_proof_no_answer_residual_work_order_chain(tmp_path: Path) -> dict[str, object]:
     config, strategy_packet, run_id = build_checkpoint_strategy_direction_ready_chain(
         tmp_path
     )
-    write_checkpoint_fixture_current_best_candidate(config, run_id)
+    write_checkpoint_fixture_source_chain(config, run_id)
     direction = run_checkpoint_strategy_direction_review(
         config,
         strategy_packet=strategy_packet,
@@ -18610,6 +18767,222 @@ def test_proof_no_answer_overlap_reports_member_semantic_failure(
         "obligation passes"
     )
     assert result.payload["overlap_cluster_report"]["all_overlap_clusters_passed"] is False
+
+
+def test_autonomous_evidence_synthesis_pauses_failed_proof_no_answer_path(
+    tmp_path,
+):
+    chain, authorization_packet = authorize_proof_no_answer_residual_generation(
+        tmp_path
+    )
+    authorization_payload = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+
+    failed_results = []
+    for mode in (
+        "proof_object_carry_without_answer_absence",
+        "proof_packet_0071_like",
+    ):
+        result = run_residual_candidate_generation(
+            chain["config"],
+            client_name="openai",
+            authorization_packet=authorization_packet,
+            allow_live_model=True,
+            api_key="stub-key",
+            max_model_calls=1,
+            model="stub-proof-model",
+            client_factory=residual_intervention_stub_factory([], mode=mode),
+        )
+        assert result.exit_code == 1
+        assert result.payload["accepted"] is False
+        assert result.payload["authorization_consumed"] is False
+        assert result.payload["candidate_generated"] is False
+        assert result.payload["candidate_artifact_id"] is None
+        assert "macro_recomposed_candidate_text" not in result.payload["artifact_ids"]
+        failed_results.append(result)
+
+    budget = read_payload(authorization_packet / "generation_attempt_budget.json")
+    auth_packet = read_payload(
+        authorization_packet / "residual_generation_authorization_packet.json"
+    )
+    assert budget["authorization_consumed"] is False
+    assert auth_packet["authorization_consumed"] is False
+
+    synthesis = run_autonomous_evidence_synthesis(
+        chain["config"],
+        run_id=chain["run_id"],
+    )
+
+    assert synthesis.exit_code == 0
+    assert synthesis.payload["accepted"] is True
+    packet_dir = Path(str(synthesis.payload["packet_dir"]))
+
+    history = read_payload(packet_dir / "repair_history_table.json")
+    failed_rows = [
+        row
+        for row in history["repair_events"]
+        if row["packet_kind"] == "failed_residual_generation"
+        and row["selected_residual_target_id"] == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    ]
+    assert len(failed_rows) == 2
+    assert all(
+        row["source_authorization_packet_id"] == authorization_payload["packet_id"]
+        for row in failed_rows
+    )
+    assert all(
+        row["source_work_order_packet_id"] == chain["residual_work_order"]["packet_id"]
+        for row in failed_rows
+    )
+    assert all(row["selected_region_id"] == PROOF_NO_ANSWER_REGION_ID for row in failed_rows)
+    assert all(row["authorization_consumed"] is False for row in failed_rows)
+    assert all(row["candidate_generated"] is False for row in failed_rows)
+    assert all(row["candidate_artifact_id"] is None for row in failed_rows)
+    assert all(row["not_candidate_evidence"] is True for row in failed_rows)
+    assert all(row["ablation_authorized"] is False for row in failed_rows)
+    assert all(row["reader_state_evaluation_authorized"] is False for row in failed_rows)
+    failure_classes = {
+        failure_class
+        for row in failed_rows
+        for failure_class in row["failure_classes"]
+    }
+    assert "proof_no_answer_semantic_failure" in failure_classes
+    assert "answer_absence_object_registration_failure" in failure_classes
+    assert "proof_no_answer_overlap_semantic_obligation_failure" in failure_classes
+    assert "proof_no_answer_unit_materiality_failure" in failure_classes
+    assert "proof_no_answer_object_carry_embodiment_failure" in failure_classes
+    assert "no_outside_answer_sentence_polish_failure" in failure_classes
+
+    failed = read_payload(packet_dir / "failed_or_rejected_repairs.json")
+    summary = failed["proof_no_answer_failed_generation_path"]
+    assert summary["attempted"] is True
+    assert summary["failed_attempt_count"] == 2
+    assert summary["stop_test_triggered"] is True
+    assert summary["target_status"] == "paused_or_exhausted_pending_strategy_review"
+    assert summary["generation_retry_recommended"] is False
+    assert summary["next_recommended_action"] == (
+        "synthesize_failed_proof_no_answer_path_before_new_strategy"
+    )
+    assert summary["no_accepted_proof_no_answer_candidate_exists"] is True
+    assert summary["authorization_still_technically_unconsumed"] is True
+    assert summary["should_not_reuse_authorization_without_strategy_review"] is True
+    assert summary["source_authorization_packet_id"] == authorization_payload[
+        "packet_id"
+    ]
+    assert summary["source_work_order_packet_id"] == chain["residual_work_order"][
+        "packet_id"
+    ]
+    assert summary["base_candidate_packet_id"] == "packet_0063"
+    assert summary["proof_packet_id"] == "packet_0034"
+    assert summary["reader_state_packet_id"] == "packet_0013"
+    assert summary["repeated_answer_absence_object_registration_failure"] is True
+    assert summary["repeated_object_carry_embodiment_failure"] is True
+    assert summary["overlap_semantic_obligation_failure"] is True
+    assert summary["target_unit_under_materiality_on_latest_attempt"] is True
+
+    failed_packet_ids = {
+        Path(str(result.payload["packet_dir"])).name for result in failed_results
+    }
+    graph = read_payload(packet_dir / "candidate_evidence_graph.json")
+    assert failed_packet_ids.issubset(
+        set(graph["failed_residual_generation_packet_ids"])
+    )
+    assert failed_packet_ids.isdisjoint(set(graph["candidate_packet_ids"]))
+    assert all(
+        node["not_candidate_evidence"] is True
+        and node["ablation_authorized"] is False
+        and node["reader_state_evaluation_authorized"] is False
+        for node in graph["failed_residual_generation_nodes"]
+        if node["selected_residual_target_id"] == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    )
+
+    best = read_payload(packet_dir / "best_current_candidate_selection.json")
+    selected = best["selected_best_candidate"]
+    assert selected["packet_id"] == "packet_0063"
+    assert selected["packet_id"] == summary["base_candidate_packet_id"]
+    assert selected["packet_id"] not in failed_packet_ids
+    assert selected["proof_packet_id"] == "packet_0034"
+    assert selected["reader_state_packet_id"] == "packet_0013"
+    assert selected["selected_candidate_is_final"] is False
+    assert selected.get("no_phase_shift_claim", True) is True
+    assert selected.get("strongest_rival_still_blocks", True) is True
+
+    exhausted = read_payload(packet_dir / "exhausted_handle_report.json")
+    proof_handle = [
+        handle
+        for handle in exhausted["handles"]
+        if handle["handle"] == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    ][0]
+    assert proof_handle["status"] == "paused_or_exhausted_pending_strategy_review"
+    assert proof_handle["stop_test_triggered"] is True
+
+    blockers = read_payload(packet_dir / "residual_blocker_map.json")
+    assert blockers["proof_no_answer_stop_test_triggered"] is True
+    assert blockers["proof_no_answer_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert blockers["proof_no_answer_next_recommended_action"] == (
+        "synthesize_failed_proof_no_answer_path_before_new_strategy"
+    )
+
+    decision = read_payload(packet_dir / "strategic_decision_report.json")
+    assert decision["recommendation"] == (
+        "pause_proof_no_answer_generation_path_for_strategy_review"
+    )
+    assert decision["next_recommended_action"] == (
+        "synthesize_failed_proof_no_answer_path_before_new_strategy"
+    )
+    assert decision["proof_no_answer_retry_recommended"] is False
+    assert (
+        decision["proof_no_answer_generation_authorization_reuse_recommended"]
+        is False
+    )
+    assert decision["targeted_proof_no_outside_answer_recomposition_recommended"] is False
+    decision_text = json.dumps(decision)
+    assert "run_one_bounded_residual_intervention_generation" not in decision_text
+    assert "authorize another proof-no-answer generation" not in decision_text
+    assert "run_internal_reader_state_evaluation" not in decision_text
+    assert "finalize" not in decision_text
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    assert gate["proof_no_answer_failed_generation_path_adjudicated"] is True
+    assert gate["proof_no_answer_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert gate["finalization_eligible"] is False
+    assert gate["no_phase_shift_claim"] is True
+
+    synthesis_packet = read_payload(
+        packet_dir / "autonomous_evidence_synthesis_packet.json"
+    )
+    assert synthesis_packet["best_current_candidate"]["packet_id"] == "packet_0063"
+    assert synthesis_packet["best_current_candidate"]["proof_packet_id"] == "packet_0034"
+    assert synthesis_packet["best_current_candidate"]["reader_state_packet_id"] == (
+        "packet_0013"
+    )
+    assert synthesis_packet["proof_no_answer_failed_attempt_count"] == 2
+    assert synthesis_packet["proof_no_answer_target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
+    assert synthesis_packet["next_recommended_action"] == (
+        "synthesize_failed_proof_no_answer_path_before_new_strategy"
+    )
+    status = synthesis_packet["failed_target_status_map"][
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    ]
+    assert set(status["failed_packet_ids"]) == failed_packet_ids
+    assert status["generation_retry_recommended"] is False
+    assert status["failed_packets_are_not_candidate_evidence"] is True
+    assert synthesis_packet["finalization_eligible"] is False
+    assert synthesis_packet["no_phase_shift_claim"] is True
+
+    with connect(chain["config"].db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
 
 
 def test_proof_no_answer_strong_stub_passes_unit_and_overlap_validation(
