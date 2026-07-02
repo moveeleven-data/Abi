@@ -62,12 +62,25 @@ ARCHITECTURE_EVIDENCE_RISK_CHECKPOINT_ARTIFACT_TYPES = (
 
 HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
 ENDING_EXPLAINS_RETURN_RISK_TARGET_ID = "ending_explains_return_risk"
+PROOF_NO_ANSWER_RESIDUE_TARGET_ID = "proof_no_answer_residue"
 OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
 PAUSED_STATUS = "paused_or_exhausted_pending_strategy_review"
 NEXT_RECOMMENDED_ACTION = (
     "review_architecture_evidence_risk_checkpoint_before_next_target_strategy"
 )
 PACKET_ID_PATTERN = re.compile(r"\bpacket_\d{4}\b")
+FAILED_LOCAL_RESIDUAL_TARGET_IDS = (
+    HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
+    ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+)
+BASE_CHECKPOINT_PLAUSIBLE_DIRECTIONS = (
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    "local_busyness_decorative_detail_risk",
+    "rival_level_first_read_vividness",
+    "pause_local_residual_generation_for_architecture_consolidation",
+    "target_adapter_consolidation_before_more_generation",
+)
 
 
 @dataclass(frozen=True)
@@ -547,37 +560,16 @@ def _build_failed_target_memory_report(
     subject: ArchitectureEvidenceRiskSubject,
 ) -> dict[str, object]:
     status_map = _failed_target_status_map(subject.synthesis_payloads)
+    synthesis_packet = subject.synthesis_payloads["autonomous_evidence_synthesis_packet"]
     failed_targets = {}
-    for target_id in (
-        HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
-        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
-    ):
+    for target_id in FAILED_LOCAL_RESIDUAL_TARGET_IDS:
         status = status_map.get(target_id, {})
-        failed_targets[target_id] = {
-            "target_id": target_id,
-            "target_status": status.get("target_status") or PAUSED_STATUS,
-            "paused_or_exhausted": (
-                status.get("target_status") == PAUSED_STATUS
-                or bool(status.get("stop_test_triggered"))
-            ),
-            "generation_retry_recommended": False,
-            "failed_packet_ids": list(status.get("failed_packet_ids", []))
-            if isinstance(status.get("failed_packet_ids"), list)
-            else [],
-            "failure_classes": list(status.get("failure_classes", []))
-            if isinstance(status.get("failure_classes"), list)
-            else [],
-            "source_authorization_packet_id": status.get(
-                "source_authorization_packet_id"
-            ),
-            "source_work_order_packet_id": status.get("source_work_order_packet_id"),
-            "authorization_still_technically_unconsumed": True,
-            "should_not_reuse_authorization_without_strategy_review": True,
-            "candidate_generation_authorized": False,
-            "ablation_authorized_on_failed_packets": False,
-            "reader_state_evaluation_authorized_on_failed_packets": False,
-            "failed_packets_are_not_candidate_evidence": True,
-        }
+        if status:
+            failed_targets[target_id] = _checkpoint_failed_target_status(
+                target_id=target_id,
+                status=status,
+                source_synthesis_packet_id=synthesis_packet.get("packet_id"),
+            )
     authorization_reuse_warnings = [
         {
             "target_id": target_id,
@@ -603,8 +595,10 @@ def _build_failed_target_memory_report(
         "authorization_reuse_warnings": authorization_reuse_warnings,
         "hostile_scaffold_retry_recommended": False,
         "ending_return_retry_recommended": False,
+        "proof_no_answer_retry_recommended": False,
         "do_not_recommend_hostile_scaffold_generation": True,
         "do_not_recommend_ending_return_generation": True,
+        "do_not_recommend_proof_no_answer_generation": True,
         "not_candidate_evidence": True,
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
@@ -672,6 +666,18 @@ def _build_target_adapter_inventory(
                 "target_status": failed_status.get("target_status")
                 if failed_status
                 else "not_paused_by_checkpoint",
+                "generation_retry_recommended": False
+                if paused
+                else audit_row.get("generation_retry_recommended"),
+                "next_allowed_status": failed_status.get("next_allowed_status")
+                if failed_status
+                else None,
+                "failed_packet_ids": list(failed_status.get("failed_packet_ids", []))
+                if isinstance(failed_status.get("failed_packet_ids"), list)
+                else [],
+                "failed_packets_are_not_candidate_evidence": bool(
+                    failed_status.get("failed_packets_are_not_candidate_evidence")
+                ),
                 "available_for_immediate_selection": available_for_immediate_selection,
                 "available_for_generation": False,
                 "known_technical_debt_or_compatibility_notes": _target_notes(target_id),
@@ -687,6 +693,7 @@ def _build_target_adapter_inventory(
                 "tactile_inevitability_gap",
                 HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
                 ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+                PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
             )
         ),
         "target_adapter_contract_audit_passed": contract_audit.get("passed") is True,
@@ -696,6 +703,64 @@ def _build_target_adapter_inventory(
         "next_generation_authorized": False,
         "no_target_selected": True,
         "worker": "target_adapter_inventory_v1_controller",
+    }
+
+
+def _checkpoint_failed_target_status(
+    *,
+    target_id: str,
+    status: dict[str, Any],
+    source_synthesis_packet_id: object,
+) -> dict[str, object]:
+    failed_packet_ids = _string_list(
+        status.get("failed_packet_ids") or status.get("attempt_packet_ids")
+    )
+    target_status = _first_string(status.get("target_status"), PAUSED_STATUS)
+    stop_test = bool(
+        status.get("stop_test_triggered")
+        or status.get("paused_or_exhausted")
+        or target_status == PAUSED_STATUS
+    )
+    return {
+        "target_id": target_id,
+        "target_status": target_status,
+        "paused_or_exhausted": stop_test,
+        "attempted": bool(status.get("attempted", bool(failed_packet_ids))),
+        "failed_attempt_count": int(
+            status.get("failed_attempt_count") or len(failed_packet_ids)
+        ),
+        "failed_packet_ids": failed_packet_ids,
+        "attempt_packet_ids": failed_packet_ids,
+        "failure_classes": _string_list(status.get("failure_classes")),
+        "failure_classes_by_attempt": dict(
+            status.get("failure_classes_by_attempt", {})
+            if isinstance(status.get("failure_classes_by_attempt"), dict)
+            else {}
+        ),
+        "generation_retry_recommended": False,
+        "next_allowed_status": _first_string(
+            status.get("next_allowed_status"),
+            "strategy_review_only",
+        ),
+        "next_recommended_action": status.get("next_recommended_action"),
+        "stop_test_triggered": stop_test,
+        "source_authorization_packet_id": status.get(
+            "source_authorization_packet_id"
+        ),
+        "source_work_order_packet_id": status.get("source_work_order_packet_id"),
+        "source_synthesis_packet_id": status.get("source_synthesis_packet_id")
+        or source_synthesis_packet_id,
+        "authorization_still_technically_unconsumed": bool(
+            status.get("authorization_still_technically_unconsumed", True)
+        ),
+        "should_not_reuse_authorization_without_strategy_review": True,
+        "candidate_generation_authorized": False,
+        "available_for_operator_selection": False,
+        "broad_reuse_authorized": False,
+        "ablation_authorized_on_failed_packets": False,
+        "reader_state_evaluation_authorized_on_failed_packets": False,
+        "failed_packets_are_not_candidate_evidence": True,
+        "not_candidate_evidence": True,
     }
 
 
@@ -896,6 +961,11 @@ def _build_unresolved_creative_blocker_summary(
     ]
     reader_state = subject.synthesis_payloads["reader_state_evidence_adjudication"]
     failed_status = _failed_target_status_map(subject.synthesis_payloads)
+    failed_local_targets = [
+        target_id
+        for target_id in FAILED_LOCAL_RESIDUAL_TARGET_IDS
+        if target_id in failed_status
+    ]
     blockers = [
         {
             "blocker_id": "strongest_rival_still_blocks",
@@ -942,15 +1012,29 @@ def _build_unresolved_creative_blocker_summary(
             ).get("target_status", PAUSED_STATUS),
         },
     ]
+    if PROOF_NO_ANSWER_RESIDUE_TARGET_ID in failed_status:
+        blockers.append(
+            {
+                "blocker_id": "proof_no_answer_generation_path_failed",
+                "severity": "high",
+                "status": failed_status.get(
+                    PROOF_NO_ANSWER_RESIDUE_TARGET_ID, {}
+                ).get("target_status", PAUSED_STATUS),
+            }
+        )
     return {
         "current_best_candidate_packet_id": best.get("packet_id"),
         "current_best_is_final": False,
         "blockers": blockers,
         "blocker_count": len(blockers),
-        "failed_local_residual_generation_targets": [
-            HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
-            ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
-        ],
+        "failed_local_residual_generation_targets": failed_local_targets,
+        "local_residual_generation_failure_summary": (
+            "Local residual generation around the current packet_0063 evidence "
+            "path has repeatedly failed; strategy should move above local "
+            "residual retry before any further generation."
+        )
+        if failed_local_targets
+        else "No paused local residual generation paths are visible.",
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
         "worker": "unresolved_creative_blocker_summary_v1_controller",
@@ -961,7 +1045,13 @@ def _build_next_strategy_readiness_report(
     subject: ArchitectureEvidenceRiskSubject,
     failed_memory: dict[str, object],
 ) -> dict[str, object]:
-    del failed_memory
+    failed_targets = failed_memory.get("failed_targets", {})
+    failed_target_ids = set(failed_targets) if isinstance(failed_targets, dict) else set()
+    plausible_directions = [
+        direction
+        for direction in BASE_CHECKPOINT_PLAUSIBLE_DIRECTIONS
+        if direction not in failed_target_ids
+    ]
     return {
         "ready_for_next_target_strategy_review": bool(
             subject.authorization_packet.get("next_strategy_authorized")
@@ -979,12 +1069,10 @@ def _build_next_strategy_readiness_report(
             "after_review_strategy_planning_may_proceed_strategy_only",
         ],
         "plausible_remaining_strategic_directions": [
-            "proof_no_answer_residue",
-            "local_busyness_decorative_detail_risk",
-            "rival_level_first_read_vividness",
-            "pause local residual generation",
-            "architecture consolidation before more target work",
+            *plausible_directions,
+            "post_local_residual_strategy_synthesis",
         ],
+        "paused_or_exhausted_targets": sorted(failed_target_ids),
         "automatic_selection_performed": False,
         "next_recommended_action": NEXT_RECOMMENDED_ACTION,
         "finalization_eligible": False,
@@ -1152,6 +1240,7 @@ def _failed_target_status_map(
             "hostile_scaffold_failed_generation_path",
         ),
         (ENDING_EXPLAINS_RETURN_RISK_TARGET_ID, "ending_return_failed_generation_path"),
+        (PROOF_NO_ANSWER_RESIDUE_TARGET_ID, "proof_no_answer_failed_generation_path"),
     ):
         summary = failed_repairs.get(key)
         if isinstance(summary, dict) and summary.get("attempted"):
@@ -1159,7 +1248,12 @@ def _failed_target_status_map(
                 "target_id": target_id,
                 "target_status": summary.get("target_status"),
                 "failed_packet_ids": summary.get("attempt_packet_ids", []),
+                "attempt_packet_ids": summary.get("attempt_packet_ids", []),
+                "failed_attempt_count": summary.get("failed_attempt_count"),
                 "failure_classes": summary.get("failure_classes", []),
+                "failure_classes_by_attempt": summary.get(
+                    "failure_classes_by_attempt", {}
+                ),
                 "source_authorization_packet_id": summary.get(
                     "source_authorization_packet_id"
                 ),
@@ -1167,6 +1261,9 @@ def _failed_target_status_map(
                     "source_work_order_packet_id"
                 ),
                 "stop_test_triggered": summary.get("stop_test_triggered"),
+                "next_recommended_action": summary.get("next_recommended_action"),
+                "generation_retry_recommended": False,
+                "failed_packets_are_not_candidate_evidence": True,
             }
     return statuses
 
@@ -1353,6 +1450,16 @@ def _first_string(*values: object) -> str:
         if isinstance(value, str) and value:
             return value
     return ""
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    if isinstance(value, tuple):
+        return [str(item) for item in value if item]
+    if isinstance(value, str) and value:
+        return [value]
+    return []
 
 
 def _unique(values: object) -> list[str]:

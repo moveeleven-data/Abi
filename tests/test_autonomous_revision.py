@@ -1835,13 +1835,23 @@ def write_test_packet_artifact(
     return path
 
 
-def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Path, str]:
+def build_architecture_checkpoint_fixture(
+    tmp_path: Path,
+    *,
+    include_failed_proof_no_answer: bool = False,
+) -> tuple[AbiConfig, Path, str]:
     config = config_for(tmp_path)
     initialize_database(config)
     with connect(config.db_path) as connection:
         run = create_run(connection, config, created_at="2026-06-01T00:00:00+00:00")
     run_id = run.id
     run_dir = config.run_dir(run_id)
+    synthesis_packet_id = "packet_0039" if include_failed_proof_no_answer else "packet_0037"
+    loop_review_packet_id = "packet_0010" if include_failed_proof_no_answer else "packet_0009"
+    cleanup_packet_id = "packet_0007" if include_failed_proof_no_answer else "packet_0006"
+    authorization_packet_id = (
+        "packet_0007" if include_failed_proof_no_answer else "packet_0006"
+    )
 
     production_dir = tmp_path / "src" / "abi"
     production_dir.mkdir(parents=True)
@@ -1863,10 +1873,10 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
         newline="\n",
     )
 
-    synthesis_dir = run_dir / "autonomous_evidence_synthesis" / "packet_0037"
-    loop_review_dir = run_dir / "evidence_loop_review" / "packet_0009"
-    cleanup_dir = run_dir / "loop_integrity_cleanup" / "packet_0006"
-    authorization_dir = run_dir / "supervised_cycle_authorization" / "packet_0006"
+    synthesis_dir = run_dir / "autonomous_evidence_synthesis" / synthesis_packet_id
+    loop_review_dir = run_dir / "evidence_loop_review" / loop_review_packet_id
+    cleanup_dir = run_dir / "loop_integrity_cleanup" / cleanup_packet_id
+    authorization_dir = run_dir / "supervised_cycle_authorization" / authorization_packet_id
     legacy_dir = run_dir / "residual_work_order" / "packet_0012"
 
     failed_target_status_map = {
@@ -1889,6 +1899,39 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
             "stop_test_triggered": True,
         },
     }
+    proof_no_answer_failure_classes = [
+        "answer_absence_object_registration_failure",
+        "proof_no_answer_object_carry_embodiment_failure",
+        "proof_no_answer_overlap_semantic_obligation_failure",
+        "proof_no_answer_unit_materiality_failure",
+    ]
+    if include_failed_proof_no_answer:
+        failed_target_status_map[PROOF_NO_ANSWER_RESIDUE_TARGET_ID] = {
+            "target_id": PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+            "target_status": "paused_or_exhausted_pending_strategy_review",
+            "failed_packet_ids": ["packet_0071", "packet_0072"],
+            "attempt_packet_ids": ["packet_0071", "packet_0072"],
+            "failed_attempt_count": 2,
+            "failure_classes": proof_no_answer_failure_classes,
+            "failure_classes_by_attempt": {
+                "packet_0071": [
+                    "answer_absence_object_registration_failure",
+                    "proof_no_answer_unit_materiality_failure",
+                ],
+                "packet_0072": [
+                    "proof_no_answer_object_carry_embodiment_failure",
+                    "proof_no_answer_overlap_semantic_obligation_failure",
+                ],
+            },
+            "source_authorization_packet_id": authorization_packet_id,
+            "source_work_order_packet_id": "packet_0016",
+            "source_synthesis_packet_id": synthesis_packet_id,
+            "stop_test_triggered": True,
+            "next_allowed_status": "strategy_review_only",
+            "generation_retry_recommended": False,
+            "failed_packets_are_not_candidate_evidence": True,
+            "authorization_still_technically_unconsumed": True,
+        }
     selected_best_candidate = {
         "packet_id": "packet_0063",
         "packet_dir": str(run_dir / "bounded_macro_recomposition" / "packet_0063"),
@@ -1907,7 +1950,7 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
     synthesis_packet = {
         "accepted": True,
         "run_id": run_id,
-        "packet_id": "packet_0037",
+        "packet_id": synthesis_packet_id,
         "packet_dir": str(synthesis_dir),
         "artifact_ids": {},
         "best_current_candidate": selected_best_candidate,
@@ -1954,6 +1997,25 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
                 "source_authorization_packet_id": "packet_0005",
                 "source_work_order_packet_id": "packet_0013",
                 "stop_test_triggered": True,
+            },
+            "proof_no_answer_failed_generation_path": {
+                "attempted": include_failed_proof_no_answer,
+                "target_id": PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+                "target_status": "paused_or_exhausted_pending_strategy_review",
+                "attempt_packet_ids": ["packet_0071", "packet_0072"]
+                if include_failed_proof_no_answer
+                else [],
+                "failed_attempt_count": 2 if include_failed_proof_no_answer else 0,
+                "failure_classes": proof_no_answer_failure_classes
+                if include_failed_proof_no_answer
+                else [],
+                "source_authorization_packet_id": authorization_packet_id,
+                "source_work_order_packet_id": "packet_0016",
+                "source_synthesis_packet_id": synthesis_packet_id,
+                "stop_test_triggered": include_failed_proof_no_answer,
+                "next_allowed_status": "strategy_review_only",
+                "generation_retry_recommended": False,
+                "failed_packets_are_not_candidate_evidence": True,
             },
         },
         "reader_state_evidence_adjudication": {
@@ -2026,9 +2088,9 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
     loop_review_packet = {
         "accepted": True,
         "run_id": run_id,
-        "packet_id": "packet_0009",
+        "packet_id": loop_review_packet_id,
         "packet_dir": str(loop_review_dir),
-        "source_synthesis_packet_id": "packet_0037",
+        "source_synthesis_packet_id": synthesis_packet_id,
         "source_synthesis_packet_dir": str(synthesis_dir),
         "artifact_ids": {},
         "finalization_eligible": False,
@@ -2037,7 +2099,7 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
     loop_review_payloads = {
         "evidence_loop_review_subject_manifest": {
             "run_id": run_id,
-            "source_synthesis_packet_id": "packet_0037",
+            "source_synthesis_packet_id": synthesis_packet_id,
             "source_synthesis_packet_dir": str(synthesis_dir),
         },
         "completed_cycle_map": {
@@ -2086,11 +2148,11 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
     cleanup_packet = {
         "accepted": True,
         "run_id": run_id,
-        "packet_id": "packet_0006",
+        "packet_id": cleanup_packet_id,
         "packet_dir": str(cleanup_dir),
-        "source_synthesis_packet_id": "packet_0037",
+        "source_synthesis_packet_id": synthesis_packet_id,
         "source_synthesis_packet_dir": str(synthesis_dir),
-        "source_loop_review_packet_id": "packet_0009",
+        "source_loop_review_packet_id": loop_review_packet_id,
         "source_loop_review_packet_dir": str(loop_review_dir),
         "loop_integrity_cleanup_completed": True,
         "ready_for_supervised_strategy_authorization": True,
@@ -2102,18 +2164,18 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
     cleanup_payloads = {
         "loop_integrity_cleanup_subject_manifest": {
             "run_id": run_id,
-            "source_synthesis_packet_id": "packet_0037",
-            "source_loop_review_packet_id": "packet_0009",
+            "source_synthesis_packet_id": synthesis_packet_id,
+            "source_loop_review_packet_id": loop_review_packet_id,
         },
         "loop_review_intake_summary": {
-            "source_loop_review_packet_id": "packet_0009",
-            "source_synthesis_packet_id": "packet_0037",
+            "source_loop_review_packet_id": loop_review_packet_id,
+            "source_synthesis_packet_id": synthesis_packet_id,
         },
         "active_evidence_state_checkpoint": {
             "run_id": run_id,
-            "source_synthesis_packet_id": "packet_0037",
+            "source_synthesis_packet_id": synthesis_packet_id,
             "source_synthesis_packet_dir": str(synthesis_dir),
-            "source_loop_review_packet_id": "packet_0009",
+            "source_loop_review_packet_id": loop_review_packet_id,
             "source_loop_review_packet_dir": str(loop_review_dir),
             "current_best_candidate_packet_id": "packet_0063",
             "proof_packet_id": "packet_0034",
@@ -2153,14 +2215,14 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
     authorization_packet = {
         "accepted": True,
         "run_id": run_id,
-        "packet_id": "packet_0006",
+        "packet_id": authorization_packet_id,
         "packet_dir": str(authorization_dir),
         "decision": "authorize_next_strategy_only",
-        "source_loop_cleanup_packet_id": "packet_0006",
+        "source_loop_cleanup_packet_id": cleanup_packet_id,
         "source_loop_cleanup_packet_dir": str(cleanup_dir),
-        "source_loop_review_packet_id": "packet_0009",
+        "source_loop_review_packet_id": loop_review_packet_id,
         "source_loop_review_packet_dir": str(loop_review_dir),
-        "source_synthesis_packet_id": "packet_0037",
+        "source_synthesis_packet_id": synthesis_packet_id,
         "source_synthesis_packet_dir": str(synthesis_dir),
         "current_best_candidate_packet_id": "packet_0063",
         "proof_packet_id": "packet_0034",
@@ -2176,23 +2238,23 @@ def build_architecture_checkpoint_fixture(tmp_path: Path) -> tuple[AbiConfig, Pa
     authorization_payloads = {
         "supervised_cycle_authorization_subject_manifest": {
             "run_id": run_id,
-            "source_loop_cleanup_packet_id": "packet_0006",
+            "source_loop_cleanup_packet_id": cleanup_packet_id,
             "source_loop_cleanup_packet_dir": str(cleanup_dir),
-            "source_loop_review_packet_id": "packet_0009",
+            "source_loop_review_packet_id": loop_review_packet_id,
             "source_loop_review_packet_dir": str(loop_review_dir),
-            "source_synthesis_packet_id": "packet_0037",
+            "source_synthesis_packet_id": synthesis_packet_id,
             "source_synthesis_packet_dir": str(synthesis_dir),
         },
         "loop_review_intake_summary": {
-            "source_loop_review_packet_id": "packet_0009",
-            "source_synthesis_packet_id": "packet_0037",
+            "source_loop_review_packet_id": loop_review_packet_id,
+            "source_synthesis_packet_id": synthesis_packet_id,
         },
         "operator_review_record": {
             "operator_reviewed": True,
             "decision": "authorize_next_strategy_only",
         },
         "cleanup_resolution_report": {
-            "source_loop_cleanup_packet_id": "packet_0006",
+            "source_loop_cleanup_packet_id": cleanup_packet_id,
             "current_best_candidate_packet_id": "packet_0063",
             "proof_packet_id": "packet_0034",
             "reader_state_packet_id": "packet_0013",
@@ -17077,7 +17139,10 @@ def test_loop_integrity_cleanup_accepts_completed_residual_cycle(tmp_path):
 
 
 def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
-    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(tmp_path)
+    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(
+        tmp_path,
+        include_failed_proof_no_answer=True,
+    )
     alias_dir = config.run_dir(run_id) / "residual_work_order" / "packet_0014"
     write_test_packet_artifact(
         alias_dir,
@@ -17148,10 +17213,10 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
     assert result.payload["proof_packet_id"] == "packet_0034"
     assert result.payload["reader_state_packet_id"] == "packet_0013"
-    assert result.payload["source_synthesis_packet_id"] == "packet_0037"
-    assert result.payload["source_loop_review_packet_id"] == "packet_0009"
-    assert result.payload["source_cleanup_packet_id"] == "packet_0006"
-    assert result.payload["source_authorization_packet_id"] == "packet_0006"
+    assert result.payload["source_synthesis_packet_id"] == "packet_0039"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0010"
+    assert result.payload["source_cleanup_packet_id"] == "packet_0007"
+    assert result.payload["source_authorization_packet_id"] == "packet_0007"
     assert result.payload["next_strategy_authorized"] is True
     assert result.payload["next_generation_authorized"] is False
     assert result.payload["candidate_generated"] is False
@@ -17175,10 +17240,10 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert chain["current_best_candidate_packet_id"] == "packet_0063"
     assert chain["proof_packet_id"] == "packet_0034"
     assert chain["reader_state_packet_id"] == "packet_0013"
-    assert chain["source_synthesis_packet_id"] == "packet_0037"
-    assert chain["source_loop_review_packet_id"] == "packet_0009"
-    assert chain["source_cleanup_packet_id"] == "packet_0006"
-    assert chain["source_authorization_packet_id"] == "packet_0006"
+    assert chain["source_synthesis_packet_id"] == "packet_0039"
+    assert chain["source_loop_review_packet_id"] == "packet_0010"
+    assert chain["source_cleanup_packet_id"] == "packet_0007"
+    assert chain["source_authorization_packet_id"] == "packet_0007"
     assert chain["next_strategy_authorized"] is True
     assert chain["next_generation_authorized"] is False
     assert chain["candidate_generated"] is False
@@ -17187,14 +17252,32 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     failed_memory = read_payload(packet_dir / "failed_target_memory_report.json")
     hostile = failed_memory["failed_targets"][CHECKPOINT_HOSTILE_TARGET_ID]
     ending = failed_memory["failed_targets"][CHECKPOINT_ENDING_TARGET_ID]
+    proof = failed_memory["failed_targets"][PROOF_NO_ANSWER_RESIDUE_TARGET_ID]
+    assert set(failed_memory["failed_targets"]) == {
+        CHECKPOINT_HOSTILE_TARGET_ID,
+        CHECKPOINT_ENDING_TARGET_ID,
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    }
     assert hostile["paused_or_exhausted"] is True
     assert hostile["generation_retry_recommended"] is False
     assert hostile["candidate_generation_authorized"] is False
     assert hostile["failed_packets_are_not_candidate_evidence"] is True
     assert ending["paused_or_exhausted"] is True
     assert ending["generation_retry_recommended"] is False
+    assert proof["paused_or_exhausted"] is True
+    assert proof["failed_attempt_count"] == 2
+    assert proof["failed_packet_ids"] == ["packet_0071", "packet_0072"]
+    assert proof["target_status"] == "paused_or_exhausted_pending_strategy_review"
+    assert proof["next_allowed_status"] == "strategy_review_only"
+    assert proof["generation_retry_recommended"] is False
+    assert proof["failed_packets_are_not_candidate_evidence"] is True
+    assert proof["source_authorization_packet_id"] == "packet_0007"
+    assert proof["source_work_order_packet_id"] == "packet_0016"
+    assert proof["source_synthesis_packet_id"] == "packet_0039"
+    assert proof["stop_test_triggered"] is True
     assert failed_memory["hostile_scaffold_retry_recommended"] is False
     assert failed_memory["ending_return_retry_recommended"] is False
+    assert failed_memory["proof_no_answer_retry_recommended"] is False
 
     contract_audit = read_payload(packet_dir / "target_adapter_contract_audit.json")
     audit_rows = {row["target_id"]: row for row in contract_audit["targets"]}
@@ -17238,14 +17321,17 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
         "available_for_immediate_selection"
     ] is False
     assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["classification"] == (
-        "generation_ready_valid"
+        "paused_or_exhausted_but_contract_valid"
     )
     assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "current_run_usage_state"
-    ] == "direction_review_required"
+    ] == "paused_or_exhausted_current_run"
     assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "available_for_immediate_selection"
     ] is False
+    assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "explicit_override_required_before_reuse"
+    ] is True
     assert audit_rows[OBJECT_MOTION_CAUSALITY_TARGET_ID][
         "explicit_override_required_before_reuse"
     ] is True
@@ -17284,14 +17370,36 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
         "available_for_immediate_selection"
     ] is False
     assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "failed_or_paused_in_current_run"
+    ] is True
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "contract_audit_classification"
-    ] == "generation_ready_valid"
+    ] == "paused_or_exhausted_but_contract_valid"
     assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "current_run_usage_state"
-    ] == "direction_review_required"
+    ] == "paused_or_exhausted_current_run"
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["target_status"] == (
+        "paused_or_exhausted_pending_strategy_review"
+    )
     assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "available_for_immediate_selection"
     ] is False
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "available_for_generation"
+    ] is False
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "explicit_override_required_before_reuse"
+    ] is True
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "generation_retry_recommended"
+    ] is False
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["failed_packet_ids"] == [
+        "packet_0071",
+        "packet_0072",
+    ]
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
+        "failed_packets_are_not_candidate_evidence"
+    ] is True
     assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["planning_support"] is True
     assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["generation_support"] is True
     assert inventory["target_adapter_contract_audit_passed"] is True
@@ -17323,7 +17431,7 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     } >= {"allowed_history_discovery", "suspicious_run_specific_logic"}
 
     lock = read_payload(packet_dir / "generation_lock_and_authorization_audit.json")
-    assert lock["source_authorization_packet_id"] == "packet_0006"
+    assert lock["source_authorization_packet_id"] == "packet_0007"
     assert lock["next_strategy_authorized"] is True
     assert lock["next_generation_authorized"] is False
     assert lock["candidate_generated"] is False
@@ -17337,6 +17445,17 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert "strongest_rival_still_blocks" in {
         blocker["blocker_id"] for blocker in blockers["blockers"]
     }
+    assert "proof_no_answer_generation_path_failed" in {
+        blocker["blocker_id"] for blocker in blockers["blockers"]
+    }
+    assert set(blockers["failed_local_residual_generation_targets"]) == {
+        CHECKPOINT_HOSTILE_TARGET_ID,
+        CHECKPOINT_ENDING_TARGET_ID,
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    }
+    assert "move above local residual retry" in blockers[
+        "local_residual_generation_failure_summary"
+    ]
 
     readiness = read_payload(packet_dir / "next_strategy_readiness_report.json")
     assert readiness["ready_for_next_target_strategy_review"] is True
@@ -17344,6 +17463,12 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     assert readiness["candidate_generated"] is False
     assert readiness["target_selected"] is False
     assert "do_not_generate" in readiness["recommendations"]
+    assert PROOF_NO_ANSWER_RESIDUE_TARGET_ID not in readiness[
+        "plausible_remaining_strategic_directions"
+    ]
+    assert PROOF_NO_ANSWER_RESIDUE_TARGET_ID in readiness[
+        "paused_or_exhausted_targets"
+    ]
 
     gate = read_payload(packet_dir / "architecture_risk_gate_report.json")
     assert gate["passed"] is True
@@ -17430,7 +17555,10 @@ def test_architecture_evidence_risk_checkpoint_refuses_without_operator_review(
 
 
 def test_checkpoint_aware_next_target_strategy_consumes_checkpoint(tmp_path):
-    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(tmp_path)
+    config, authorization_packet, run_id = build_architecture_checkpoint_fixture(
+        tmp_path,
+        include_failed_proof_no_answer=True,
+    )
     checkpoint = run_architecture_evidence_risk_checkpoint(
         config,
         authorization_packet=authorization_packet,
@@ -17452,10 +17580,10 @@ def test_checkpoint_aware_next_target_strategy_consumes_checkpoint(tmp_path):
     assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
     assert result.payload["proof_packet_id"] == "packet_0034"
     assert result.payload["reader_state_packet_id"] == "packet_0013"
-    assert result.payload["source_synthesis_packet_id"] == "packet_0037"
-    assert result.payload["source_loop_review_packet_id"] == "packet_0009"
-    assert result.payload["source_loop_cleanup_packet_id"] == "packet_0006"
-    assert result.payload["source_authorization_packet_id"] == "packet_0006"
+    assert result.payload["source_synthesis_packet_id"] == "packet_0039"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0010"
+    assert result.payload["source_loop_cleanup_packet_id"] == "packet_0007"
+    assert result.payload["source_authorization_packet_id"] == "packet_0007"
     assert result.payload["architecture_checkpoint_packet_id"] == checkpoint.payload[
         "packet_id"
     ]
@@ -17488,29 +17616,44 @@ def test_checkpoint_aware_next_target_strategy_consumes_checkpoint(tmp_path):
     assert set(intake["failed_local_residual_generation_targets"]) == {
         CHECKPOINT_HOSTILE_TARGET_ID,
         CHECKPOINT_ENDING_TARGET_ID,
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
     }
 
     residual = read_payload(packet_dir / "residual_target_option_map.json")
     assert residual["primary_next_target"] == "checkpoint_review_required"
     assert residual["available_option_ids"] == []
     assert residual["checkpoint_plausible_direction_ids"] == [
-        "proof_no_answer_residue",
         "local_busyness_decorative_detail_risk",
         "rival_level_first_read_vividness",
         "pause_local_residual_generation_for_architecture_consolidation",
         "target_adapter_consolidation_before_more_generation",
+        "post_local_residual_strategy_synthesis",
+    ]
+    assert PROOF_NO_ANSWER_RESIDUE_TARGET_ID not in residual[
+        "checkpoint_plausible_direction_ids"
+    ]
+    assert PROOF_NO_ANSWER_RESIDUE_TARGET_ID in residual["failed_target_status_map"]
+    assert PROOF_NO_ANSWER_RESIDUE_TARGET_ID in residual[
+        "exhausted_or_attempted_target_ids"
     ]
     options = {
         option["option_id"]: option for option in residual["specific_residual_options"]
     }
     hostile = options[CHECKPOINT_HOSTILE_TARGET_ID]
     ending = options[CHECKPOINT_ENDING_TARGET_ID]
+    proof = options[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]
     assert hostile["available_for_operator_selection"] is False
     assert hostile["generation_retry_recommended"] is False
     assert hostile["candidate_generation_authorized"] is False
     assert ending["available_for_operator_selection"] is False
     assert ending["generation_retry_recommended"] is False
     assert ending["candidate_generation_authorized"] is False
+    assert proof["status"] == "paused_or_exhausted_pending_strategy_review"
+    assert proof["available_for_operator_selection"] is False
+    assert proof["generation_retry_recommended"] is False
+    assert proof["candidate_generation_authorized"] is False
+    assert proof["not_candidate_evidence"] is True
+    assert proof["failed_packet_ids"] == ["packet_0071", "packet_0072"]
     assert options[OBJECT_MOTION_CAUSALITY_TARGET_ID]["status"] == (
         "previously_integrated_current_best_path"
     )
@@ -17523,12 +17666,6 @@ def test_checkpoint_aware_next_target_strategy_consumes_checkpoint(tmp_path):
     assert options[TACTILE_INEVITABILITY_TARGET_ID][
         "available_for_operator_selection"
     ] is False
-    assert options["proof_no_answer_residue"]["status"] == (
-        "plausible_checkpoint_direction_requires_operator_review"
-    )
-    assert options["proof_no_answer_residue"][
-        "available_for_operator_selection"
-    ] is False
 
     strategy = read_payload(packet_dir / "next_intervention_strategy.json")
     assert strategy["recommended_action"] == (
@@ -17536,6 +17673,10 @@ def test_checkpoint_aware_next_target_strategy_consumes_checkpoint(tmp_path):
     )
     assert strategy["generation_allowed_by_this_packet"] is False
     assert "checkpoint-aware planning remains strategy-only" in strategy["strategy"]
+    assert PROOF_NO_ANSWER_RESIDUE_TARGET_ID not in strategy[
+        "checkpoint_plausible_direction_ids"
+    ]
+    assert PROOF_NO_ANSWER_RESIDUE_TARGET_ID in strategy["failed_target_status_map"]
 
     gate = read_payload(packet_dir / "next_target_strategy_gate_report.json")
     gate_results = {row["gate_name"]: row for row in gate["gate_results"]}

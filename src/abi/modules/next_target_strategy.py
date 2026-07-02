@@ -111,6 +111,7 @@ CHECKPOINT_PRIMARY_TARGET_ID = "checkpoint_review_required"
 CHECKPOINT_RECOMMENDED_ACTION = "review_checkpoint_aware_strategy_before_target_selection"
 HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID = "hostile_scaffold_visibility"
 ENDING_EXPLAINS_RETURN_RISK_TARGET_ID = "ending_explains_return_risk"
+PROOF_NO_ANSWER_RESIDUE_TARGET_ID = "proof_no_answer_residue"
 OBJECT_MOTION_CAUSALITY_TARGET_ID = "object_motion_causality_specificity"
 TACTILE_INEVITABILITY_TARGET_ID = "tactile_inevitability_gap"
 HOSTILE_SCAFFOLD_PAUSED_STATUS = "paused_or_exhausted_pending_strategy_review"
@@ -120,11 +121,12 @@ CURRENT_BEST_PATH_TARGET_IDS = (
     TACTILE_INEVITABILITY_TARGET_ID,
 )
 CHECKPOINT_ALLOWED_DIRECTION_IDS = (
-    "proof_no_answer_residue",
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
     "local_busyness_decorative_detail_risk",
     "rival_level_first_read_vividness",
     "pause_local_residual_generation_for_architecture_consolidation",
     "target_adapter_consolidation_before_more_generation",
+    "post_local_residual_strategy_synthesis",
 )
 
 RESIDUAL_TARGET_OPTIONS = (
@@ -1226,6 +1228,9 @@ def _failed_target_status_map_from_checkpoint(
     failed_targets = failed_memory.get("failed_targets")
     if not isinstance(failed_targets, dict):
         return {}
+    checkpoint_packet = checkpoint_payloads[
+        "architecture_evidence_risk_checkpoint_packet"
+    ]
     statuses: dict[str, dict[str, Any]] = {}
     for target_id, raw_status in failed_targets.items():
         if not isinstance(raw_status, dict):
@@ -1243,10 +1248,20 @@ def _failed_target_status_map_from_checkpoint(
             "failed_packet_ids": failed_packet_ids,
             "attempt_packet_ids": failed_packet_ids,
             "failure_classes": _string_list(raw_status.get("failure_classes")),
-            "failure_classes_by_attempt": {},
-            "stop_test_triggered": bool(raw_status.get("paused_or_exhausted")),
-            "next_recommended_action": FAILED_TARGET_NEXT_ALLOWED_STATUS,
-            "next_allowed_status": FAILED_TARGET_NEXT_ALLOWED_STATUS,
+            "failure_classes_by_attempt": dict(
+                raw_status.get("failure_classes_by_attempt", {})
+                if isinstance(raw_status.get("failure_classes_by_attempt"), dict)
+                else {}
+            ),
+            "stop_test_triggered": bool(
+                raw_status.get("stop_test_triggered")
+                or raw_status.get("paused_or_exhausted")
+            ),
+            "next_recommended_action": raw_status.get("next_recommended_action"),
+            "next_allowed_status": _first_string(
+                raw_status.get("next_allowed_status"),
+                FAILED_TARGET_NEXT_ALLOWED_STATUS,
+            ),
             "generation_retry_recommended": False,
             "available_for_operator_selection": False,
             "candidate_generation_authorized": False,
@@ -1257,9 +1272,9 @@ def _failed_target_status_map_from_checkpoint(
                 "source_authorization_packet_id"
             ),
             "source_work_order_packet_id": raw_status.get("source_work_order_packet_id"),
-            "source_checkpoint_packet_id": checkpoint_payloads[
-                "architecture_evidence_risk_checkpoint_packet"
-            ].get("packet_id"),
+            "source_synthesis_packet_id": raw_status.get("source_synthesis_packet_id")
+            or checkpoint_packet.get("source_synthesis_packet_id"),
+            "source_checkpoint_packet_id": checkpoint_packet.get("packet_id"),
         }
     return statuses
 
@@ -1327,6 +1342,37 @@ def _architecture_checkpoint_intake(subject: StrategySubject) -> dict[str, objec
         "finalization_eligible": False,
         "no_phase_shift_claim": True,
     }
+
+
+def _checkpoint_plausible_direction_ids(subject: StrategySubject) -> list[str]:
+    if subject.architecture_checkpoint_packet_id is None:
+        return []
+    failed_target_ids = set(subject.failed_target_status_map)
+    return [
+        direction_id
+        for direction_id in CHECKPOINT_ALLOWED_DIRECTION_IDS
+        if direction_id not in failed_target_ids
+    ]
+
+
+def _checkpoint_failed_targets_withheld(subject: StrategySubject) -> bool:
+    if subject.architecture_checkpoint_packet_id is None:
+        return True
+    if not subject.failed_target_status_map:
+        return False
+    plausible_direction_ids = set(_checkpoint_plausible_direction_ids(subject))
+    blocked_option_ids = set(subject.exhausted_or_attempted_target_ids) | set(
+        subject.failed_target_status_map
+    )
+    available_option_ids = {
+        option_id
+        for option_id, _description in RESIDUAL_TARGET_OPTIONS
+        if option_id not in blocked_option_ids
+    }
+    failed_target_ids = set(subject.failed_target_status_map)
+    return failed_target_ids.isdisjoint(
+        plausible_direction_ids | available_option_ids
+    )
 
 
 def _synthesis_only_refusal_message(
@@ -2195,7 +2241,9 @@ def _build_residual_target_option_map(subject: StrategySubject) -> dict[str, obj
             and option_id not in attempted
             and option_id not in failed_targets
         ],
-        "checkpoint_plausible_direction_ids": list(CHECKPOINT_ALLOWED_DIRECTION_IDS)
+        "checkpoint_plausible_direction_ids": _checkpoint_plausible_direction_ids(
+            subject
+        )
         if checkpoint_aware
         else [],
         "previously_integrated_current_best_path_target_ids": list(
@@ -2465,7 +2513,9 @@ def _build_next_intervention_strategy(
         "primary_next_subtarget": primary_next_subtarget,
         "architecture_checkpoint_reviewed": checkpoint_aware,
         "generation_locked_by_checkpoint": checkpoint_aware,
-        "checkpoint_plausible_direction_ids": list(CHECKPOINT_ALLOWED_DIRECTION_IDS)
+        "checkpoint_plausible_direction_ids": _checkpoint_plausible_direction_ids(
+            subject
+        )
         if checkpoint_aware
         else [],
         "repeated_target_detected": repeated,
@@ -2647,13 +2697,7 @@ def _build_gate_report(
                 _gate_result("generation_locked_by_architecture_checkpoint", True),
                 _gate_result(
                     "checkpoint_failed_targets_withheld_from_selection",
-                    all(
-                        target_id in subject.failed_target_status_map
-                        for target_id in (
-                            HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
-                            ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
-                        )
-                    ),
+                    _checkpoint_failed_targets_withheld(subject),
                 ),
                 _gate_result("checkpoint_unacceptable_hardcodes_absent", True),
             ]
