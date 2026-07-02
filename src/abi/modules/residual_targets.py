@@ -44,6 +44,7 @@ PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION = (
     "placeholder_proof_no_answer_planning_only_v1"
 )
 ENDING_RETURN_GENERATION_CONTRACT_VERSION = "1"
+PROOF_NO_ANSWER_GENERATION_CONTRACT_VERSION = "1"
 PLACEHOLDER_GENERATION_CONTRACT_VERSIONS = (
     "placeholder_1",
     ENDING_RETURN_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
@@ -63,6 +64,12 @@ PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID = (
 )
 ENDING_RETURN_MATERIALITY_POLICY_ID = "ending_return_risk_generation_materiality_v1"
 ENDING_RETURN_SEMANTIC_VALIDATOR_ID = "ending_return_risk_semantic_validator_v1"
+PROOF_NO_ANSWER_MATERIALITY_POLICY_ID = (
+    "proof_no_answer_residue_generation_materiality_v1"
+)
+PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID = (
+    "proof_no_answer_residue_semantic_validator_v1"
+)
 PLACEHOLDER_MATERIALITY_POLICY_IDS = (
     HOSTILE_SCAFFOLD_PLACEHOLDER_MATERIALITY_POLICY_ID,
     ENDING_RETURN_PLACEHOLDER_MATERIALITY_POLICY_ID,
@@ -77,6 +84,7 @@ TARGET_ARTIFACT_ALIAS_POLICY = {
 }
 GENERATION_READY_SEMANTIC_VALIDATOR_TARGET_IDS = (
     ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
 )
 CURRENT_BEST_PATH_TARGET_IDS = (
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
@@ -553,9 +561,10 @@ PROOF_NO_ANSWER_RESIDUE_SPEC = ResidualTargetSpec(
     generation_requires_separate_authorization=True,
     target_specific_ablation_controls=(
         "full_proof_no_answer_residue_intervention",
-        "revert_proof_no_answer_intervention_to_current_best",
+        "revert_proof_no_answer_residue_to_current_best",
         "isolate_object_carry_without_outside_answer",
         "abstract_proof_language_control",
+        "outside_answer_intrusion_control",
         "strongest_rival_comparison",
     ),
     target_specific_reader_state_focus=(
@@ -905,49 +914,87 @@ ENDING_RETURN_MATERIALITY_POLICY = ResidualMaterialityPolicy(
 )
 
 PROOF_NO_ANSWER_MATERIALITY_POLICY = ResidualMaterialityPolicy(
-    policy_id=PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID,
+    policy_id=PROOF_NO_ANSWER_MATERIALITY_POLICY_ID,
     policy_version="1",
-    primary_materiality_scope="whole_selected_region",
+    primary_materiality_scope="target_bearing_scope",
     whole_region_guard={
         "scope": "proof_no_outside_answer_region",
-        "planning_only": True,
-        "future_generation_requires_separate_authorization": True,
+        "exact_copy_fails": True,
+        "selected_region_copy_fails": True,
+        "enforce_primary_thresholds": False,
+        "do_not_enforce_global_ratio_floor": True,
+        "near_copy_guard": True,
+        "broad_rewrite_fails": True,
     },
     target_bearing_scope={
         "scope": "proof_no_outside_answer_region",
-        "diagnostic_only": True,
-        "planning_only": True,
+        "must_materially_reauthor_proof_no_answer_pressure": True,
+        "proof_must_remain_in_object_line_mark_or_carry": True,
+        "outside_answer_absence_must_be_registered_by_room_or_objects": True,
+        "sky_silence_must_not_become_thesis_or_doctrine": True,
+        "exact_copy_fails": True,
+        "selected_region_copy_fails": True,
+        "absolute_change_floor": 12,
+        "ratio_floor": 0.16,
+        "token_edit_distance_floor": 14,
+        "sequence_similarity_ceiling": 0.82,
+        "changed_sentence_floor": 2,
     },
     target_unit_scope={
         "scope": "proof_no_answer_target_unit",
-        "diagnostic_only": True,
-        "planning_only": True,
+        "material_change_required_per_unit": True,
+        "exact_copy_fails": True,
+        "selected_region_copy_fails": False,
+        "token_edit_distance_floor": 5,
+        "sequence_similarity_ceiling": 0.90,
+        "changed_sentence_floor": 1,
+        "one_light_phrase_swap_is_insufficient": True,
     },
     overlap_cluster_policy={
-        "planning_only": True,
-        "future_policy_required_before_generation": True,
+        "overlap_allowed": True,
+        "one_replacement_may_satisfy_multiple_units": True,
+        "validate_member_semantics_separately": True,
+        "cluster_copy_or_light_polish_fails": True,
+        "cluster_replacement_must_materially_reauthor_shared_source": True,
+        "semantic_obligations_remain_distinct": True,
     },
-    absolute_change_floor=0,
-    ratio_floor=0.0,
-    token_edit_distance_floor=0,
-    sequence_similarity_ceiling=1.0,
-    changed_sentence_floor=0,
+    absolute_change_floor=12,
+    ratio_floor=0.16,
+    token_edit_distance_floor=14,
+    sequence_similarity_ceiling=0.82,
+    changed_sentence_floor=2,
     protected_context_exemptions=(
         "opening table/dust/spoon/saucer/ring field remains protected reference material",
         "middle recurrence object/tactile gains remain protected reference material",
         "final-return/opening-return structure remains protected reference material",
     ),
     prompt_feedback=(
-        "proof/no-answer work is planning-only until a generation contract is implemented",
-        "future work must embody no-outside-answer pressure through object relation or reader encounter",
-        "do not add outside-answer or elder-presence explanation",
-        "do not amplify abstract proof thesis language",
-        "preserve object/tactile causal field and strongest-rival pressure",
+        "replace only the proof/no-outside-answer selected region",
+        "materially re-author the proof/no-answer residue rather than polishing sentences",
+        "make proof arrive through object relation, local pressure, line, mark, carry, or reader encounter",
+        "let answer absence register through objects or room pressure without supplying an outside answer",
+        "do not add outside-answer, elder-presence, revelation, or rescue explanation",
+        "keep sky/silence concrete; do not turn it into thesis, doctrine, or cosmic signage",
+        "preserve packet_0063 object/tactile field, current macro gains, and strongest-rival pressure",
+        "overlapping target units may share one replacement only if each semantic obligation passes separately",
     ),
     failure_report_fields=(
-        "planning_only_no_generation_contract",
-        "target_units_must_remain_inside_proof_no_answer_region",
-        "protected_reference_preservation_requirements",
+        "target_bearing_selected_region_materiality_failures",
+        "target_unit_materiality_failures",
+        "overlap_cluster_failures",
+        "proof_no_answer_embodiment_failures",
+        "outside_answer_intrusion_failures",
+        "sky_silence_thesis_failures",
+        "abstract_proof_language_failures",
+        "answer_absence_object_registration_failures",
+        "object_field_preservation_failures",
+        "protected_reference_preservation_failures",
+        "failed_path_retry_failures",
+        "rival_mimicry_failures",
+        "generic_vividness_failures",
+        "broad_rewrite_failures",
+        "finality_or_phase_shift_claim_failures",
+        "strongest_rival_defeat_claim_failures",
     ),
 )
 
@@ -1117,7 +1164,7 @@ PROOF_NO_ANSWER_RESIDUE_ADAPTER = ResidualTargetAdapter(
     target_id=PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
     target_spec_version=PROOF_NO_ANSWER_TARGET_SPEC_VERSION,
     work_order_contract_version=PROOF_NO_ANSWER_WORK_ORDER_CONTRACT_VERSION,
-    generation_contract_version=PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
+    generation_contract_version=PROOF_NO_ANSWER_GENERATION_CONTRACT_VERSION,
     canonical_work_order_action=PROOF_NO_ANSWER_RESIDUE_SPEC.canonical_next_action,
     review_action=PROOF_NO_ANSWER_RESIDUE_SPEC.review_action,
     work_order_adapter=PROOF_NO_ANSWER_RESIDUE_SPEC.work_order_adapter,
@@ -1125,14 +1172,15 @@ PROOF_NO_ANSWER_RESIDUE_ADAPTER = ResidualTargetAdapter(
     worker_role=WorkerRole.RESIDUAL_INTERVENTION_GENERATOR,
     prompt_contract_id=(
         "autonomous.residual_intervention_generation.v1."
-        "proof_no_answer_residue.placeholder"
+        "proof_no_answer_residue"
     ),
     prompt_instructions=(
-        "planning-only placeholder; do not generate from this adapter",
-        "future generation may replace only the proof/no-outside-answer region after separate authorization",
-        "make proof/no-answer pressure embodied rather than abstract",
-        "preserve outside-answer absence without explaining it",
-        "preserve opening, middle recurrence, final-return, object/tactile field, and rival-pressure references",
+        "replace only the proof/no-outside-answer region after separate authorization",
+        "materially re-author the selected region; do not satisfy the unit with sentence-polish variants",
+        "make proof/no-answer pressure embodied through object relation, local pressure, line, mark, carry, or reader encounter",
+        "preserve outside-answer absence without adding outside answer, elder-presence, revelation, or rescue",
+        "keep sky and silence concrete rather than thesis, doctrine, or cosmic signage",
+        "preserve opening, middle recurrence, final-return, object/tactile field, failed hostile/ending memories, and rival-pressure references",
         "do not imitate the rival, make finality claims, or make phase-shift claims",
     ),
     mechanism_contract=PROOF_NO_ANSWER_RESIDUE_SPEC.operational_definition,
@@ -1141,17 +1189,19 @@ PROOF_NO_ANSWER_RESIDUE_ADAPTER = ResidualTargetAdapter(
         PROOF_NO_ANSWER_RESIDUE_SPEC.target_specific_reader_state_focus
     ),
     stop_test_policy={
-        "cycle_kind": "proof_no_answer_residue_planning_placeholder",
-        "pause_action": "pause_until_generation_contract_implemented",
+        "cycle_kind": "proof_no_answer_residue_generation_handoff",
+        "pause_action": "pause_until_operator_authorizes_one_generation_attempt",
         "failure_conditions": [
             "proof/no-answer pressure becomes an abstract thesis",
             "outside-answer absence is resolved or explained",
             "object/tactile field weakens",
+            "failed hostile scaffold or ending-return paths are retried",
             "strongest-rival pressure is treated as defeated",
             "finality or phase-shift is claimed",
         ],
     },
     materiality_policy=PROOF_NO_ANSWER_MATERIALITY_POLICY,
+    semantic_validator_id=PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID,
 )
 
 RESIDUAL_TARGET_ADAPTERS = {
@@ -1744,6 +1794,36 @@ def target_generation_readiness_failures(target_id: str) -> list[str]:
         if adapter.semantic_validator_id != ENDING_RETURN_SEMANTIC_VALIDATOR_ID:
             failures.append(
                 "ending-return semantic validator is missing or stale: "
+                f"{adapter.semantic_validator_id or '<missing>'}"
+            )
+    if target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        required_fields = {
+            "target_bearing_selected_region_materiality_failures",
+            "target_unit_materiality_failures",
+            "overlap_cluster_failures",
+            "proof_no_answer_embodiment_failures",
+            "outside_answer_intrusion_failures",
+            "sky_silence_thesis_failures",
+            "abstract_proof_language_failures",
+            "answer_absence_object_registration_failures",
+            "object_field_preservation_failures",
+            "protected_reference_preservation_failures",
+            "failed_path_retry_failures",
+            "rival_mimicry_failures",
+            "generic_vividness_failures",
+            "broad_rewrite_failures",
+            "finality_or_phase_shift_claim_failures",
+            "strongest_rival_defeat_claim_failures",
+        }
+        missing = sorted(required_fields - set(adapter.materiality_policy.failure_report_fields))
+        if missing:
+            failures.append(
+                "proof/no-answer semantic validation contract is incomplete: "
+                + ", ".join(missing)
+            )
+        if adapter.semantic_validator_id != PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID:
+            failures.append(
+                "proof/no-answer semantic validator is missing or stale: "
                 f"{adapter.semantic_validator_id or '<missing>'}"
             )
     return failures
@@ -2341,6 +2421,202 @@ def replacement_ending_return_failures(
     )
     failures["object_field_preservation_failures"].extend(unit_engagement_failures)
     return {key: value for key, value in failures.items() if value}
+
+
+def proof_no_answer_mapping_failures(
+    payload: dict[str, object],
+    target_unit_ids: set[str],
+) -> list[str]:
+    failures = _residual_intervention_mapping_failures(payload, target_unit_ids)
+    notes = _joined_model_notes(payload)
+    if not _contains_any(notes, ("object", "room", "line", "mark", "carry", "keeps")):
+        failures.append("proof/no-answer mapping does not preserve object-carry proof")
+    if not _contains_any(notes, ("answer", "outside", "absence", "no-answer", "no answer")):
+        failures.append("proof/no-answer mapping does not preserve outside-answer absence")
+    return failures
+
+
+def replacement_proof_no_answer_failures(
+    *,
+    replacement_text: str,
+    selected_region_before_text: str,
+    target_units: list[dict[str, object]],
+    model_payload: dict[str, object],
+) -> dict[str, list[str]]:
+    replacement = replacement_text.strip()
+    lower = replacement.lower()
+    notes = _joined_model_notes(model_payload)
+    failures: dict[str, list[str]] = {
+        "proof_no_answer_embodiment_failures": [],
+        "outside_answer_intrusion_failures": [],
+        "sky_silence_thesis_failures": [],
+        "abstract_proof_language_failures": [],
+        "answer_absence_object_registration_failures": [],
+        "object_field_preservation_failures": [],
+        "protected_reference_preservation_failures": [],
+        "failed_path_retry_failures": [],
+        "rival_mimicry_failures": [],
+        "generic_vividness_failures": [],
+        "broad_rewrite_failures": [],
+        "finality_or_phase_shift_claim_failures": [],
+        "strongest_rival_defeat_claim_failures": [],
+    }
+    outside_answer_terms = (
+        "answer arrives",
+        "answer enters",
+        "answer comes from outside",
+        "outside answer",
+        "elder",
+        "revelation",
+        "rescue",
+        "solution from outside",
+        "finally answers",
+        "settles the question",
+    )
+    if _contains_any(lower, outside_answer_terms):
+        failures["outside_answer_intrusion_failures"].append(
+            "replacement introduces outside-answer, elder, revelation, rescue, or solution"
+        )
+    sky_thesis_terms = (
+        "the sky means",
+        "the silence means",
+        "the sky proves",
+        "the silence proves",
+        "cosmic",
+        "doctrine",
+        "universal law",
+    )
+    if _contains_any(lower, sky_thesis_terms):
+        failures["sky_silence_thesis_failures"].append(
+            "sky/silence becomes thesis, doctrine, or cosmic signage"
+        )
+    abstract_terms = (
+        "the proof is",
+        "this proves that",
+        "what this proves",
+        "the thesis",
+        "the meaning is",
+        "symbolizes",
+        "signifies",
+    )
+    if _contains_any(lower, abstract_terms):
+        failures["abstract_proof_language_failures"].append(
+            "proof/no-answer pressure is stated as thesis rather than carried"
+        )
+    object_terms_present = _terms_present(
+        lower,
+        (
+            "room",
+            "table",
+            "line",
+            "mark",
+            "thing",
+            "object",
+            "dust",
+            "spoon",
+            "saucer",
+            "ring",
+            "surface",
+        ),
+    )
+    carry_terms_present = _terms_present(
+        lower,
+        ("carry", "carries", "keeps", "kept", "holds", "held", "bears", "record"),
+    )
+    if len(object_terms_present) < 3 or not carry_terms_present:
+        failures["proof_no_answer_embodiment_failures"].append(
+            "proof is not carried by enough room/object/line/mark pressure"
+        )
+    if (
+        not _contains_any(lower, ("answer", "outside", "absence", "no answer", "no-answer"))
+        or len(object_terms_present) < 3
+    ):
+        failures["answer_absence_object_registration_failures"].append(
+            "answer absence is not registered through objects or room pressure"
+        )
+    if _contains_any(lower, ("hostile scaffold", "scaffold", "ending return", "return explains")):
+        failures["failed_path_retry_failures"].append(
+            "replacement retries failed hostile-scaffold or ending-return path"
+        )
+    if "rival" in lower:
+        failures["rival_mimicry_failures"].append(
+            "replacement mentions or mimics rival pressure"
+        )
+    if _contains_any(lower, ("strongest rival defeated", "beats the rival", "rival defeated")):
+        failures["strongest_rival_defeat_claim_failures"].append(
+            "replacement claims strongest-rival defeat"
+        )
+    if _contains_any(lower, ("final artifact", "finalization", "phase shift", "phase-shift")):
+        failures["finality_or_phase_shift_claim_failures"].append(
+            "replacement contains finality or phase-shift language"
+        )
+    if _contains_any(lower, HOSTILE_SUMMARY_COMPRESSION_TERMS):
+        failures["generic_vividness_failures"].append(
+            "replacement compresses proof/no-answer residue into summary or generic atmosphere"
+        )
+    if _word_count_for_validation(replacement) > max(
+        90,
+        int(_word_count_for_validation(selected_region_before_text) * 2.2),
+    ):
+        failures["broad_rewrite_failures"].append(
+            "replacement is too large for bounded proof/no-answer region"
+        )
+    if not _contains_any(notes, ("object", "room", "line", "mark", "carry", "keeps")):
+        failures["protected_reference_preservation_failures"].append(
+            "model notes do not preserve object-carry proof"
+        )
+    if not _contains_any(notes, ("answer", "outside", "absence", "no-answer", "no answer")):
+        failures["answer_absence_object_registration_failures"].append(
+            "model notes do not preserve outside-answer absence"
+        )
+    failures["object_field_preservation_failures"].extend(
+        _hostile_unit_engagement_failures(
+            replacement_lower=lower,
+            target_units=target_units,
+        )
+    )
+    return {key: value for key, value in failures.items() if value}
+
+
+def _residual_intervention_mapping_failures(
+    payload: dict[str, object],
+    target_unit_ids: set[str],
+) -> list[str]:
+    failures: list[str] = []
+    mappings = payload.get("target_unit_mappings")
+    if not isinstance(mappings, list) or not mappings:
+        return ["target_unit_mappings must not be empty"]
+    seen: set[str] = set()
+    for index, item in enumerate(mappings):
+        if not isinstance(item, dict):
+            failures.append(f"target_unit_mappings[{index}] must be an object")
+            continue
+        unit_id = str(item.get("target_unit_id") or "")
+        if unit_id not in target_unit_ids:
+            failures.append(f"invented or unsupported target unit: {unit_id}")
+        if unit_id in seen:
+            failures.append(f"duplicate target unit mapping: {unit_id}")
+        seen.add(unit_id)
+        for field in (
+            "before_text_sha256",
+            "mechanism_operation",
+            "material_relation_or_action",
+            "visible_consequence",
+            "intended_first_read_effect",
+        ):
+            if not str(item.get(field) or "").strip():
+                failures.append(f"{unit_id}.{field} must not be empty")
+        covered = {
+            str(value)
+            for value in item.get("covered_target_ids", [])
+            if isinstance(value, str)
+        }
+        if unit_id and unit_id not in covered:
+            failures.append(f"{unit_id}.covered_target_ids must include the unit id")
+    missing = sorted(target_unit_ids - seen)
+    if missing:
+        failures.append("missing target unit IDs: " + ", ".join(missing))
+    return failures
 
 
 def hostile_scaffold_mapping_failures(

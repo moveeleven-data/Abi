@@ -149,10 +149,13 @@ from abi.modules.residual_targets import (
     HOSTILE_SCAFFOLD_WORK_ORDER_CONTRACT_VERSION,
     OBJECT_MOTION_GENERATION_CONTRACT_VERSION,
     OBJECT_MOTION_WORK_ORDER_CONTRACT_VERSION,
+    PROOF_NO_ANSWER_GENERATION_CONTRACT_VERSION,
+    PROOF_NO_ANSWER_MATERIALITY_POLICY_ID,
     PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION,
     PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID,
     PROOF_NO_ANSWER_REGION_ID,
     PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID,
     PROOF_NO_ANSWER_WORK_ORDER_CONTRACT_VERSION,
     TACTILE_GENERATION_CONTRACT_VERSION,
     TACTILE_INEVITABILITY_TARGET_ID,
@@ -10244,13 +10247,20 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
         PROOF_NO_ANSWER_WORK_ORDER_CONTRACT_VERSION
     )
     assert proof_adapter.generation_contract_version == (
-        PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+        PROOF_NO_ANSWER_GENERATION_CONTRACT_VERSION
     )
     assert proof_adapter.materiality_policy.policy_id == (
-        PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID
+        PROOF_NO_ANSWER_MATERIALITY_POLICY_ID
     )
     assert proof_adapter.materiality_policy.primary_materiality_scope == (
-        "whole_selected_region"
+        "target_bearing_scope"
+    )
+    assert proof_adapter.semantic_validator_id == PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID
+    assert proof_adapter.prompt_contract_id == (
+        "autonomous.residual_intervention_generation.v1.proof_no_answer_residue"
+    )
+    assert "outside_answer_intrusion_failures" in (
+        proof_adapter.materiality_policy.failure_report_fields
     )
     assert target_generation_readiness_failures(
         ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
@@ -10258,11 +10268,9 @@ def test_residual_target_adapter_registry_and_generic_schema_are_strict():
     assert target_generation_readiness_failures(
         HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID
     ) == []
-    proof_failures = target_generation_readiness_failures(
+    assert target_generation_readiness_failures(
         PROOF_NO_ANSWER_RESIDUE_TARGET_ID
-    )
-    assert proof_failures
-    assert "placeholder-only" in proof_failures[0]
+    ) == []
     with pytest.raises(ValueError, match="unsupported selected residual target"):
         require_residual_target_adapter("unsupported_target")
 
@@ -10327,12 +10335,12 @@ def test_residual_target_adapter_contract_audit_covers_registered_targets():
             assert row["generation_schema_name"]
             assert row["worker_role"]
     assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["classification"] == (
-        "planning_only_valid"
+        "generation_ready_valid"
     )
     assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["target_scope"] == (
         PROOF_NO_ANSWER_REGION_ID
     )
-    assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["generation_support"] is False
+    assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["generation_support"] is True
     assert rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "available_for_immediate_selection"
     ] is False
@@ -17109,7 +17117,7 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
         "available_for_immediate_selection"
     ] is False
     assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["classification"] == (
-        "planning_only_valid"
+        "generation_ready_valid"
     )
     assert audit_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "current_run_usage_state"
@@ -17156,7 +17164,7 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
     ] is False
     assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "contract_audit_classification"
-    ] == "planning_only_valid"
+    ] == "generation_ready_valid"
     assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID][
         "current_run_usage_state"
     ] == "direction_review_required"
@@ -17164,7 +17172,7 @@ def test_architecture_evidence_risk_checkpoint_reviews_active_chain(tmp_path):
         "available_for_immediate_selection"
     ] is False
     assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["planning_support"] is True
-    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["generation_support"] is False
+    assert target_rows[PROOF_NO_ANSWER_RESIDUE_TARGET_ID]["generation_support"] is True
     assert inventory["target_adapter_contract_audit_passed"] is True
     assert inventory["target_adapter_contract_blocker_count"] == 0
     assert all(row["available_for_generation"] is False for row in target_rows.values())
@@ -17477,7 +17485,7 @@ The room is small enough that every mark has to answer to the surface that holds
 
 No outside hand arrives to settle the question.
 
-A line of life and mind proves itself only by what it can carry here.
+It becomes legible by the way a thing keeps its mark: the line, the dust, and the table carry what no outside answer can settle.
 
 No answer enters from outside the kitchen; the silence holds the room to its own evidence.
 
@@ -17499,6 +17507,39 @@ In the morning the table returns with the same dust, the same spoon, the same sa
         },
     )
     return candidate_dir
+
+
+def build_proof_no_answer_residual_work_order_chain(tmp_path: Path) -> dict[str, object]:
+    config, strategy_packet, run_id = build_checkpoint_strategy_direction_ready_chain(
+        tmp_path
+    )
+    write_checkpoint_fixture_current_best_candidate(config, run_id)
+    direction = run_checkpoint_strategy_direction_review(
+        config,
+        strategy_packet=strategy_packet,
+        direction=PROOF_NO_ANSWER_RESIDUE_DIRECTION_ID,
+        operator_reviewed=True,
+    )
+    assert direction.exit_code == 0
+    selection = run_residual_target_selection(
+        config,
+        direction_review_packet=Path(str(direction.payload["packet_dir"])),
+        target=PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+        operator_reviewed=True,
+    )
+    assert selection.exit_code == 0
+    work_order = run_residual_work_order_planning(
+        config,
+        selection_packet=Path(str(selection.payload["packet_dir"])),
+    )
+    assert work_order.exit_code == 0
+    return {
+        "config": config,
+        "run_id": run_id,
+        "direction": direction.payload,
+        "selection": selection.payload,
+        "residual_work_order": work_order.payload,
+    }
 
 
 def test_checkpoint_strategy_direction_review_accepts_proof_no_answer_direction(
@@ -17954,10 +17995,14 @@ def test_proof_no_answer_work_order_uses_proof_region_and_aliases(tmp_path):
     assert unit_map["selected_region_id"] == PROOF_NO_ANSWER_REGION_ID
     assert unit_map["unit_map_kind"] == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
     assert unit_map["generation_contract_version"] == (
-        PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+        PROOF_NO_ANSWER_GENERATION_CONTRACT_VERSION
     )
     assert unit_map["materiality_policy_id"] == (
-        PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID
+        PROOF_NO_ANSWER_MATERIALITY_POLICY_ID
+    )
+    assert unit_map["semantic_validator_id"] == PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID
+    assert unit_map["prompt_contract_id"] == (
+        "autonomous.residual_intervention_generation.v1.proof_no_answer_residue"
     )
     unit_ids = {unit["unit_id"] for unit in unit_map["target_units"]}
     assert {
@@ -17973,6 +18018,19 @@ def test_proof_no_answer_work_order_uses_proof_region_and_aliases(tmp_path):
         assert unit["source_span"]["contained_in_selected_region"] is True
         assert " ".join(unit["before_text"].split()) in selected_region_text
         assert unit["future_generation_authorized"] is False
+    overlap = unit_map["target_unit_overlap_cluster_report"]
+    assert overlap["overlap_cluster_count"] >= 1
+    clustered_ids = {
+        unit_id
+        for cluster in overlap["overlap_clusters"]
+        for unit_id in cluster["overlapping_unit_ids"]
+    }
+    assert {
+        "proof_stays_in_object_carry",
+        "answer_absence_registered_by_objects",
+    } <= clustered_ids
+    assert overlap["one_replacement_may_satisfy_multiple_units"] is True
+    assert overlap["distinct_semantic_checks_required"] is True
     protected_reference_ids = {
         unit["reference_unit_id"] for unit in unit_map["protected_reference_units"]
     }
@@ -17988,13 +18046,24 @@ def test_proof_no_answer_work_order_uses_proof_region_and_aliases(tmp_path):
 
     contract = read_payload(packet_dir / "future_generation_contract.json")
     assert contract["generation_contract_version"] == (
-        PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+        PROOF_NO_ANSWER_GENERATION_CONTRACT_VERSION
     )
+    assert contract["materiality_policy_id"] == PROOF_NO_ANSWER_MATERIALITY_POLICY_ID
+    assert contract["semantic_validator_id"] == PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID
+    assert contract["generation_schema_name"] == "ResidualInterventionGenerationOutput"
+    assert contract["generation_schema_version"] == "1"
     assert contract["future_generation_requires_separate_authorization"] is True
     assert contract["future_generation_authorized"] is False
+    assert "outside_answer_intrusion_control" in contract[
+        "target_specific_ablation_controls"
+    ]
+    assert "abstract_proof_language_control" in contract[
+        "target_specific_ablation_controls"
+    ]
     assert "proof/no-answer pressure embodied" in contract[
         "target_specific_reader_state_focus"
     ]
+    assert contract["target_unit_overlap_cluster_report"]["overlap_cluster_count"] >= 1
 
     preflight_payloads = {
         artifact_type: read_payload(packet_dir / f"{artifact_type}.json")
@@ -18014,6 +18083,136 @@ def test_proof_no_answer_work_order_uses_proof_region_and_aliases(tmp_path):
         finalization = check_finalization(
             connection,
             run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_proof_no_answer_generation_authorization_accepts_corrected_handoff(
+    tmp_path,
+):
+    chain = build_proof_no_answer_residual_work_order_chain(tmp_path)
+    config = chain["config"]
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_generation_authorization(
+        config,
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["selected_residual_target_id"] == (
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+    )
+    assert result.payload["selected_region_id"] == PROOF_NO_ANSWER_REGION_ID
+    assert result.payload["generation_contract_version"] == (
+        PROOF_NO_ANSWER_GENERATION_CONTRACT_VERSION
+    )
+    assert result.payload["materiality_policy_id"] == PROOF_NO_ANSWER_MATERIALITY_POLICY_ID
+    assert result.payload["semantic_validator_id"] == PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID
+    assert result.payload["generation_authorized"] is True
+    assert result.payload["generation_attempt_budget"] == 1
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    policy = read_payload(packet_dir / "target_unit_integration_policy.json")
+    assert policy["target_unit_overlap_cluster_report"]["overlap_cluster_count"] >= 1
+    assert policy["materiality_policy"]["policy_id"] == PROOF_NO_ANSWER_MATERIALITY_POLICY_ID
+    contract = read_payload(packet_dir / "residual_generation_contract.json")
+    assert contract["prompt_contract_id"] == (
+        "autonomous.residual_intervention_generation.v1.proof_no_answer_residue"
+    )
+    assert contract["semantic_validator_id"] == PROOF_NO_ANSWER_SEMANTIC_VALIDATOR_ID
+    assert "outside_answer_intrusion_control" in contract[
+        "target_specific_ablation_controls"
+    ]
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=chain["run_id"],
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_proof_no_answer_authorization_refuses_planning_only_placeholder(
+    tmp_path,
+):
+    chain = build_proof_no_answer_residual_work_order_chain(tmp_path)
+    invalid_packet = tmp_path / "proof_no_answer_placeholder_work_order"
+    shutil.copytree(Path(str(chain["residual_work_order"]["packet_dir"])), invalid_packet)
+
+    def _make_placeholder(payload):
+        payload["generation_contract_version"] = (
+            PROOF_NO_ANSWER_PLACEHOLDER_GENERATION_CONTRACT_VERSION
+        )
+        payload["materiality_policy_id"] = (
+            PROOF_NO_ANSWER_PLACEHOLDER_MATERIALITY_POLICY_ID
+        )
+        payload["semantic_validator_id"] = None
+
+    for artifact_type in RESIDUAL_WORK_ORDER_ARTIFACT_TYPES:
+        path = invalid_packet / f"{artifact_type}.json"
+        if path.exists():
+            rewrite_payload(path, _make_placeholder)
+
+    result = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=invalid_packet,
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "placeholder generation metadata" in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_proof_no_answer_guarded_generation_refuses_openai_before_model_calls(
+    tmp_path,
+):
+    chain = build_proof_no_answer_residual_work_order_chain(tmp_path)
+    authorization = run_residual_generation_authorization(
+        chain["config"],
+        work_order_packet=Path(str(chain["residual_work_order"]["packet_dir"])),
+        operator_reviewed=True,
+        decision=AUTHORIZATION_DECISION_AUTHORIZE_ONE,
+    )
+    assert authorization.exit_code == 0
+    with connect(chain["config"].db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_residual_candidate_generation(
+        chain["config"],
+        client_name="openai",
+        authorization_packet=Path(str(authorization.payload["packet_dir"])),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+    assert "--allow-live-model" in result.payload["message"]
+
+    with connect(chain["config"].db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=chain["run_id"],
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
     assert len(after_calls) == len(before_calls)

@@ -34,6 +34,8 @@ from abi.modules.residual_targets import (
     ENDING_RETURN_REGION_ID,
     HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
     OBJECT_MOTION_CAUSALITY_TARGET_ID,
+    PROOF_NO_ANSWER_REGION_ID,
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
     SELECTED_REGION_ID,
     TACTILE_INEVITABILITY_TARGET_ID,
     ResidualMaterialityPolicy,
@@ -41,8 +43,10 @@ from abi.modules.residual_targets import (
     hostile_scaffold_mapping_failures,
     materiality_policy_payload,
     payload_has_placeholder_generation_contract,
+    proof_no_answer_mapping_failures,
     replacement_ending_return_failures,
     replacement_hostile_scaffold_failures,
+    replacement_proof_no_answer_failures,
     replacement_tactile_failures,
     require_residual_target_adapter,
     semantic_preflight_failures_for_work_order,
@@ -219,6 +223,8 @@ TERM_STOPWORDS = {
 def _expected_selected_region_id(target_id: str) -> str:
     if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         return ENDING_RETURN_REGION_ID
+    if target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return PROOF_NO_ANSWER_REGION_ID
     return SELECTED_REGION_ID
 
 
@@ -1083,6 +1089,12 @@ def _prompt_for_generation(subject: ResidualCandidateSubject) -> str:
                 == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
                 else None
             ),
+            "proof_no_answer_generation_feedback": (
+                _proof_no_answer_generation_feedback(subject)
+                if subject.selected_residual_target_id
+                == PROOF_NO_ANSWER_RESIDUE_TARGET_ID
+                else None
+            ),
             "target_unit_overlap_feedback": {
                 "overlapping_units_must_be_reconciled": True,
                 "instructions": [
@@ -1145,7 +1157,46 @@ def _materiality_requirement_payload(
         payload["ending_return_generation_feedback"] = (
             _ending_return_generation_feedback(subject)
         )
+    if subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        payload["proof_no_answer_generation_feedback"] = (
+            _proof_no_answer_generation_feedback(subject)
+        )
     return payload
+
+
+def _proof_no_answer_generation_feedback(
+    subject: ResidualCandidateSubject,
+) -> dict[str, object]:
+    adapter = require_residual_target_adapter(subject.selected_residual_target_id)
+    return {
+        "target_id": PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+        "semantic_validator_id": adapter.semantic_validator_id,
+        "materiality_policy_id": adapter.materiality_policy.policy_id,
+        "selected_region_id": subject.selected_region_id,
+        "required_operation": [
+            "materially re-author the proof/no-outside-answer region",
+            "make proof arrive through object relation, local pressure, line, mark, carry, or reader encounter",
+            "make answer absence register through objects or room pressure without supplying an outside answer",
+            "keep sky and silence concrete rather than thesis, doctrine, or cosmic signage",
+            "preserve packet_0063 object/tactile field and strongest-rival pressure",
+        ],
+        "overlap_cluster_policy": subject.authorization_payloads[
+            "target_unit_integration_policy"
+        ].get("target_unit_overlap_cluster_report"),
+        "failure_shapes_to_avoid": [
+            "outside answer, elder-presence, revelation, rescue, or cosmic solution enters",
+            "proof is stated as a thesis instead of carried by line, object, mark, or pressure",
+            "answer absence is named abstractly rather than registered by objects or room",
+            "sky/silence becomes doctrine, metaphysical signage, or explanation",
+            "object/tactile field is weakened or replaced by exposition",
+            "failed hostile-scaffold or ending-return paths are retried",
+            "generic vividness, broad rewrite, rival imitation, finality claim, phase-shift claim, or strongest-rival defeat claim",
+        ],
+        "overlap_instruction": [
+            "proof_stays_in_object_carry and answer_absence_registered_by_objects may share one replacement passage",
+            "the shared replacement must still satisfy object-carry and answer-absence checks independently",
+        ],
+    }
 
 
 def _ending_return_generation_feedback(
@@ -1391,6 +1442,13 @@ def _validate_model_payload(
             raise ModelValidationError("; ".join(failures))
     if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         failures = ending_return_mapping_failures(
+            payload,
+            {unit.unit_id for unit in subject.target_units},
+        )
+        if failures:
+            raise ModelValidationError("; ".join(failures))
+    if subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        failures = proof_no_answer_mapping_failures(
             payload,
             {unit.unit_id for unit in subject.target_units},
         )
@@ -1674,6 +1732,15 @@ def _collect_residual_intervention_validation(
         )
         for category, category_failures in ending_failures.items():
             failures.setdefault(category, []).extend(category_failures)
+    if subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        proof_failures = replacement_proof_no_answer_failures(
+            replacement_text=replacement,
+            selected_region_before_text=subject.selected_region_before_text,
+            target_units=[unit_payload(unit) for unit in subject.target_units],
+            model_payload=model_payload,
+        )
+        for category, category_failures in proof_failures.items():
+            failures.setdefault(category, []).extend(category_failures)
 
     object_terms_present = _terms_present(lower, term_contract["object_terms"])
     motion_terms_present = _terms_present(lower, term_contract["motion_terms"])
@@ -1685,6 +1752,7 @@ def _collect_residual_intervention_validation(
         not in {
             HOSTILE_SCAFFOLD_VISIBILITY_TARGET_ID,
             ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+            PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
         }
     ):
         failures["object_motion_relabel_failures"].append(
@@ -1699,6 +1767,12 @@ def _collect_residual_intervention_validation(
             )
     elif subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         relation_count = _ending_return_relation_count(replacement)
+    elif subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        relation_count = _proof_no_answer_relation_count(replacement)
+        if relation_count < 2:
+            failures["proof_no_answer_embodiment_failures"].append(
+                "proof/no-answer object-carry relation missing"
+            )
     else:
         relation_count = _object_motion_relation_count(
             replacement,
@@ -1996,6 +2070,14 @@ def _empty_failure_buckets() -> dict[str, list[str]]:
         "proof_no_answer_carry_failures": [],
         "protected_reference_preservation_failures": [],
         "rival_pressure_preservation_failures": [],
+        "proof_no_answer_embodiment_failures": [],
+        "outside_answer_intrusion_failures": [],
+        "sky_silence_thesis_failures": [],
+        "abstract_proof_language_failures": [],
+        "answer_absence_object_registration_failures": [],
+        "failed_path_retry_failures": [],
+        "broad_rewrite_failures": [],
+        "strongest_rival_defeat_claim_failures": [],
     }
 
 
@@ -2389,6 +2471,11 @@ def _target_unit_semantic_report(
             unit=unit,
             replacement_excerpt=replacement_excerpt,
         )
+    if selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return _proof_no_answer_target_unit_semantic_report(
+            unit=unit,
+            replacement_excerpt=replacement_excerpt,
+        )
     if selected_residual_target_id != TACTILE_INEVITABILITY_TARGET_ID:
         return {"passed": True, "failures": []}
     replacement_lower = replacement_excerpt.lower()
@@ -2400,6 +2487,44 @@ def _target_unit_semantic_report(
         failures.append("object-motion relabel without tactile necessity")
     if any(term in replacement_lower for term in ("inevitability", "inevitable", "non-optional")):
         failures.append("abstract inevitability explanation")
+    return {"passed": not failures, "failures": failures}
+
+
+def _proof_no_answer_target_unit_semantic_report(
+    *,
+    unit: TargetUnit,
+    replacement_excerpt: str,
+) -> dict[str, object]:
+    lower = replacement_excerpt.lower()
+    failures: list[str] = []
+    object_terms = (
+        "room",
+        "table",
+        "line",
+        "mark",
+        "thing",
+        "object",
+        "dust",
+        "spoon",
+        "saucer",
+        "ring",
+        "surface",
+    )
+    carry_terms = ("carry", "carries", "keeps", "kept", "holds", "held", "bears", "record")
+    if not _terms_present(lower, object_terms) or not _terms_present(lower, carry_terms):
+        failures.append(
+            "proof/no-answer target unit is not carried by object, line, mark, or room pressure"
+        )
+    if unit.unit_id == "proof_stays_in_object_carry":
+        if "proof" not in lower and not _terms_present(lower, ("line", "mark", "record")):
+            failures.append("proof is not kept inside object-carry language")
+    if unit.unit_id == "answer_absence_registered_by_objects":
+        if not _terms_present(lower, ("answer", "outside", "absence", "no answer", "no-answer")):
+            failures.append("answer absence is not registered in the unit")
+    if _terms_present(lower, ("elder", "revelation", "rescue", "finally answers")):
+        failures.append("outside answer intrusion appears in proof/no-answer unit")
+    if _terms_present(lower, ("the proof is", "this proves that", "the meaning is")):
+        failures.append("abstract proof thesis replaces object-carry")
     return {"passed": not failures, "failures": failures}
 
 
@@ -2830,6 +2955,11 @@ def _target_unit_classification(
             materiality_failures=materiality_failures,
             semantic_failures=semantic_failures,
         )
+    if selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return _proof_no_answer_target_unit_classification(
+            materiality_failures=materiality_failures,
+            semantic_failures=semantic_failures,
+        )
     if semantic_failures:
         if any("object-motion relabel" in failure for failure in semantic_failures):
             return "object_motion_relabel"
@@ -2871,6 +3001,27 @@ def _ending_return_target_unit_classification(
     if target_unit_id == "opening_return_relation_without_thesis":
         return "opening_return_relation_preserved"
     return "strong_return_enactment"
+
+
+def _proof_no_answer_target_unit_classification(
+    *,
+    materiality_failures: list[str],
+    semantic_failures: list[str],
+) -> str:
+    joined = " ".join([*materiality_failures, *semantic_failures]).lower()
+    if "outside answer" in joined or "elder" in joined or "revelation" in joined:
+        return "outside_answer_intrusion"
+    if "abstract" in joined or "thesis" in joined or "meaning" in joined:
+        return "abstract_proof_language"
+    if "object" in joined or "line" in joined or "mark" in joined or "room" in joined:
+        return "object_carry_missing"
+    if "answer absence" in joined:
+        return "answer_absence_not_object_registered"
+    if semantic_failures:
+        return "proof_no_answer_semantic_failure"
+    if materiality_failures:
+        return "valid_direction_but_under_material"
+    return "strong_proof_no_answer_residue_intervention"
 
 
 def _hostile_target_unit_classification(
@@ -4664,6 +4815,48 @@ def _ending_return_relation_count(text: str) -> int:
     return count
 
 
+def _proof_no_answer_relation_count(text: str) -> int:
+    object_terms = (
+        "room",
+        "table",
+        "line",
+        "mark",
+        "marks",
+        "thing",
+        "object",
+        "objects",
+        "surface",
+        "dust",
+        "spoon",
+        "saucer",
+        "ring",
+    )
+    carry_terms = (
+        "carry",
+        "carries",
+        "carried",
+        "keeps",
+        "kept",
+        "holds",
+        "held",
+        "bears",
+        "record",
+        "records",
+        "legible",
+    )
+    proof_terms = ("proof", "answer", "outside", "absence", "no answer", "no-answer")
+    count = 0
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        lower = sentence.lower()
+        if (
+            _terms_present(lower, object_terms)
+            and _terms_present(lower, carry_terms)
+            and _terms_present(lower, proof_terms)
+        ):
+            count += 1
+    return count
+
+
 def _ending_return_return_terms() -> tuple[str, ...]:
     return (
         "return",
@@ -4977,6 +5170,8 @@ def _valid_fake_payload_for_subject(subject: ResidualCandidateSubject) -> dict[s
         return _valid_hostile_scaffold_fake_payload(units)
     if subject.selected_residual_target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         return _valid_ending_return_fake_payload(units)
+    if subject.selected_residual_target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return _valid_proof_no_answer_fake_payload(units)
     return _valid_fake_payload(units)
 
 
@@ -5212,6 +5407,75 @@ def _valid_ending_return_fake_payload(
             "no nonselected region edits",
             "no rival imitation",
             "no return explanation",
+        ],
+        "uncertainty": "fixture output for deterministic tests only",
+    }
+
+
+def _valid_proof_no_answer_fake_payload(
+    units: list[dict[str, object]],
+) -> dict[str, object]:
+    replacement = (
+        "No answer enters the room; the table keeps the question in the pale "
+        "line where dust stops at the ring. The mark does not explain itself, "
+        "but it carries the proof as a weight the surface has already accepted. "
+        "Outside remains outside, and the silence stays local: spoon, saucer, "
+        "and table holding the absence without turning it into a lesson. The "
+        "thing keeps its mark because nothing arrives to lift it away, so the "
+        "reader has to meet the proof where the objects keep carrying it."
+    )
+    mappings = []
+    for unit in units:
+        unit_id = str(unit["unit_id"])
+        mappings.append(
+            {
+                "target_unit_id": unit_id,
+                "before_text_sha256": str(unit.get("before_text_sha256") or ""),
+                "mechanism_operation": (
+                    "make proof/no-answer pressure arrive through object carry"
+                ),
+                "material_relation_or_action": (
+                    "room, table, line, mark, dust, spoon, and saucer hold the "
+                    "absence without an outside answer"
+                ),
+                "visible_consequence": (
+                    "the proof remains in the objects and the answer stays absent"
+                ),
+                "intended_first_read_effect": (
+                    "the reader feels the missing outside answer through local marks"
+                ),
+                "protected_effects_preserved": [
+                    "packet_0063 object/tactile field",
+                    "outside-answer absence",
+                    "strongest-rival pressure remains blocking",
+                ],
+                "covered_target_ids": [unit_id, PROOF_NO_ANSWER_RESIDUE_TARGET_ID],
+            }
+        )
+    return {
+        "replacement_region_text": replacement,
+        "target_unit_mappings": mappings,
+        "intervention_plan": [
+            "replace only the proof/no-outside-answer selected region",
+            "make proof stay inside object carry",
+            "register answer absence through room/object pressure",
+        ],
+        "constraint_mapping": [
+            {
+                "constraint_id": "bounded_selected_region",
+                "how_satisfied": "only replacement_region_text is supplied",
+                "risk_note": "controller assembles the final candidate",
+            }
+        ],
+        "protected_effects_notes": [
+            "object/tactile field, failed-path memory, and rival pressure remain preserved"
+        ],
+        "forbidden_change_self_check": [
+            "no finality claim",
+            "no phase-shift claim",
+            "no outside-answer solution",
+            "no rival mimicry",
+            "no abstract proof thesis",
         ],
         "uncertainty": "fixture output for deterministic tests only",
     }

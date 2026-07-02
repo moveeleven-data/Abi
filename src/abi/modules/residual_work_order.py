@@ -759,11 +759,11 @@ def _work_order_supersession_context(
             target_id=target_id,
         )
         if handoff_failures:
-            supersession_reason = (
-                "ending_return_generation_handoff_metadata_missing"
-                if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID
-                else "prior work order generation handoff metadata is stale"
-            )
+            supersession_reason = "prior work order generation handoff metadata is stale"
+            if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+                supersession_reason = "ending_return_generation_handoff_metadata_missing"
+            if target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+                supersession_reason = "proof_no_answer_generation_handoff_metadata_missing"
             return {
                 **base,
                 "superseded_work_order_packet_id": packet_id,
@@ -803,7 +803,10 @@ def _generation_handoff_metadata_failures(
     *,
     target_id: str,
 ) -> list[str]:
-    if target_id != ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
+    if target_id not in {
+        ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
+        PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
+    }:
         return []
     failures: list[str] = []
     for artifact_type, payload in payloads.items():
@@ -826,36 +829,81 @@ def _generation_handoff_metadata_failures(
         failures.append("target_unit_map missing overlap cluster report")
     if not isinstance(contract.get("target_unit_overlap_cluster_report"), dict):
         failures.append("future_generation_contract missing overlap cluster report")
-    required_controls = {
-        "full_ending_return_intervention",
-        "revert_ending_return_intervention_to_current_best",
-        "isolate_return_enactment_without_extra_explanation",
-        "proof_no_answer_preservation_control",
-        "object_field_return_preservation_control",
-        "strongest_rival_comparison",
-    }
+    if target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        required_controls = {
+            "full_proof_no_answer_residue_intervention",
+            "revert_proof_no_answer_residue_to_current_best",
+            "isolate_object_carry_without_outside_answer",
+            "abstract_proof_language_control",
+            "outside_answer_intrusion_control",
+            "strongest_rival_comparison",
+        }
+        required_focus = {
+            "proof/no-answer pressure embodied",
+            "outside-answer absence preserved",
+            "object field carries proof",
+            "thesis visibility reduced",
+            "first-read clarity without explanation",
+            "reread carry preserved",
+            "strongest-rival pressure",
+        }
+        target_label = "proof/no-answer"
+    else:
+        required_controls = {
+            "full_ending_return_intervention",
+            "revert_ending_return_intervention_to_current_best",
+            "isolate_return_enactment_without_extra_explanation",
+            "proof_no_answer_preservation_control",
+            "object_field_return_preservation_control",
+            "strongest_rival_comparison",
+        }
+        required_focus = {
+            "final return enacts rather than explains",
+            "opening-return transformation",
+            "no-reset return pressure",
+            "proof/no-answer carry preservation",
+            "object-field return preservation",
+            "reread transformation",
+            "strongest-rival pressure",
+        }
+        target_label = "ending-return"
     controls = set(str(value) for value in contract.get("target_specific_ablation_controls", []))
     controls.update(str(value) for value in plan.get("future_ablation_controls", []))
     missing_controls = sorted(required_controls - controls)
     if missing_controls:
         failures.append(
-            "ending-return ablation controls missing: " + ", ".join(missing_controls)
+            f"{target_label} ablation controls missing: "
+            + ", ".join(missing_controls)
         )
-    required_focus = {
-        "final return enacts rather than explains",
-        "opening-return transformation",
-        "no-reset return pressure",
-        "proof/no-answer carry preservation",
-        "object-field return preservation",
-        "reread transformation",
-        "strongest-rival pressure",
-    }
+    if target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        overlap_report = unit_map.get("target_unit_overlap_cluster_report")
+        if (
+            not isinstance(overlap_report, dict)
+            or int(overlap_report.get("overlap_cluster_count") or 0) < 1
+        ):
+            failures.append("proof/no-answer overlap cluster report missing clusters")
+        if contract.get("semantic_validator_id") != (
+            "proof_no_answer_residue_semantic_validator_v1"
+        ):
+            failures.append("proof/no-answer semantic validator missing from contract")
+        if unit_map.get("semantic_validator_id") != (
+            "proof_no_answer_residue_semantic_validator_v1"
+        ):
+            failures.append("proof/no-answer semantic validator missing from target unit map")
+        if contract.get("prompt_contract_id") != (
+            "autonomous.residual_intervention_generation.v1.proof_no_answer_residue"
+        ):
+            failures.append("proof/no-answer prompt contract missing from contract")
+        if contract.get("generation_schema_name") != "ResidualInterventionGenerationOutput":
+            failures.append("proof/no-answer generation schema name missing from contract")
+        if contract.get("generation_schema_version") != "1":
+            failures.append("proof/no-answer generation schema version missing from contract")
     focus = set(str(value) for value in contract.get("target_specific_reader_state_focus", []))
     focus.update(str(value) for value in plan.get("future_reader_state_eval_focus", []))
     missing_focus = sorted(required_focus - focus)
     if missing_focus:
         failures.append(
-            "ending-return reader-state focus missing: " + ", ".join(missing_focus)
+            f"{target_label} reader-state focus missing: " + ", ".join(missing_focus)
         )
     return failures
 
@@ -2151,6 +2199,9 @@ def _build_proof_no_answer_target_unit_map(
     selected_text = str(selected_region["selected_region_before_text"])
     selected_region_id = str(selected_region["selected_region_id"])
     selected_paragraphs = _paragraphs(selected_text)
+    shared_object_carry_sentence = _proof_no_answer_shared_object_carry_sentence(
+        selected_paragraphs
+    )
     units = [
         _proof_no_answer_unit(
             subject=subject,
@@ -2213,7 +2264,8 @@ def _build_proof_no_answer_target_unit_map(
             selected_region_id=selected_region_id,
             selected_region_text=selected_text,
             unit_id="proof_stays_in_object_carry",
-            text=_sentence_for_hostile_unit(
+            text=shared_object_carry_sentence
+            or _sentence_for_hostile_unit(
                 selected_paragraphs,
                 start=0,
                 end=1,
@@ -2228,7 +2280,8 @@ def _build_proof_no_answer_target_unit_map(
             selected_region_id=selected_region_id,
             selected_region_text=selected_text,
             unit_id="answer_absence_registered_by_objects",
-            text=_sentence_for_hostile_unit(
+            text=shared_object_carry_sentence
+            or _sentence_for_hostile_unit(
                 selected_paragraphs,
                 start=0,
                 end=1,
@@ -2245,6 +2298,10 @@ def _build_proof_no_answer_target_unit_map(
         subject=subject,
         selected_region_text=selected_text,
     )
+    overlap_report = _proof_no_answer_overlap_cluster_report(
+        units=units,
+        selected_region_id=selected_region_id,
+    )
     return {
         "selected_residual_target_id": subject.selected_target_id,
         "unit_map_kind": subject.target_spec.work_order_adapter,
@@ -2257,6 +2314,10 @@ def _build_proof_no_answer_target_unit_map(
         "selected_region_id": selected_region_id,
         "target_units": units,
         "target_unit_count": len(units),
+        "target_unit_overlap_cluster_report": overlap_report,
+        "overlap_clusters": overlap_report["overlap_clusters"],
+        "overlap_cluster_count": overlap_report["overlap_cluster_count"],
+        "all_overlap_clusters_allowed": overlap_report["all_overlap_clusters_allowed"],
         "material_target_units_all_inside_selected_region": True,
         "protected_reference_units": protected_references,
         "protected_reference_unit_count": len(protected_references),
@@ -2268,11 +2329,14 @@ def _build_proof_no_answer_target_unit_map(
             subject.selected_target_id
         )["materiality_policy_id"],
         "generation_semantic_validation_contract": [
-            "generation contract is placeholder-only until a future implementation",
             "future generation requires a separate authorization packet",
             "selected proof/no-answer region must carry pressure through objects or reader encounter",
             "do not add outside-answer explanation, elder-presence explanation, or abstract thesis amplification",
+            "sky/silence must not become thesis, doctrine, or cosmic signage",
+            "proof must stay in line/object/mark/carry rather than abstract answer",
+            "answer absence must register through objects or room pressure",
             "preserve opening, middle recurrence, final-return, object/tactile field, and rival-pressure references",
+            "failed hostile-scaffold and ending-return paths must not be retried",
         ],
         "ablation_control_plan": list(
             subject.target_spec.target_specific_ablation_controls
@@ -2363,6 +2427,98 @@ def _proof_no_answer_unit(
         "material_change_required": True,
         "semantic_contract": list(subject.target_spec.operational_definition),
         "future_generation_authorized": False,
+    }
+
+
+def _proof_no_answer_shared_object_carry_sentence(
+    selected_paragraphs: list[str],
+) -> str:
+    sentences = [
+        sentence
+        for paragraph in selected_paragraphs
+        for sentence in _sentences(paragraph)
+    ]
+    for sentence in sentences:
+        lower = sentence.lower()
+        if "thing keeps its mark" in lower or "keeps its mark" in lower:
+            return sentence
+    for sentence in sentences:
+        lower = sentence.lower()
+        if (
+            "legible" in lower
+            and any(term in lower for term in ("mark", "line", "record"))
+            and any(term in lower for term in ("carry", "keeps", "holds"))
+        ):
+            return sentence
+    for sentence in sentences:
+        lower = sentence.lower()
+        if (
+            any(term in lower for term in ("proof", "answer"))
+            and any(term in lower for term in ("object", "thing", "table", "mark"))
+            and any(term in lower for term in ("carry", "keeps", "holds"))
+        ):
+            return sentence
+    return ""
+
+
+def _proof_no_answer_overlap_cluster_report(
+    *,
+    units: list[dict[str, object]],
+    selected_region_id: str,
+) -> dict[str, object]:
+    by_hash: dict[str, list[dict[str, object]]] = {}
+    for unit in units:
+        before_hash = str(unit.get("before_text_sha256") or "")
+        if before_hash:
+            by_hash.setdefault(before_hash, []).append(unit)
+    clusters: list[dict[str, object]] = []
+    for before_hash, group in by_hash.items():
+        if len(group) < 2:
+            continue
+        first = group[0]
+        source_span = first.get("source_span")
+        source_span = source_span if isinstance(source_span, dict) else {}
+        obligations = {
+            str(unit.get("unit_id") or ""): {
+                "allowed_operation": str(unit.get("allowed_operation") or ""),
+                "target_effect": str(unit.get("target_effect") or ""),
+                "semantic_contract": list(unit.get("semantic_contract", [])),
+            }
+            for unit in group
+        }
+        unit_ids = [str(unit.get("unit_id") or "") for unit in group]
+        clusters.append(
+            {
+                "overlap_cluster_id": f"proof_no_answer_overlap_{before_hash[:12]}",
+                "selected_region_id": selected_region_id,
+                "source_region_id": selected_region_id,
+                "source_span": dict(source_span),
+                "before_text_sha256": before_hash,
+                "shared_before_text": str(first.get("before_text") or ""),
+                "overlapping_unit_ids": unit_ids,
+                "semantic_obligations_by_unit": obligations,
+                "overlap_allowed": True,
+                "one_replacement_may_satisfy_multiple_units": True,
+                "distinct_semantic_checks_required": True,
+                "cluster_instruction": (
+                    "One bounded replacement may satisfy these overlapping "
+                    "proof/no-answer units only if object-carry and "
+                    "answer-absence obligations are independently satisfied."
+                ),
+            }
+        )
+    return {
+        "report_id": "proof_no_answer_overlap_cluster_report_v1",
+        "selected_region_id": selected_region_id,
+        "overlap_cluster_count": len(clusters),
+        "overlap_clusters": clusters,
+        "overlap_allowed": True,
+        "all_overlap_clusters_allowed": all(
+            cluster["overlap_allowed"] is True for cluster in clusters
+        ),
+        "one_replacement_may_satisfy_multiple_units": True,
+        "distinct_semantic_checks_required": True,
+        "worker": "proof_no_answer_overlap_cluster_report_v1_controller",
     }
 
 

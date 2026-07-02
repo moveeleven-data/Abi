@@ -27,6 +27,8 @@ from abi.target_artifacts import read_target_diagnostic, read_target_unit_map
 from abi.modules.residual_targets import (
     ENDING_EXPLAINS_RETURN_RISK_TARGET_ID,
     ENDING_RETURN_REGION_ID,
+    PROOF_NO_ANSWER_REGION_ID,
+    PROOF_NO_ANSWER_RESIDUE_TARGET_ID,
     SELECTED_REGION_ID,
     payload_has_placeholder_generation_contract,
     require_residual_target_adapter,
@@ -503,6 +505,8 @@ def _apply_preferred_target_artifacts(
 def _expected_selected_region_id(target_id: str) -> str:
     if target_id == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         return ENDING_RETURN_REGION_ID
+    if target_id == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        return PROOF_NO_ANSWER_REGION_ID
     return SELECTED_REGION_ID
 
 
@@ -582,6 +586,8 @@ def _validate_work_order_payloads(payloads: dict[str, dict[str, Any]]) -> None:
         )
     if selected_target == ENDING_EXPLAINS_RETURN_RISK_TARGET_ID:
         _validate_ending_return_generation_handoff(payloads)
+    if selected_target == PROOF_NO_ANSWER_RESIDUE_TARGET_ID:
+        _validate_proof_no_answer_generation_handoff(payloads)
     if packet.get("future_generation_contract_created") is not True:
         raise ValueError(
             "Residual generation authorization refused; packet does not record "
@@ -679,6 +685,103 @@ def _validate_ending_return_generation_handoff(
     if failures:
         raise ValueError(
             "Residual generation authorization refused; ending-return generation "
+            "handoff metadata is incomplete: "
+            + "; ".join(failures)
+        )
+
+
+def _validate_proof_no_answer_generation_handoff(
+    payloads: dict[str, dict[str, Any]],
+) -> None:
+    packet = payloads["residual_work_order_packet"]
+    unit_map = payloads["object_motion_target_unit_map"]
+    contract = payloads["future_generation_contract"]
+    plan = payloads["ablation_and_reader_eval_plan"]
+    failures: list[str] = []
+    for name, payload in (
+        ("residual_work_order_packet", packet),
+        ("object_motion_target_unit_map", unit_map),
+        ("future_generation_contract", contract),
+    ):
+        if payload.get("future_generation_authorized") is not False:
+            failures.append(f"{name} must record future_generation_authorized false")
+    overlap_report = unit_map.get("target_unit_overlap_cluster_report")
+    if not isinstance(overlap_report, dict):
+        failures.append("proof/no-answer target unit map missing overlap cluster report")
+    elif int(overlap_report.get("overlap_cluster_count") or 0) < 1:
+        failures.append("proof/no-answer target unit map missing overlap clusters")
+    contract_overlap_report = contract.get("target_unit_overlap_cluster_report")
+    if not isinstance(contract_overlap_report, dict):
+        failures.append("proof/no-answer generation contract missing overlap cluster report")
+    elif int(contract_overlap_report.get("overlap_cluster_count") or 0) < 1:
+        failures.append("proof/no-answer generation contract missing overlap clusters")
+    if contract.get("semantic_validator_id") != (
+        "proof_no_answer_residue_semantic_validator_v1"
+    ):
+        failures.append("proof/no-answer semantic validator missing from contract")
+    if unit_map.get("semantic_validator_id") != (
+        "proof_no_answer_residue_semantic_validator_v1"
+    ):
+        failures.append("proof/no-answer semantic validator missing from target unit map")
+    if contract.get("prompt_contract_id") != (
+        "autonomous.residual_intervention_generation.v1.proof_no_answer_residue"
+    ):
+        failures.append("proof/no-answer prompt contract missing from contract")
+    if contract.get("generation_schema_name") != "ResidualInterventionGenerationOutput":
+        failures.append("proof/no-answer generation schema name missing from contract")
+    if contract.get("generation_schema_version") != "1":
+        failures.append("proof/no-answer generation schema version missing from contract")
+    required_controls = {
+        "full_proof_no_answer_residue_intervention",
+        "revert_proof_no_answer_residue_to_current_best",
+        "isolate_object_carry_without_outside_answer",
+        "abstract_proof_language_control",
+        "outside_answer_intrusion_control",
+        "strongest_rival_comparison",
+    }
+    controls = {
+        str(value)
+        for value in contract.get("target_specific_ablation_controls", [])
+        if isinstance(value, str)
+    }
+    controls.update(
+        str(value)
+        for value in plan.get("future_ablation_controls", [])
+        if isinstance(value, str)
+    )
+    missing_controls = sorted(required_controls - controls)
+    if missing_controls:
+        failures.append(
+            "proof/no-answer ablation controls missing: "
+            + ", ".join(missing_controls)
+        )
+    required_focus = {
+        "proof/no-answer pressure embodied",
+        "outside-answer absence preserved",
+        "object field carries proof",
+        "thesis visibility reduced",
+        "first-read clarity without explanation",
+        "reread carry preserved",
+        "strongest-rival pressure",
+    }
+    focus = {
+        str(value)
+        for value in contract.get("target_specific_reader_state_focus", [])
+        if isinstance(value, str)
+    }
+    focus.update(
+        str(value)
+        for value in plan.get("future_reader_state_eval_focus", [])
+        if isinstance(value, str)
+    )
+    missing_focus = sorted(required_focus - focus)
+    if missing_focus:
+        failures.append(
+            "proof/no-answer reader-state focus missing: " + ", ".join(missing_focus)
+        )
+    if failures:
+        raise ValueError(
+            "Residual generation authorization refused; proof/no-answer generation "
             "handoff metadata is incomplete: "
             + "; ".join(failures)
         )
