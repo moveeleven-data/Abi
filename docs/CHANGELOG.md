@@ -10,13 +10,8 @@ preserved across the build.
 
 Current documented endpoint in Git history:
 
-- `85c7584 Add proof no-answer generation handoff`
-- plus the current `fix/proof-no-answer-evidence-handoff-metadata`
-  branch update that makes proof-no-answer work orders and generation
-  authorizations carry explicit ablation-control and reader-state-focus
-  handoff metadata before live generation.
-- Active branch during latest changelog update:
-  `fix/proof-no-answer-evidence-handoff-metadata`
+- `0cb8f24 Add live local law rival diagnostic path`
+- Active branch during latest changelog update: `main`
 - The active runtime direction is the autonomous creative-engine path.
 
 ## Standing Invariants
@@ -1789,11 +1784,11 @@ Real packet result:
 - Guarded OpenAI generation without `--allow-live-model` refused before model
   calls.
 
-### Proof-No-Answer Evidence Handoff Metadata Fix
+### Proof-No-Answer Evidence Handoff Metadata Finalization
 
-Current branch update:
+Commit:
 
-- `fix/proof-no-answer-evidence-handoff-metadata`
+- `d7f7e0f Finalize proof no-answer evidence handoff metadata`
 
 Implemented:
 
@@ -1828,14 +1823,213 @@ Real packet result:
 - Guarded OpenAI generation from `packet_0007` without `--allow-live-model`
   refused before model calls.
 
-Verification at this endpoint:
+### Proof-No-Answer Generation Feedback And Failed-Generation Memory
+
+Commits:
+
+- `052f7a5 Tighten proof no-answer generation feedback diagnostics`
+- `9c219ba Adjudicate failed proof no-answer generation path`
+- `e1cec85 Finalize checkpoint proof failed-target memory`
+
+Implemented:
+
+- Tightened proof/no-answer generation feedback and diagnostics after a failed
+  live attempt so the next model-facing contract more explicitly rejects:
+  - abstract answer language
+  - external proof or doctrine
+  - explanation that arrives before object pressure
+  - weak object carry
+  - failed-path retry patterns
+- Added failed-generation adjudication for proof/no-answer residue attempts so
+  failed packets are recorded as diagnostic evidence, not silently ignored or
+  treated as accepted candidates.
+- Ensured failed proof/no-answer generation does not consume authorization as a
+  successful candidate path.
+- Threaded failed proof/no-answer target memory into the architecture checkpoint
+  and checkpoint-aware planning layers.
+- Preserved fail-closed behavior: failed generation evidence can steer future
+  strategy, but it does not authorize finalization or mark the candidate
+  improved.
+
+### Post-Local Residual Strategy Synthesis
+
+Commit:
+
+- `7fbe0b7 Add post-local residual strategy synthesis`
+
+Implemented:
+
+- Added an autonomous synthesis stage that reviews local residual-target history
+  after hostile scaffold, ending-return, object-motion, tactile, and
+  proof/no-answer work.
+- Consolidated failed local evidence into a strategy packet for the next
+  nonlocal direction.
+- Preserved boundedness by making the synthesis choose a strategy direction
+  rather than creating a target, work order, or generation packet directly.
+- Added tests proving finalization remains blocked and no candidate/generation
+  path is opened by synthesis alone.
+
+### Strongest-Rival Forensic Diagnosis
+
+Commits:
+
+- `a68f460 Add strongest rival forensic diagnosis`
+- `7563839 Normalize strongest rival diagnosis surface contract`
+
+Implemented:
+
+- Added a strongest-rival forensic diagnosis packet path that consumes the
+  post-local strategy packet and analyzes why the imported strongest rival
+  remains structurally pressuring.
+- Added required diagnostic hypotheses and evidence surfaces for rival pressure
+  without claiming the rival has been beaten.
+- Normalized the public packet surface so downstream consumers receive stable
+  fields for packet kind, source packet IDs, diagnosis kind, recommended
+  strategy class, and blocker status.
+- Kept the diagnosis non-generative: no candidate text, residual target,
+  work order, ablation path, or finalization gate is created.
+
+### Local-Law Discovery From Rival Forensics
+
+Commits:
+
+- `da3a6ea Add local law discovery from rival forensics`
+- `fd2faba Normalize local law discovery surface contract`
+
+Implemented:
+
+- Added local-law discovery from strongest-rival forensic diagnosis.
+- Discovered and recorded the current law:
+  `first_read_pressure_precedes_explanation_law`.
+- Added local-law artifacts that describe the law, its evidence basis, limits,
+  and downstream strategy implications.
+- Normalized the local-law packet surface so downstream commands can reliably
+  consume:
+  - `law_id`
+  - source diagnosis packet references
+  - current best/proof/reader-state packet IDs
+  - direct-rival availability flags
+  - recommended next strategy class
+- Preserved non-generative boundaries and fail-closed finalization.
+
+### Direct Rival Subject Materialization
+
+Commit:
+
+- `acd1b61 Add direct rival subject materialization`
+
+Implemented:
+
+- Added a direct-rival subject materialization command that consumes the
+  local-law discovery packet and resolves the strongest-rival text into an
+  explicit materialized subject for comparison.
+- Registered the materialized rival subject, provenance/hash report,
+  limitations report, non-imitation report, readiness report, scope guard, gate
+  report, and packet summary.
+- Recorded the direct rival text hash:
+  `f3f7adef01c4bd24257c3dabfabec9024031c2d82c7f2061f6fc5de36430b06c`
+  in the live run.
+- Added surface-alias handling so canonical materialized-subject artifacts are
+  consumed even when display aliases are absent.
+- Preserved non-imitation constraints and kept generation unauthorized.
+
+### Model-Backed Local-Law Rival Diagnostic Scaffold
+
+Commit:
+
+- `69ee216 Add local law rival diagnostic scaffold`
+
+Implemented:
+
+- Added the fake/deterministic scaffold for:
+  `abi autonomous diagnose-local-law-with-rival`.
+- The command consumes direct-rival subject materialization and compares
+  packet `0063` with the materialized direct rival under
+  `first_read_pressure_precedes_explanation_law`.
+- Added artifacts for:
+  - source direct-rival materialization intake
+  - current-best subject comparison
+  - direct-rival subject comparison
+  - law application comparison matrix
+  - first-read pressure diagnostic report
+  - rival advantage under law report
+  - packet `0063` law gap report
+  - non-imitation constraint report
+  - next strategy readiness report
+  - project health scope guard report
+  - local-law rival diagnostic gate report
+  - packet summary
+- Fake mode records `model_calls: 0`, `model_backed: false`, and
+  `diagnostic_is_provisional: true`.
+- The scaffold remained diagnostic-only: no candidate, no generation
+  authorization, no target selection, no work order, no ablation, no
+  reader-state evaluation, and no finalization claim.
+
+### Live Model-Backed Local-Law Rival Diagnostic
+
+Commit:
+
+- `0cb8f24 Add live local law rival diagnostic path`
+
+Implemented:
+
+- Added the guarded live OpenAI path for
+  `abi autonomous diagnose-local-law-with-rival`.
+- Added structured-output schema:
+  `ModelBackedLocalLawRivalDiagnosticOutput@1`.
+- Added worker role:
+  `model_backed_local_law_rival_diagnostic`.
+- Added prompt contract:
+  `autonomous.local_law_rival_diagnostic.v1`.
+- Registered the schema with the OpenAI response-format adapter and strict
+  structured-output validation.
+- Live mode requires:
+  - `--allow-live-model`
+  - `OPENAI_API_KEY`
+  - `--max-model-calls 1`
+  - configured model from `ABI_OPENAI_MODEL` or the documented default
+- Stubbed OpenAI tests prove that a valid live response creates exactly one
+  model-call record and produces an accepted diagnostic packet with:
+  - `client: openai`
+  - `model_backed: true`
+  - `live_model_diagnostic: true`
+  - `model_calls: 1`
+  - non-empty `model_call_ids`
+- Local validation rejects:
+  - wrong `law_id`
+  - `generation_allowed: true`
+  - `finality_claimed: true`
+  - `phase_shift_claimed: true`
+  - missing non-imitation acknowledgment
+  - candidate/rewrite/target/work-order fields
+  - immediate generation recommendations
+- Fake mode remains unchanged and still produces `model_calls: 0`.
+- OpenAI mode without `--allow-live-model` refuses before any model call.
+- The live diagnostic remains non-generative and does not authorize any next
+  generation step.
+
+Real packet result:
+
+- Fake verification produced:
+  `runs\run_8fa54199f23f3d8e\model_backed_local_law_diagnostic\packet_0003`
+- The packet was accepted with:
+  - `client: fake`
+  - `model_backed: false`
+  - `model_calls: 0`
+  - `candidate_generated: false`
+  - `generation_authorized: false`
+
+Latest verification at this endpoint:
 
 - `ruff check .` passed.
-- `pytest` passed with 466 tests.
+- `pytest` passed with 494 tests.
+- Focused model-backed local-law diagnostic tests passed.
 - `gate list` succeeded.
 - `finalization status --profile autonomous_creative_candidate` remained
   ineligible.
 - `finalize --profile autonomous_creative_candidate` refused.
+- Guarded OpenAI local-law rival diagnostic without `--allow-live-model`
+  refused with `model_calls: 0`.
 
 ## Current Runtime Surface
 
@@ -1880,6 +2074,13 @@ The current repo includes these active areas:
 - checkpoint direction review for sensitive residual target selection
 - proof-no-answer residual-target planning, generation handoff, authorization,
   and evidence handoff metadata validation
+- proof-no-answer generation feedback, failed-generation adjudication, and
+  checkpoint failed-target memory
+- post-local residual strategy synthesis
+- strongest-rival forensic diagnosis
+- local-law discovery from rival forensics
+- direct rival subject materialization
+- model-backed local-law rival diagnostic in fake and guarded live modes
 - target-aware executed ablation controls and comparator consistency checks
 - model-driver demos and model-call inspection
 - guarded live paths behind explicit opt-in
