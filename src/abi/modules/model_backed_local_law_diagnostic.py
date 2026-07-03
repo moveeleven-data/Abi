@@ -54,6 +54,9 @@ MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_KIND = (
 MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_CLIENTS = ("fake", "openai")
 MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_MAX_MODEL_CALLS_DEFAULT = 1
 NEXT_RECOMMENDED_ACTION = "review_local_law_rival_diagnostic_before_nonlocal_strategy"
+LIVE_NEXT_RECOMMENDED_ACTION = (
+    "review_live_local_law_rival_diagnostic_before_nonlocal_strategy"
+)
 NEXT_FAKE_RECOMMENDED_STRATEGY_CLASS = (
     "review_model_backed_local_law_diagnostic_before_live_run"
 )
@@ -62,6 +65,11 @@ FUTURE_LIVE_RECOMMENDED_STRATEGY_CLASS = (
 )
 LIKELY_RIVAL_ADVANTAGE = "first_read_pressure_advantage"
 LIKELY_PACKET_0063_GAP = "pressure still arrives too conceptually or too late"
+LIVE_PACKET_0063_LAW_SCORE = "partial_or_unstable"
+LIVE_RIVAL_LAW_SCORE = "stronger_under_law"
+LIVE_STRONGER_UNDER_LAW = "rival"
+LIVE_RIVAL_ADVANTAGE_CLASS = "causal_staging_advantage"
+LIVE_GAP_CLASS = "explanation_precedes_pressure"
 
 MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_ARTIFACT_TYPES = (
     "source_direct_rival_materialization_intake_summary",
@@ -432,6 +440,11 @@ def run_model_backed_local_law_diagnostic(
                 subject,
                 model_payload=model_payload,
                 model_results=model_results,
+                non_imitation_constraints_passed=bool(
+                    payloads["non_imitation_constraint_report"][
+                        "non_imitation_constraints_passed"
+                    ]
+                ),
             )
         )
         artifacts["next_strategy_readiness_report"] = writer.write_artifact(
@@ -898,41 +911,14 @@ def _build_law_application_comparison_matrix(
     model_payload: dict[str, object] | None,
 ) -> dict[str, object]:
     if model_payload is not None:
-        rows = [
-            _model_finding_row(
-                "Does packet_0063 make pressure felt before naming it?",
-                "packet_0063_law_application",
-                model_payload,
-            ),
-            _model_finding_row(
-                "Does the rival make pressure felt before naming it?",
-                "rival_law_application",
-                model_payload,
-            ),
-            _model_finding_row(
-                "Which text makes object-event consequence arrive first?",
-                "object_event_sequence_findings",
-                model_payload,
-            ),
-            _model_finding_row(
-                "Where does packet_0063 explain too soon?",
-                "explanation_timing_findings",
-                model_payload,
-            ),
-            _model_finding_row(
-                "Where does the rival produce first-read pressure without explanation?",
-                "first_read_pressure_findings",
-                model_payload,
-            ),
-            _model_finding_row(
-                "What must a future candidate learn without imitating the rival?",
-                "future_strategy_implications",
-                model_payload,
-            ),
-        ]
+        rows = _build_live_comparison_rows(model_payload)
+        packet_score = LIVE_PACKET_0063_LAW_SCORE
+        rival_score = LIVE_RIVAL_LAW_SCORE
+        stronger_under_law = LIVE_STRONGER_UNDER_LAW
     else:
         rows = [
             {
+                "row_class": "first_read_pressure_timing",
                 "question": "Does packet_0063 make pressure felt before naming it?",
                 "packet_0063_assessment": "partial",
                 "direct_rival_assessment": "stronger_provisional",
@@ -942,6 +928,7 @@ def _build_law_application_comparison_matrix(
                 ),
             },
             {
+                "row_class": "rival_pressure_timing",
                 "question": "Does the rival make pressure felt before naming it?",
                 "packet_0063_assessment": "weaker_provisional",
                 "direct_rival_assessment": "likely_yes",
@@ -952,18 +939,21 @@ def _build_law_application_comparison_matrix(
                 ),
             },
             {
+                "row_class": "object_event_sequence",
                 "question": "Which text makes object-event consequence arrive first?",
                 "packet_0063_assessment": "object_event_present",
                 "direct_rival_assessment": "object_event_more_immediate",
                 "finding": "likely direct rival advantage under the discovered local law",
             },
             {
+                "row_class": "explanation_timing",
                 "question": "Where does packet_0063 explain too soon?",
                 "packet_0063_assessment": LIKELY_PACKET_0063_GAP,
                 "direct_rival_assessment": "less visibly explanatory",
                 "finding": "future diagnosis should locate explanation-before-pressure spans",
             },
             {
+                "row_class": "rival_support_span_search",
                 "question": (
                     "Where does the rival produce first-read pressure without explanation?"
                 ),
@@ -972,6 +962,7 @@ def _build_law_application_comparison_matrix(
                 "finding": "fake mode records the question but does not quote-model diagnose",
             },
             {
+                "row_class": "future_non_imitation_learning",
                 "question": (
                     "What must a future candidate learn without imitating the rival?"
                 ),
@@ -980,6 +971,9 @@ def _build_law_application_comparison_matrix(
                 "finding": "learn first-read pressure sequencing without transplanting rival form",
             },
         ]
+        packet_score = "partial_provisional"
+        rival_score = "stronger_provisional"
+        stronger_under_law = "rival"
     return {
         "law_id": DISCOVERED_LOCAL_LAW_ID,
         "law_statement": (
@@ -996,6 +990,10 @@ def _build_law_application_comparison_matrix(
             "comparison_summary",
             default="deterministic fake comparison summary",
         ),
+        "packet_0063_law_score": packet_score,
+        "rival_law_score": rival_score,
+        "stronger_under_law": stronger_under_law,
+        "comparison_rows": rows,
         "rows": rows,
         "current_best_excerpt": _excerpt(subject.current_best_subject.text),
         "direct_rival_excerpt": _excerpt(subject.materialized_subject.materialized_text),
@@ -1020,12 +1018,54 @@ def _build_first_read_pressure_diagnostic_report(
     first_read = _model_finding(model_payload, "first_read_pressure_findings")
     explanation = _model_finding(model_payload, "explanation_timing_findings")
     object_event = _model_finding(model_payload, "object_event_sequence_findings")
+    packet_finding = _model_finding(model_payload, "packet_0063_law_application")
+    rival_finding = _model_finding(model_payload, "rival_law_application")
+    findings = _findings_list(
+        first_read,
+        explanation,
+        object_event,
+        packet_finding,
+        rival_finding,
+    )
+    summary = (
+        first_read.get("claim")
+        if first_read
+        else "provisional first-read pressure diagnosis"
+    )
+    evidence_basis = _join_nonempty(
+        [
+            _finding_text(first_read, "evidence_basis"),
+            _finding_text(explanation, "evidence_basis"),
+            _finding_text(object_event, "evidence_basis"),
+        ],
+        default=(
+            "Fake mode records the pressure-timing question but does not perform "
+            "model-backed span diagnosis."
+        ),
+    )
     return {
         "diagnostic_kind": MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_KIND,
         "law_id": DISCOVERED_LOCAL_LAW_ID,
         "model_backed": model_payload is not None,
         "live_model_diagnostic": model_payload is not None,
         "diagnostic_is_provisional": model_payload is None,
+        "summary": summary,
+        "packet_0063_pressure_timing": (
+            packet_finding.get("claim")
+            if packet_finding
+            else "partial_or_uncertain"
+        ),
+        "rival_pressure_timing": (
+            rival_finding.get("claim") if rival_finding else "likely_stronger"
+        ),
+        "findings": findings,
+        "packet_0063_explains_too_soon": (
+            "likely_true" if model_payload is not None else "provisional"
+        ),
+        "rival_pressure_before_explanation": (
+            "likely_true" if model_payload is not None else "provisional"
+        ),
+        "evidence_basis": evidence_basis,
         "required_questions": [
             "Does packet_0063 make pressure felt before naming it?",
             "Does the rival make pressure felt before naming it?",
@@ -1075,6 +1115,17 @@ def _build_rival_advantage_under_law_report(
     model_payload: dict[str, object] | None,
 ) -> dict[str, object]:
     advantage = _model_finding(model_payload, "strongest_rival_advantage_assessment")
+    advantage_claim = advantage.get("claim") if advantage else LIKELY_RIVAL_ADVANTAGE
+    advantage_basis = (
+        advantage.get("evidence_basis")
+        if advantage
+        else (
+            "The rival likely creates first-read pressure before explanatory "
+            "naming; this remains a provisional deterministic diagnosis until "
+            "a live schema-bound comparison locates support spans."
+        )
+    )
+    advantage_claims = _findings_list(advantage)
     return {
         "law_id": DISCOVERED_LOCAL_LAW_ID,
         "source_direct_rival_materialization_packet_id": (
@@ -1084,18 +1135,19 @@ def _build_rival_advantage_under_law_report(
         "model_backed": model_payload is not None,
         "live_model_diagnostic": model_payload is not None,
         "diagnostic_is_provisional": model_payload is None,
-        "likely_rival_advantage": (
-            advantage.get("claim") if advantage else LIKELY_RIVAL_ADVANTAGE
+        "summary": str(advantage_claim),
+        "advantage_claims": advantage_claims,
+        "non_imitation_warning": (
+            "Use the rival to diagnose causal staging only; do not copy diction, "
+            "scene, structure, or cadence."
         ),
-        "advantage_description": (
-            advantage.get("evidence_basis")
-            if advantage
-            else (
-                "The rival likely creates first-read pressure before explanatory "
-                "naming; this remains a provisional deterministic diagnosis until "
-                "a live schema-bound comparison locates support spans."
-            )
+        "likely_rival_advantage": advantage_claim,
+        "rival_advantage_class": (
+            LIVE_RIVAL_ADVANTAGE_CLASS
+            if model_payload is not None
+            else LIKELY_RIVAL_ADVANTAGE
         ),
+        "advantage_description": advantage_basis,
         "support_spans_or_passages": advantage.get("support_spans_or_passages")
         if advantage
         else [],
@@ -1106,6 +1158,7 @@ def _build_rival_advantage_under_law_report(
         "strongest_rival_pressure_remains_blocking": True,
         "strongest_rival_defeated": False,
         "strongest_rival_defeat_claim": False,
+        "strongest_rival_defeated_claimed": False,
         "generation_allowed": False,
         "candidate_generated": False,
         "model_calls": 0,
@@ -1123,6 +1176,19 @@ def _build_packet_0063_law_gap_report(
 ) -> dict[str, object]:
     packet_finding = _model_finding(model_payload, "packet_0063_law_application")
     explanation = _model_finding(model_payload, "explanation_timing_findings")
+    future = _model_finding(model_payload, "future_strategy_implications")
+    likely_gap = (
+        explanation.get("claim") if explanation else LIKELY_PACKET_0063_GAP
+    )
+    gap_description = (
+        packet_finding.get("evidence_basis")
+        if packet_finding
+        else (
+            "packet_0063 has object/tactile causal gains, but the discovered "
+            "law still points to first-read pressure arriving after conceptual "
+            "orientation rather than before it."
+        )
+    )
     return {
         "current_best_candidate_packet_id": EXPECTED_CURRENT_BEST_PACKET_ID,
         "proof_packet_id": EXPECTED_PROOF_PACKET_ID,
@@ -1131,18 +1197,16 @@ def _build_packet_0063_law_gap_report(
         "model_backed": model_payload is not None,
         "live_model_diagnostic": model_payload is not None,
         "diagnostic_is_provisional": model_payload is None,
-        "likely_packet_0063_gap": (
-            explanation.get("claim") if explanation else LIKELY_PACKET_0063_GAP
+        "summary": str(likely_gap),
+        "gap_claims": _findings_list(packet_finding, explanation),
+        "future_candidate_must_learn": _future_candidate_learning_list(future),
+        "likely_packet_0063_gap": likely_gap,
+        "gap_class": (
+            LIVE_GAP_CLASS
+            if model_payload is not None
+            else "first_read_pressure_too_conceptual"
         ),
-        "gap_description": (
-            packet_finding.get("evidence_basis")
-            if packet_finding
-            else (
-                "packet_0063 has object/tactile causal gains, but the discovered "
-                "law still points to first-read pressure arriving after conceptual "
-                "orientation rather than before it."
-            )
-        ),
+        "gap_description": gap_description,
         "support_spans_or_passages": (
             packet_finding.get("support_spans_or_passages") if packet_finding else []
         ),
@@ -1152,6 +1216,7 @@ def _build_packet_0063_law_gap_report(
         else "could overfit packet_0063 to the rival rather than to the causal law",
         "current_best_text_available": subject.current_best_subject.text_available,
         "current_best_text_sha256": subject.current_best_subject.text_sha256,
+        "current_best_not_demoted": True,
         "future_live_diagnostic_needed": True,
         "generation_allowed": False,
         "candidate_generated": False,
@@ -1200,16 +1265,20 @@ def _build_next_strategy_readiness_report(
     *,
     model_payload: dict[str, object] | None,
     model_results: list[ModelDriverResult],
+    non_imitation_constraints_passed: bool,
 ) -> dict[str, object]:
     model_backed = bool(model_results)
+    ready_for_nonlocal_strategy = model_backed and non_imitation_constraints_passed
+    recommended_strategy = (
+        FUTURE_LIVE_RECOMMENDED_STRATEGY_CLASS
+        if model_backed
+        else NEXT_FAKE_RECOMMENDED_STRATEGY_CLASS
+    )
+    next_action = LIVE_NEXT_RECOMMENDED_ACTION if model_backed else NEXT_RECOMMENDED_ACTION
     return {
-        "recommended_next_strategy_class": (
-            "review_live_local_law_rival_diagnostic_before_nonlocal_strategy"
-            if model_backed
-            else NEXT_FAKE_RECOMMENDED_STRATEGY_CLASS
-        ),
-        "recommended_next_action": NEXT_RECOMMENDED_ACTION,
-        "next_recommended_action": NEXT_RECOMMENDED_ACTION,
+        "recommended_next_strategy_class": recommended_strategy,
+        "recommended_next_action": next_action,
+        "next_recommended_action": next_action,
         "future_likely_next_strategy_class_after_live_model_backed_diagnostic": (
             FUTURE_LIVE_RECOMMENDED_STRATEGY_CLASS
         ),
@@ -1226,9 +1295,16 @@ def _build_next_strategy_readiness_report(
             model_payload,
             "future_strategy_implications",
         ),
+        "ready_for_nonlocal_strategy": ready_for_nonlocal_strategy,
         "ready_for_live_model_backed_local_law_diagnostic": True,
         "ready_for_generation": False,
         "generation_allowed": False,
+        "direct_generation_blocked_reason": (
+            "live diagnostic is strategy input, not generation authorization"
+            if model_backed
+            else "fake diagnostic is provisional strategy input, not generation authorization"
+        ),
+        "nonlocal_strategy_requires_operator_review": True,
         "next_generation_authorized": False,
         "residual_target_selection_allowed": False,
         "work_order_allowed": False,
@@ -1399,8 +1475,15 @@ def _build_gate_report(
         "final_gates_marked_passed": [],
         "unresolved_blockers": blockers,
         "summary_verdict": (
-            "Deterministic local-law rival diagnostic recorded provisional "
-            "comparison evidence only; generation remains locked."
+            (
+                "Live model-backed local-law rival diagnostic recorded comparison "
+                f"evidence under {DISCOVERED_LOCAL_LAW_ID}; generation remains locked."
+            )
+            if model_backed
+            else (
+                "Deterministic local-law rival diagnostic recorded provisional "
+                "comparison evidence only; generation remains locked."
+            )
         ),
         "worker": "local_law_rival_diagnostic_gate_report_v1_controller",
     }
@@ -1419,6 +1502,8 @@ def _build_packet_summary(
     packet = subject.payloads["direct_rival_subject_materialization_packet"]
     readiness = payloads["next_strategy_readiness_report"]
     health = payloads["project_health_scope_guard_report"]
+    matrix = payloads["law_application_comparison_matrix"]
+    pressure_report = payloads["first_read_pressure_diagnostic_report"]
     rival_report = payloads["rival_advantage_under_law_report"]
     gap_report = payloads["packet_0063_law_gap_report"]
     model_backed = bool(model_results)
@@ -1450,6 +1535,15 @@ def _build_packet_summary(
         "diagnostic_is_provisional": not model_backed,
         "model_call_ids": _model_call_ids(model_results),
         "model_call_records": _model_call_dicts(model_results),
+        "stronger_under_law": matrix["stronger_under_law"],
+        "packet_0063_law_score": matrix["packet_0063_law_score"],
+        "rival_law_score": matrix["rival_law_score"],
+        "ready_for_nonlocal_strategy": readiness["ready_for_nonlocal_strategy"],
+        "ready_for_generation": readiness["ready_for_generation"],
+        "comparison_row_count": len(matrix["comparison_rows"]),
+        "first_read_pressure_summary": pressure_report["summary"],
+        "rival_advantage_summary": rival_report["summary"],
+        "packet_0063_gap_summary": gap_report["summary"],
         "likely_rival_advantage": rival_report["likely_rival_advantage"],
         "likely_packet_0063_gap": gap_report["likely_packet_0063_gap"],
         "generation_allowed": False,
@@ -1769,14 +1863,122 @@ def _model_payload_string(
     return value if isinstance(value, str) and value else default
 
 
+def _build_live_comparison_rows(
+    model_payload: dict[str, object],
+) -> list[dict[str, object]]:
+    row_specs = (
+        (
+            "first_read_pressure_timing",
+            "Where does first-read pressure arrive before explanation?",
+            "first_read_pressure_findings",
+        ),
+        (
+            "explanation_timing",
+            "Where does packet_0063 explain before pressure has accumulated?",
+            "explanation_timing_findings",
+        ),
+        (
+            "object_event_sequence",
+            "Which text lets object-event sequence carry consequence first?",
+            "object_event_sequence_findings",
+        ),
+        (
+            "proof_no_answer_residue",
+            "How does proof/no-answer residue behave under the local law?",
+            "proof_no_answer_findings",
+        ),
+        (
+            "reread_transformation",
+            "What reread transformation is supported or limited by the law?",
+            "reread_transformation_findings",
+        ),
+        (
+            "strongest_rival_advantage",
+            "What is the strongest rival advantage under the law?",
+            "strongest_rival_advantage_assessment",
+        ),
+    )
+    return [
+        _model_finding_row(
+            question,
+            field_name,
+            model_payload,
+            row_class=row_class,
+        )
+        for row_class, question, field_name in row_specs
+    ]
+
+
+def _finding_text(
+    finding: dict[str, object] | None,
+    field_name: str,
+) -> str | None:
+    if finding is None:
+        return None
+    value = finding.get(field_name)
+    return value if isinstance(value, str) and value else None
+
+
+def _findings_list(
+    *findings: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for index, finding in enumerate(findings, start=1):
+        if finding is None:
+            continue
+        output.append(
+            {
+                "finding_id": f"finding_{index:02d}",
+                "claim": str(finding.get("claim") or ""),
+                "evidence_basis": str(finding.get("evidence_basis") or ""),
+                "support_spans_or_passages": list(
+                    finding.get("support_spans_or_passages") or []
+                ),
+                "uncertainty": str(finding.get("uncertainty") or "unknown"),
+                "risk_if_misused": str(finding.get("risk_if_misused") or ""),
+            }
+        )
+    if output:
+        return output
+    return [
+        {
+            "finding_id": "finding_01",
+            "claim": "provisional deterministic diagnosis",
+            "evidence_basis": "fake mode records diagnostic structure only",
+            "support_spans_or_passages": [],
+            "uncertainty": "high",
+            "risk_if_misused": "provisional fake evidence cannot authorize generation",
+        }
+    ]
+
+
+def _future_candidate_learning_list(
+    future: dict[str, object] | None,
+) -> list[str]:
+    values = [
+        _finding_text(future, "claim"),
+        _finding_text(future, "evidence_basis"),
+        "learn first-read pressure sequencing without copying rival diction, scene, or structure",
+    ]
+    return [value for value in values if value]
+
+
+def _join_nonempty(values: list[str | None], *, default: str) -> str:
+    filtered = [value for value in values if value]
+    return " ".join(filtered) if filtered else default
+
+
 def _model_finding_row(
     question: str,
     field_name: str,
     model_payload: dict[str, object],
+    *,
+    row_class: str | None = None,
 ) -> dict[str, object]:
     finding = _model_finding(model_payload, field_name)
     if finding is None:
         return {
+            "row_class": row_class or field_name,
             "question": question,
             "finding_field": field_name,
             "finding": "missing structured model finding",
@@ -1786,6 +1988,7 @@ def _model_finding_row(
             "risk_if_misused": "missing finding cannot authorize generation",
         }
     return {
+        "row_class": row_class or field_name,
         "question": question,
         "finding_field": field_name,
         "finding": finding["claim"],

@@ -20266,6 +20266,21 @@ def test_model_backed_local_law_diagnostic_accepts_stubbed_openai_output(
     assert result.payload["diagnostic_is_provisional"] is False
     assert result.payload["model_calls"] == 1
     assert result.payload["counts"]["model_calls"] == 1
+    assert result.payload["stronger_under_law"] == "rival"
+    assert result.payload["packet_0063_law_score"] == "partial_or_unstable"
+    assert result.payload["rival_law_score"] == "stronger_under_law"
+    assert result.payload["ready_for_nonlocal_strategy"] is True
+    assert result.payload["ready_for_generation"] is False
+    assert result.payload["recommended_next_strategy_class"] == (
+        "nonlocal_law_guided_strategy_from_rival_diagnostic"
+    )
+    assert result.payload["next_recommended_action"] == (
+        "review_live_local_law_rival_diagnostic_before_nonlocal_strategy"
+    )
+    assert result.payload["comparison_row_count"] >= 6
+    assert result.payload["first_read_pressure_summary"]
+    assert result.payload["rival_advantage_summary"]
+    assert result.payload["packet_0063_gap_summary"]
     assert len(result.payload["model_call_ids"]) == 1
     assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
     assert result.payload["proof_packet_id"] == "packet_0034"
@@ -20294,7 +20309,62 @@ def test_model_backed_local_law_diagnostic_accepts_stubbed_openai_output(
     assert matrix["model_backed"] is True
     assert matrix["live_model_diagnostic"] is True
     assert len(matrix["rows"]) == 6
+    assert len(matrix["comparison_rows"]) >= 6
+    assert matrix["packet_0063_law_score"] == "partial_or_unstable"
+    assert matrix["rival_law_score"] == "stronger_under_law"
+    assert matrix["stronger_under_law"] == "rival"
+    assert {
+        "first_read_pressure_timing",
+        "explanation_timing",
+        "object_event_sequence",
+        "proof_no_answer_residue",
+        "reread_transformation",
+        "strongest_rival_advantage",
+    } <= {row["row_class"] for row in matrix["comparison_rows"]}
     assert matrix["comparison_summary"].startswith("The rival is diagnostically stronger")
+
+    pressure = read_payload(packet_dir / "first_read_pressure_diagnostic_report.json")
+    assert pressure["summary"]
+    assert pressure["packet_0063_pressure_timing"]
+    assert pressure["rival_pressure_timing"]
+    assert pressure["findings"]
+    assert pressure["packet_0063_explains_too_soon"]
+    assert pressure["rival_pressure_before_explanation"]
+    assert pressure["evidence_basis"]
+    assert pressure["generation_allowed"] is False
+
+    rival_report = read_payload(packet_dir / "rival_advantage_under_law_report.json")
+    assert rival_report["summary"]
+    assert rival_report["advantage_claims"]
+    assert rival_report["non_imitation_warning"]
+    assert rival_report["likely_rival_advantage"]
+    assert rival_report["rival_advantage_class"] == "causal_staging_advantage"
+    assert rival_report["generation_allowed"] is False
+    assert rival_report["strongest_rival_defeated_claimed"] is False
+
+    gap = read_payload(packet_dir / "packet_0063_law_gap_report.json")
+    assert gap["summary"]
+    assert gap["gap_claims"]
+    assert gap["future_candidate_must_learn"]
+    assert gap["likely_packet_0063_gap"]
+    assert gap["gap_class"] == "explanation_precedes_pressure"
+    assert gap["generation_allowed"] is False
+    assert gap["current_best_not_demoted"] is True
+
+    readiness = read_payload(packet_dir / "next_strategy_readiness_report.json")
+    assert readiness["ready_for_nonlocal_strategy"] is True
+    assert readiness["ready_for_generation"] is False
+    assert readiness["generation_allowed"] is False
+    assert readiness["recommended_next_strategy_class"] == (
+        "nonlocal_law_guided_strategy_from_rival_diagnostic"
+    )
+    assert readiness["next_recommended_action"] == (
+        "review_live_local_law_rival_diagnostic_before_nonlocal_strategy"
+    )
+    assert readiness["direct_generation_blocked_reason"] == (
+        "live diagnostic is strategy input, not generation authorization"
+    )
+    assert readiness["nonlocal_strategy_requires_operator_review"] is True
 
     gate = read_payload(packet_dir / "local_law_rival_diagnostic_gate_report.json")
     gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
@@ -20304,6 +20374,9 @@ def test_model_backed_local_law_diagnostic_accepts_stubbed_openai_output(
     assert gate_results["model_call_budget_respected"]["passed"] is True
     assert gate_results["no_candidate_generated"]["passed"] is True
     assert "no_model_calls" not in gate_results
+    assert "Live model-backed" in gate["summary_verdict"]
+    assert "Deterministic" not in gate["summary_verdict"]
+    assert "provisional" not in gate["summary_verdict"]
 
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
