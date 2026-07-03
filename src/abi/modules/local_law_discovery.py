@@ -47,6 +47,40 @@ NEXT_RECOMMENDED_ACTION = (
 )
 DIAGNOSIS_BASIS = "evidence_map_based"
 TOP_FORENSIC_HYPOTHESIS_ID = "first_read_pressure_advantage"
+PRIMARY_LAW_GAP = (
+    "packet_0063 has object/tactile causal gains, but first-read pressure may "
+    "still arrive too conceptually or too late; object-event consequence must "
+    "pressurize the reader before explanation names the pressure."
+)
+CURRENT_BEST_STRENGTHS = (
+    "table/dust/spoon/saucer/ring object field",
+    "object-motion causality path integrated",
+    "tactile inevitability path integrated",
+    "proof packet_0034 exists",
+    "reader-state packet_0013 exists",
+    "no finality claim",
+)
+CURRENT_BEST_LAW_GAPS = (
+    "first-read pressure may still arrive too late",
+    "pressure may still be named after being established rather than enacted before naming",
+    "proof/no-answer remains unstable after failed proof-no-answer path",
+    "reader-state transformation remains partial",
+    "strongest rival still blocks",
+    "local residual patching has exhausted",
+)
+LAW_GAP_BASIS = (
+    "strongest-rival forensic diagnosis packet",
+    "current best packet_0063",
+    "proof packet_0034",
+    "reader-state packet_0013",
+    "failed local residual target memory",
+)
+EVIDENCE_LIMITATION = (
+    "The discovered law is evidence-map-based and not direct rival-text proof; "
+    "direct rival subject material or model-backed rival forensic diagnosis is "
+    "required before any generation that claims to address strongest-rival "
+    "pressure."
+)
 
 LOCAL_LAW_DISCOVERY_ARTIFACT_TYPES = (
     "source_diagnosis_intake_summary",
@@ -603,6 +637,11 @@ def _build_current_best_law_gap_report(
         "proof_packet_id": packet.get("proof_packet_id"),
         "reader_state_packet_id": packet.get("reader_state_packet_id"),
         "law_id": DISCOVERED_LOCAL_LAW_ID,
+        "primary_law_gap": PRIMARY_LAW_GAP,
+        "current_best_strengths": list(CURRENT_BEST_STRENGTHS),
+        "current_best_law_gaps": list(CURRENT_BEST_LAW_GAPS),
+        "gap_severity": "moderate_or_high",
+        "gap_basis": list(LAW_GAP_BASIS),
         "likely_gaps": [
             "first-read pressure may still arrive too late or too conceptually",
             "packet_0063 has object/tactile gains but may still explain pressure after establishing it",
@@ -673,6 +712,9 @@ def _build_evidence_basis_and_limitations_report(
             "this packet does not authorize generation",
             "no claim is made that packet_0063 beats the strongest rival",
         ],
+        "evidence_limitation": EVIDENCE_LIMITATION,
+        "limitation": EVIDENCE_LIMITATION,
+        "direct_rival_subject_required_before_generation": True,
         "required_before_generation_claim": [
             "direct rival subject should be materialized",
             "or model-backed rival comparison should run before any generation that claims to beat the rival",
@@ -928,6 +970,8 @@ def _build_packet_summary(
 ) -> dict[str, object]:
     packet = subject.payloads["strongest_rival_forensic_diagnosis_packet"]
     law = payloads["discovered_local_law_statement"]
+    gap = payloads["current_best_law_gap_report"]
+    limitations = payloads["evidence_basis_and_limitations_report"]
     options = payloads["next_strategy_option_map"]
     health = payloads["project_health_scope_guard_report"]
     counts = packet_artifact_count_summary(
@@ -954,6 +998,14 @@ def _build_packet_summary(
         "top_forensic_hypothesis_id": packet.get("top_ranked_hypothesis_id"),
         "discovered_local_law_id": law["law_id"],
         "law_statement": law["law_statement"],
+        "primary_law_gap": gap["primary_law_gap"],
+        "current_best_strengths": gap["current_best_strengths"],
+        "current_best_law_gaps": gap["current_best_law_gaps"],
+        "evidence_limitation": limitations["evidence_limitation"],
+        "direct_rival_subject_required_before_generation": limitations[
+            "direct_rival_subject_required_before_generation"
+        ],
+        "ready_for_direct_rival_subject_materialization": True,
         "recommended_next_strategy_class": options["recommended_next_strategy_class"],
         "recommended_next_action": options["recommended_next_action"],
         "next_recommended_action": options["next_recommended_action"],

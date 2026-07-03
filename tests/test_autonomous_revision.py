@@ -19128,6 +19128,20 @@ def test_local_law_discovery_accepts_reviewed_diagnosis_packet(tmp_path):
     assert result.payload["discovered_local_law_id"] == DISCOVERED_LOCAL_LAW_ID
     assert "first-read pressure" in result.payload["law_statement"]
     assert "before explanation" in result.payload["law_statement"]
+    assert result.payload["primary_law_gap"]
+    assert "first-read pressure" in result.payload["primary_law_gap"]
+    assert result.payload["current_best_strengths"]
+    assert "table/dust/spoon/saucer/ring object field" in result.payload[
+        "current_best_strengths"
+    ]
+    assert result.payload["current_best_law_gaps"]
+    assert "first-read pressure may still arrive too late" in result.payload[
+        "current_best_law_gaps"
+    ]
+    assert result.payload["evidence_limitation"]
+    assert "direct rival subject material" in result.payload["evidence_limitation"]
+    assert result.payload["direct_rival_subject_required_before_generation"] is True
+    assert result.payload["ready_for_direct_rival_subject_materialization"] is True
     assert result.payload["recommended_next_strategy_class"] == (
         LOCAL_LAW_NEXT_STRATEGY_CLASS
     )
@@ -19178,6 +19192,13 @@ def test_local_law_discovery_accepts_reviewed_diagnosis_packet(tmp_path):
 
     gap = read_payload(packet_dir / "current_best_law_gap_report.json")
     assert gap["current_best_candidate_packet_id"] == "packet_0063"
+    assert gap["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert gap["primary_law_gap"] == result.payload["primary_law_gap"]
+    assert gap["current_best_strengths"] == result.payload["current_best_strengths"]
+    assert gap["current_best_law_gaps"] == result.payload["current_best_law_gaps"]
+    assert gap["gap_severity"] == "moderate_or_high"
+    assert gap["gap_basis"]
+    assert gap["generation_allowed"] is False
     assert "first-read pressure may still arrive too late or too conceptually" in gap[
         "likely_gaps"
     ]
@@ -19198,6 +19219,14 @@ def test_local_law_discovery_accepts_reviewed_diagnosis_packet(tmp_path):
         packet_dir / "evidence_basis_and_limitations_report.json"
     )
     assert limitations["direct_rival_text_available"] is False
+    assert limitations["model_backed"] is False
+    assert limitations["evidence_basis"]
+    assert limitations["evidence_limitation"] == result.payload[
+        "evidence_limitation"
+    ]
+    assert limitations["limitation"] == limitations["evidence_limitation"]
+    assert limitations["diagnosis_basis"] == "evidence_map_based"
+    assert limitations["direct_rival_subject_required_before_generation"] is True
     assert "local law is evidence-map-based, not direct textual forensic proof" in (
         limitations["limitations"]
     )
@@ -19279,6 +19308,12 @@ def test_local_law_discovery_cli_surface_contract(tmp_path, capsys):
     assert payload["reader_state_packet_id"] == "packet_0013"
     assert payload["discovered_local_law_id"] == DISCOVERED_LOCAL_LAW_ID
     assert payload["recommended_next_strategy_class"] == LOCAL_LAW_NEXT_STRATEGY_CLASS
+    assert payload["primary_law_gap"]
+    assert payload["current_best_strengths"]
+    assert payload["current_best_law_gaps"]
+    assert payload["evidence_limitation"]
+    assert payload["direct_rival_subject_required_before_generation"] is True
+    assert payload["ready_for_direct_rival_subject_materialization"] is True
     assert payload["model_calls"] == 0
     assert payload["candidate_generated"] is False
     assert payload["generation_authorized"] is False
