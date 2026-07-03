@@ -134,6 +134,14 @@ from abi.modules.model_backed_local_law_diagnostic import (
     NEXT_RECOMMENDED_ACTION as LOCAL_LAW_RIVAL_DIAGNOSTIC_NEXT_ACTION,
     run_model_backed_local_law_diagnostic,
 )
+from abi.modules.nonlocal_law_guided_strategy import (
+    FUTURE_WORK_ORDER_ACTION as NONLOCAL_LAW_FUTURE_WORK_ORDER_ACTION,
+    NEXT_RECOMMENDED_ACTION as NONLOCAL_LAW_NEXT_RECOMMENDED_ACTION,
+    NONLOCAL_LAW_GUIDED_STRATEGY_ARTIFACT_TYPES,
+    NONLOCAL_LAW_GUIDED_STRATEGY_KIND,
+    SELECTED_NONLOCAL_STRATEGY_CLASS,
+    run_nonlocal_law_guided_strategy,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -17960,6 +17968,49 @@ def local_law_rival_diagnostic_client_factory(clients: list, mutator=None):
     return _factory
 
 
+def build_nonlocal_law_guided_strategy_source_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str, dict[str, object]]:
+    config, materialization_packet, run_id, _direct_artifact_id = (
+        build_model_backed_local_law_diagnostic_source_chain(tmp_path)
+    )
+    clients: list[StubLocalLawRivalDiagnosticClient] = []
+    diagnostic = run_model_backed_local_law_diagnostic(
+        config,
+        client_name="openai",
+        direct_rival_materialization_packet=materialization_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-local-law-rival-model",
+        client_factory=local_law_rival_diagnostic_client_factory(clients),
+    )
+    assert diagnostic.exit_code == 0
+    assert diagnostic.payload["live_model_diagnostic"] is True
+    assert diagnostic.payload["model_backed"] is True
+    assert diagnostic.payload["model_calls"] == 1
+    return config, Path(str(diagnostic.payload["packet_dir"])), run_id, diagnostic.payload
+
+
+def copy_packet_with_payload_mutation(
+    tmp_path: Path,
+    source_packet: Path,
+    *,
+    copy_name: str,
+    artifact_type: str,
+    mutator,
+) -> Path:
+    safe_copy_name = "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in copy_name
+    ).rstrip(" .")
+    copied_packet = tmp_path / safe_copy_name
+    shutil.copytree(source_packet, copied_packet)
+    rewrite_payload(copied_packet / f"{artifact_type}.json", mutator)
+    return copied_packet
+
+
 def write_checkpoint_fixture_current_best_candidate(config: AbiConfig, run_id: str) -> Path:
     candidate_dir = config.run_dir(run_id) / "bounded_macro_recomposition" / "packet_0063"
     candidate_text = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
@@ -20499,6 +20550,317 @@ def test_model_backed_local_law_diagnostic_rejects_invalid_stubbed_openai_output
     assert calls[-1].status == MODEL_CALL_VALIDATION_FAILED
     assert calls[-1].parsed_output_artifact_id is None
     assert finalization.refused is True
+
+
+def test_nonlocal_law_guided_strategy_accepts_live_diagnostic(tmp_path):
+    config, diagnostic_packet, run_id, diagnostic_payload = (
+        build_nonlocal_law_guided_strategy_source_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection, run_id=run_id)
+
+    result = run_nonlocal_law_guided_strategy(
+        config,
+        diagnostic_packet=diagnostic_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_diagnostic_packet_id"] == diagnostic_packet.name
+    assert result.payload["source_direct_rival_materialization_packet_id"] == (
+        diagnostic_payload["source_direct_rival_materialization_packet_id"]
+    )
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["strategy_kind"] == NONLOCAL_LAW_GUIDED_STRATEGY_KIND
+    assert result.payload["selected_strategy_class"] == (
+        SELECTED_NONLOCAL_STRATEGY_CLASS
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        NONLOCAL_LAW_NEXT_RECOMMENDED_ACTION
+    )
+    assert result.payload["future_work_order_recommended_next_action"] == (
+        NONLOCAL_LAW_FUTURE_WORK_ORDER_ACTION
+    )
+    assert result.payload["ready_for_nonlocal_work_order_planning"] is True
+    assert result.payload["ready_for_generation"] is False
+    assert result.payload["generation_requires_future_work_order"] is True
+    assert result.payload["generation_requires_separate_authorization"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert set(result.payload["artifact_paths"]) == set(
+        NONLOCAL_LAW_GUIDED_STRATEGY_ARTIFACT_TYPES
+    )
+    for artifact_type in NONLOCAL_LAW_GUIDED_STRATEGY_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    option_map = read_payload(packet_dir / "nonlocal_strategy_option_map.json")
+    assert len(option_map["ranked_options"]) == 5
+    assert option_map["ranked_options"][0]["selected"] is True
+    assert option_map["ranked_options"][0]["strategy_class"] == (
+        SELECTED_NONLOCAL_STRATEGY_CLASS
+    )
+
+    constraints = read_payload(packet_dir / "future_candidate_design_constraints.json")
+    assert "consequence before explanation" in constraints["required_constraints"]
+    assert "no local residual patching" in constraints["required_constraints"]
+    assert "copying rival objects/scenes/actions" in constraints[
+        "forbidden_constraints"
+    ]
+    assert "claiming finality or strongest-rival defeat" in constraints[
+        "forbidden_constraints"
+    ]
+
+    rival_report = read_payload(
+        packet_dir / "rival_advantage_not_to_copy_report.json"
+    )
+    assert "cup" in rival_report["forbidden_rival_sequence"]
+    assert "windowsill" in rival_report["forbidden_rival_sequence"]
+    assert rival_report["strongest_rival_defeated"] is False
+
+    readiness = read_payload(packet_dir / "next_work_order_readiness_report.json")
+    assert readiness["ready_for_nonlocal_work_order_planning"] is True
+    assert readiness["ready_for_generation"] is False
+    assert readiness["recommended_next_action"] == NONLOCAL_LAW_FUTURE_WORK_ORDER_ACTION
+
+    lock = read_payload(packet_dir / "generation_lock_report.json")
+    assert lock["generation_authorized"] is False
+    assert lock["candidate_generated"] is False
+    assert lock["work_order_created"] is False
+
+    gate = read_payload(packet_dir / "nonlocal_law_guided_strategy_gate_report.json")
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+    assert gate_results["no_candidate_generated"]["passed"] is True
+    assert gate_results["no_generation_authorized"]["passed"] is True
+    assert gate_results["no_residual_target_selected"]["passed"] is True
+    assert gate_results["no_work_order_created"]["passed"] is True
+    assert gate_results["no_model_calls"]["passed"] is True
+    assert gate_results["finalization_eligible"]["passed"] is False
+
+    run_dir = config.run_dir(run_id)
+    assert not (run_dir / "residual_target_selection").exists()
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection, run_id=run_id)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_nonlocal_law_guided_strategy_cli_surface_contract(tmp_path, capsys):
+    _config, diagnostic_packet, _run_id, _diagnostic_payload = (
+        build_nonlocal_law_guided_strategy_source_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "plan-nonlocal-law-strategy",
+            "--diagnostic-packet",
+            str(diagnostic_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["strategy_kind"] == NONLOCAL_LAW_GUIDED_STRATEGY_KIND
+    assert payload["selected_strategy_class"] == SELECTED_NONLOCAL_STRATEGY_CLASS
+    assert payload["candidate_generated"] is False
+    assert payload["generation_authorized"] is False
+    assert payload["residual_target_selected"] is False
+    assert payload["work_order_created"] is False
+    assert payload["model_calls"] == 0
+    assert payload["ready_for_nonlocal_work_order_planning"] is True
+    assert payload["ready_for_generation"] is False
+
+
+def test_nonlocal_law_guided_strategy_requires_operator_review(tmp_path):
+    config, diagnostic_packet, _run_id, _diagnostic_payload = (
+        build_nonlocal_law_guided_strategy_source_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_guided_strategy(
+        config,
+        diagnostic_packet=diagnostic_packet,
+        operator_reviewed=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_guided_strategy_refuses_fake_provisional_diagnostic(tmp_path):
+    config, materialization_packet, _run_id, _direct_artifact_id = (
+        build_model_backed_local_law_diagnostic_source_chain(tmp_path)
+    )
+    diagnostic = run_model_backed_local_law_diagnostic(
+        config,
+        client_name="fake",
+        direct_rival_materialization_packet=materialization_packet,
+        operator_reviewed=True,
+        allow_live_model=False,
+        max_model_calls=1,
+    )
+    assert diagnostic.exit_code == 0
+
+    result = run_nonlocal_law_guided_strategy(
+        config,
+        diagnostic_packet=Path(str(diagnostic.payload["packet_dir"])),
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "live_model_diagnostic" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "mutator", "expected_message"),
+    [
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("model_backed", False),
+            "model_backed",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("model_calls", 0),
+            "model_calls must equal 1",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("stronger_under_law", "packet_0063"),
+            "stronger_under_law",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("ready_for_nonlocal_strategy", False),
+            "ready_for_nonlocal_strategy",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("ready_for_generation", True),
+            "ready_for_generation",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__(
+                "recommended_next_strategy_class",
+                "generate_from_diagnostic",
+            ),
+            "recommended_next_strategy_class",
+        ),
+        (
+            "law_application_comparison_matrix",
+            lambda payload: payload.__setitem__(
+                "comparison_rows",
+                [
+                    row
+                    for row in payload["comparison_rows"]
+                    if row["row_class"] != "explanation_timing"
+                ],
+            ),
+            "missing comparison row classes",
+        ),
+        (
+            "packet_0063_law_gap_report",
+            lambda payload: payload.__setitem__("gap_claims", []),
+            "gap claims",
+        ),
+        (
+            "packet_0063_law_gap_report",
+            lambda payload: payload.__setitem__("future_candidate_must_learn", []),
+            "future_candidate_must_learn",
+        ),
+        (
+            "non_imitation_constraint_report",
+            lambda payload: payload.__setitem__(
+                "non_imitation_constraints_passed",
+                False,
+            ),
+            "non-imitation constraints",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("generation_authorized", True),
+            "generation, target, work-order",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("candidate_generated", True),
+            "generation, target, work-order",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("work_order_created", True),
+            "generation, target, work-order",
+        ),
+        (
+            "model_backed_local_law_diagnostic_packet",
+            lambda payload: payload.__setitem__("finalization_eligible", True),
+            "finality or phase-shift claim",
+        ),
+    ],
+)
+def test_nonlocal_law_guided_strategy_refusal_invariants(
+    tmp_path,
+    artifact_type,
+    mutator,
+    expected_message,
+):
+    config, diagnostic_packet, _run_id, _diagnostic_payload = (
+        build_nonlocal_law_guided_strategy_source_chain(tmp_path)
+    )
+    bad_packet = copy_packet_with_payload_mutation(
+        tmp_path,
+        diagnostic_packet,
+        copy_name=f"bad_nonlocal_law_{artifact_type}_{expected_message[:8]}",
+        artifact_type=artifact_type,
+        mutator=mutator,
+    )
+
+    result = run_nonlocal_law_guided_strategy(
+        config,
+        diagnostic_packet=bad_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
 
 
 def test_direction_review_residual_target_selection_accepts_proof_no_answer(

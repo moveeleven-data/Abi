@@ -61,6 +61,9 @@ from abi.modules.model_backed_local_law_diagnostic import (
     MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_MAX_MODEL_CALLS_DEFAULT,
     run_model_backed_local_law_diagnostic,
 )
+from abi.modules.nonlocal_law_guided_strategy import (
+    run_nonlocal_law_guided_strategy,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -646,6 +649,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model-shaped calls allowed for local-law rival diagnosis.",
     )
+    autonomous_nonlocal_law_strategy_parser = autonomous_subparsers.add_parser(
+        "plan-nonlocal-law-strategy",
+        help="Plan a non-generative nonlocal strategy from a live rival diagnostic",
+    )
+    autonomous_nonlocal_law_strategy_parser.add_argument(
+        "--diagnostic-packet",
+        type=Path,
+        required=True,
+        help="Live model-backed local-law/rival diagnostic packet directory to consume.",
+    )
+    autonomous_nonlocal_law_strategy_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the live rival diagnostic packet.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -1061,6 +1079,15 @@ def main(argv: list[str] | None = None) -> int:
             operator_reviewed=args.operator_reviewed,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "plan-nonlocal-law-strategy"
+    ):
+        return _cmd_autonomous_plan_nonlocal_law_strategy(
+            config,
+            diagnostic_packet=args.diagnostic_packet,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1595,6 +1622,21 @@ def _cmd_autonomous_diagnose_local_law_with_rival(
         operator_reviewed=operator_reviewed,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_plan_nonlocal_law_strategy(
+    config: AbiConfig,
+    *,
+    diagnostic_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_nonlocal_law_guided_strategy(
+        config,
+        diagnostic_packet=diagnostic_packet,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
