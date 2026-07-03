@@ -68,6 +68,9 @@ class WorkerRole(str, Enum):
     BOUNDED_MACRO_RECOMPOSER = "bounded_macro_recomposer"
     OBJECT_MOTION_CAUSALITY_GENERATOR = "object_motion_causality_generator"
     RESIDUAL_INTERVENTION_GENERATOR = "residual_intervention_generator"
+    MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC = (
+        "model_backed_local_law_rival_diagnostic"
+    )
 
 
 @dataclass(frozen=True)
@@ -482,10 +485,20 @@ RESIDUAL_INTERVENTION_GENERATION_SCHEMA = WorkerSchema(
     artifact_type="model_residual_intervention_generation",
 )
 
+MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA = WorkerSchema(
+    name="ModelBackedLocalLawRivalDiagnosticOutput",
+    version="1",
+    artifact_type="model_backed_local_law_rival_diagnostic",
+)
+
 BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS = (
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
+)
+
+LOCAL_LAW_RIVAL_DIAGNOSTIC_MODEL_SCHEMAS = (
+    MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
 )
 
 LIVE_MODEL_WORKER_SCHEMAS = (
@@ -498,6 +511,7 @@ LIVE_MODEL_WORKER_SCHEMAS = (
     + EXECUTED_ABLATION_MODEL_SCHEMAS
     + ABLATION_INFORMED_REVISION_MODEL_SCHEMAS
     + BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS
+    + LOCAL_LAW_RIVAL_DIAGNOSTIC_MODEL_SCHEMAS
 )
 
 
@@ -2394,6 +2408,65 @@ def residual_intervention_generation_json_schema() -> dict[str, Any]:
     )
 
 
+def model_backed_local_law_rival_diagnostic_json_schema() -> dict[str, Any]:
+    finding_schema = _local_law_diagnostic_finding_schema()
+    return _schema_with_properties(
+        {
+            "law_id": {"type": "string"},
+            "comparison_summary": {"type": "string"},
+            "packet_0063_law_application": finding_schema,
+            "rival_law_application": finding_schema,
+            "first_read_pressure_findings": finding_schema,
+            "explanation_timing_findings": finding_schema,
+            "object_event_sequence_findings": finding_schema,
+            "proof_no_answer_findings": finding_schema,
+            "reread_transformation_findings": finding_schema,
+            "strongest_rival_advantage_assessment": finding_schema,
+            "non_imitation_constraints_acknowledged": {"type": "boolean"},
+            "future_strategy_implications": finding_schema,
+            "generation_allowed": {"type": "boolean"},
+            "finality_claimed": {"type": "boolean"},
+            "phase_shift_claimed": {"type": "boolean"},
+        },
+        [
+            "law_id",
+            "comparison_summary",
+            "packet_0063_law_application",
+            "rival_law_application",
+            "first_read_pressure_findings",
+            "explanation_timing_findings",
+            "object_event_sequence_findings",
+            "proof_no_answer_findings",
+            "reread_transformation_findings",
+            "strongest_rival_advantage_assessment",
+            "non_imitation_constraints_acknowledged",
+            "future_strategy_implications",
+            "generation_allowed",
+            "finality_claimed",
+            "phase_shift_claimed",
+        ],
+    )
+
+
+def _local_law_diagnostic_finding_schema() -> dict[str, Any]:
+    return _object_schema(
+        {
+            "claim": {"type": "string"},
+            "evidence_basis": {"type": "string"},
+            "support_spans_or_passages": _string_array_schema(),
+            "uncertainty": {"type": "string"},
+            "risk_if_misused": {"type": "string"},
+        },
+        [
+            "claim",
+            "evidence_basis",
+            "support_spans_or_passages",
+            "uncertainty",
+            "risk_if_misused",
+        ],
+    )
+
+
 def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
     if schema == ABI_EAR_GERM_ANALYSIS_SCHEMA:
         return abi_ear_germ_analysis_json_schema()
@@ -2493,6 +2566,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return object_motion_causality_generation_json_schema()
     if schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
         return residual_intervention_generation_json_schema()
+    if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
+        return model_backed_local_law_rival_diagnostic_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -2602,6 +2677,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_object_motion_causality_generation(payload)
     if schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
         return _validate_residual_intervention_generation(payload)
+    if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
+        return _validate_model_backed_local_law_rival_diagnostic(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
 
 
@@ -4177,6 +4254,159 @@ def _validate_residual_intervention_generation(
         "forbidden_change_self_check": list(payload["forbidden_change_self_check"]),
         "uncertainty": payload["uncertainty"],
     }
+
+
+def _validate_model_backed_local_law_rival_diagnostic(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_fields = {
+        "law_id",
+        "comparison_summary",
+        "packet_0063_law_application",
+        "rival_law_application",
+        "first_read_pressure_findings",
+        "explanation_timing_findings",
+        "object_event_sequence_findings",
+        "proof_no_answer_findings",
+        "reread_transformation_findings",
+        "strongest_rival_advantage_assessment",
+        "non_imitation_constraints_acknowledged",
+        "future_strategy_implications",
+        "generation_allowed",
+        "finality_claimed",
+        "phase_shift_claimed",
+    }
+    extra_fields = sorted(set(payload) - allowed_fields)
+    if extra_fields:
+        forbidden = [
+            field
+            for field in extra_fields
+            if _looks_like_candidate_or_rewrite_field(field)
+        ]
+        if forbidden:
+            raise ModelValidationError(
+                "model-backed local-law diagnostic must not return candidate or "
+                f"rewrite text fields: {forbidden}"
+            )
+        raise ModelValidationError(
+            "model-backed local-law diagnostic contains unsupported fields: "
+            f"{extra_fields}"
+        )
+
+    _reject_candidate_or_rewrite_fields(payload)
+    _require_type(payload, "law_id", str)
+    if payload["law_id"] != "first_read_pressure_precedes_explanation_law":
+        raise ModelValidationError(
+            "law_id must be first_read_pressure_precedes_explanation_law"
+        )
+    _require_type(payload, "comparison_summary", str)
+    _require_type(payload, "non_imitation_constraints_acknowledged", bool)
+    if payload["non_imitation_constraints_acknowledged"] is not True:
+        raise ModelValidationError(
+            "non_imitation_constraints_acknowledged must be true"
+        )
+    _require_false(payload, "generation_allowed")
+    _require_false(payload, "finality_claimed")
+    _require_false(payload, "phase_shift_claimed")
+
+    finding_fields = (
+        "packet_0063_law_application",
+        "rival_law_application",
+        "first_read_pressure_findings",
+        "explanation_timing_findings",
+        "object_event_sequence_findings",
+        "proof_no_answer_findings",
+        "reread_transformation_findings",
+        "strongest_rival_advantage_assessment",
+        "future_strategy_implications",
+    )
+    findings = {
+        field: _validate_local_law_diagnostic_finding(payload[field], field)
+        for field in finding_fields
+    }
+    _reject_immediate_generation_recommendation(
+        findings["future_strategy_implications"]
+    )
+    return {
+        "law_id": payload["law_id"],
+        "comparison_summary": payload["comparison_summary"],
+        **findings,
+        "non_imitation_constraints_acknowledged": payload[
+            "non_imitation_constraints_acknowledged"
+        ],
+        "generation_allowed": payload["generation_allowed"],
+        "finality_claimed": payload["finality_claimed"],
+        "phase_shift_claimed": payload["phase_shift_claimed"],
+    }
+
+
+def _validate_local_law_diagnostic_finding(
+    payload: object,
+    label: str,
+) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise ModelValidationError(f"{label} must be an object")
+    validated = _validate_object(
+        payload,
+        label,
+        ("claim", "evidence_basis", "uncertainty", "risk_if_misused"),
+    )
+    _require_string_list(payload, "support_spans_or_passages", field_prefix=f"{label}.")
+    validated["support_spans_or_passages"] = list(payload["support_spans_or_passages"])
+    return validated
+
+
+def _reject_candidate_or_rewrite_fields(value: object, path: str = "") -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_path = f"{path}.{key}".strip(".")
+            if _looks_like_candidate_or_rewrite_field(str(key)):
+                raise ModelValidationError(
+                    "model-backed local-law diagnostic must not return candidate "
+                    f"or rewrite text fields: {key_path}"
+                )
+            _reject_candidate_or_rewrite_fields(item, key_path)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_candidate_or_rewrite_fields(item, f"{path}[{index}]")
+
+
+def _looks_like_candidate_or_rewrite_field(field_name: str) -> bool:
+    lowered = field_name.lower()
+    return lowered in {
+        "candidate_text",
+        "generated_candidate",
+        "generated_text",
+        "rewrite_text",
+        "rewritten_text",
+        "revision_text",
+        "revised_text",
+        "revised_candidate_text",
+        "replacement_text",
+        "replacement_region_text",
+        "replacement_section_text",
+    }
+
+
+def _reject_immediate_generation_recommendation(
+    future_strategy_implications: dict[str, object],
+) -> None:
+    text = " ".join(
+        str(future_strategy_implications.get(key, ""))
+        for key in ("claim", "evidence_basis", "risk_if_misused")
+    ).lower()
+    forbidden_phrases = (
+        "authorize generation",
+        "generation is authorized",
+        "generate immediately",
+        "immediate generation",
+        "create a candidate now",
+        "write the next candidate",
+    )
+    if any(phrase in text for phrase in forbidden_phrases):
+        raise ModelValidationError(
+            "future_strategy_implications must not recommend immediate generation"
+        )
 
 
 def _validate_revision_span_ref(payload: dict[str, Any], label: str) -> dict[str, str]:

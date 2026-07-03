@@ -39,6 +39,7 @@ from abi.model_schemas import (
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
+    MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
     ModelValidationError,
     WorkerRole,
     json_schema_for_worker_schema,
@@ -17881,6 +17882,7 @@ def build_model_backed_local_law_diagnostic_source_chain(
     config, local_law_packet, run_id = build_direct_rival_materialization_source_chain(
         tmp_path
     )
+    write_checkpoint_fixture_current_best_candidate(config, run_id)
     direct_artifact_id = register_direct_rival_text_fixture(config, run_id)
     materialization = run_direct_rival_subject_materialization(
         config,
@@ -17890,6 +17892,72 @@ def build_model_backed_local_law_diagnostic_source_chain(
     assert materialization.exit_code == 0
     assert materialization.payload["direct_rival_text_available"] is True
     return config, Path(str(materialization.payload["packet_dir"])), run_id, direct_artifact_id
+
+
+def valid_model_backed_local_law_rival_diagnostic_output() -> dict[str, object]:
+    def finding(label: str) -> dict[str, object]:
+        return {
+            "claim": f"{label} shows pressure sequencing without authorizing action.",
+            "evidence_basis": (
+                f"{label} is grounded in local object-event ordering and comparison "
+                "under the discovered law."
+            ),
+            "support_spans_or_passages": [
+                "The table remains ordinary before explanation arrives.",
+                "The rival subject presses object relation before naming the pressure.",
+            ],
+            "uncertainty": "medium",
+            "risk_if_misused": (
+                f"{label} could invite imitation if treated as style transfer."
+            ),
+        }
+
+    return {
+        "law_id": DISCOVERED_LOCAL_LAW_ID,
+        "comparison_summary": (
+            "The rival is diagnostically stronger at letting object-event pressure "
+            "arrive before explanation, while packet_0063 preserves a usable "
+            "evidence chain."
+        ),
+        "packet_0063_law_application": finding("packet_0063"),
+        "rival_law_application": finding("direct rival"),
+        "first_read_pressure_findings": finding("first-read pressure"),
+        "explanation_timing_findings": finding("explanation timing"),
+        "object_event_sequence_findings": finding("object-event sequence"),
+        "proof_no_answer_findings": finding("proof-no-answer residue"),
+        "reread_transformation_findings": finding("reread transformation"),
+        "strongest_rival_advantage_assessment": finding("strongest rival advantage"),
+        "non_imitation_constraints_acknowledged": True,
+        "future_strategy_implications": finding("future strategy"),
+        "generation_allowed": False,
+        "finality_claimed": False,
+        "phase_shift_claimed": False,
+    }
+
+
+class StubLocalLawRivalDiagnosticClient:
+    provider = "openai"
+
+    def __init__(self, *, model: str, mutator=None) -> None:
+        self.model = model
+        self.mutator = mutator
+        self.requests: list[WorkerRequest] = []
+
+    def generate(self, request: WorkerRequest) -> str:
+        self.requests.append(request)
+        payload = valid_model_backed_local_law_rival_diagnostic_output()
+        if self.mutator is not None:
+            self.mutator(payload)
+        return json.dumps(payload, indent=2, sort_keys=True)
+
+
+def local_law_rival_diagnostic_client_factory(clients: list, mutator=None):
+    def _factory(model: str) -> StubLocalLawRivalDiagnosticClient:
+        client = StubLocalLawRivalDiagnosticClient(model=model, mutator=mutator)
+        clients.append(client)
+        return client
+
+    return _factory
 
 
 def write_checkpoint_fixture_current_best_candidate(config: AbiConfig, run_id: str) -> Path:
@@ -20143,6 +20211,220 @@ def test_model_backed_local_law_diagnostic_refusal_invariants(tmp_path):
             run_id=run_id,
             profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
         )
+    assert finalization.refused is True
+
+
+def test_model_backed_local_law_diagnostic_schema_registered_with_openai_adapter(
+    tmp_path,
+):
+    request = WorkerRequest(
+        run_id="run_schema_test",
+        worker_role=WorkerRole.MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC,
+        prompt_contract_id="autonomous.local_law_rival_diagnostic.v1",
+        schema=MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
+        input_text="{}",
+    )
+
+    response_format = openai_response_format_for_request(request)
+
+    assert response_format["name"] == "ModelBackedLocalLawRivalDiagnosticOutput"
+    assert response_format["strict"] is True
+    assert_openai_strict_object_schema(
+        response_format["schema"],
+        path="ModelBackedLocalLawRivalDiagnosticOutput",
+    )
+
+
+def test_model_backed_local_law_diagnostic_accepts_stubbed_openai_output(
+    tmp_path,
+):
+    config, materialization_packet, run_id, _direct_artifact_id = (
+        build_model_backed_local_law_diagnostic_source_chain(tmp_path)
+    )
+    clients: list[StubLocalLawRivalDiagnosticClient] = []
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_model_backed_local_law_diagnostic(
+        config,
+        client_name="openai",
+        direct_rival_materialization_packet=materialization_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-local-law-rival-model",
+        client_factory=local_law_rival_diagnostic_client_factory(clients),
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["client"] == "openai"
+    assert result.payload["model"] == "stub-local-law-rival-model"
+    assert result.payload["model_backed"] is True
+    assert result.payload["live_model_diagnostic"] is True
+    assert result.payload["diagnostic_is_provisional"] is False
+    assert result.payload["model_calls"] == 1
+    assert result.payload["counts"]["model_calls"] == 1
+    assert len(result.payload["model_call_ids"]) == 1
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["direct_rival_text_available"] is True
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["ablation_authorized"] is False
+    assert result.payload["reader_state_eval_authorized"] is False
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert len(clients) == 1
+    assert len(clients[0].requests) == 1
+    assert (
+        clients[0].requests[0].worker_role
+        == WorkerRole.MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    matrix = read_payload(packet_dir / "law_application_comparison_matrix.json")
+    assert matrix["model_backed"] is True
+    assert matrix["live_model_diagnostic"] is True
+    assert len(matrix["rows"]) == 6
+    assert matrix["comparison_summary"].startswith("The rival is diagnostically stronger")
+
+    gate = read_payload(packet_dir / "local_law_rival_diagnostic_gate_report.json")
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate["passed"] is False
+    assert gate["model_backed"] is True
+    assert gate_results["exactly_one_model_call"]["passed"] is True
+    assert gate_results["model_call_budget_respected"]["passed"] is True
+    assert gate_results["no_candidate_generated"]["passed"] is True
+    assert "no_model_calls" not in gate_results
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        call = after_calls[-1]
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls) + 1
+    assert call.id == result.payload["model_call_ids"][0]
+    assert call.worker_role == WorkerRole.MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC.value
+    assert call.prompt_contract_id == "autonomous.local_law_rival_diagnostic.v1"
+    assert call.schema_name == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA.name
+    assert call.schema_version == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA.version
+    assert call.provider == "openai"
+    assert call.model == "stub-local-law-rival-model"
+    assert call.status == MODEL_CALL_SUCCESS
+    assert call.input_hash
+    assert call.raw_output_path
+    assert call.parsed_output_artifact_id is None
+    assert finalization.refused is True
+
+
+@pytest.mark.parametrize(
+    ("mutator", "expected_message"),
+    [
+        (
+            lambda payload: payload.__setitem__("generation_allowed", True),
+            "generation_allowed",
+        ),
+        (
+            lambda payload: payload.__setitem__("finality_claimed", True),
+            "finality_claimed",
+        ),
+        (
+            lambda payload: payload.__setitem__("phase_shift_claimed", True),
+            "phase_shift_claimed",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "non_imitation_constraints_acknowledged",
+                False,
+            ),
+            "non_imitation_constraints_acknowledged",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "candidate_text",
+                "This should never become a diagnostic field.",
+            ),
+            "candidate or rewrite text",
+        ),
+        (
+            lambda payload: payload.__setitem__("law_id", "wrong_law"),
+            "law_id",
+        ),
+        (
+            lambda payload: payload["future_strategy_implications"].__setitem__(
+                "claim",
+                "authorize generation immediately",
+            ),
+            "immediate generation",
+        ),
+    ],
+)
+def test_model_backed_local_law_diagnostic_rejects_invalid_stubbed_openai_output(
+    tmp_path,
+    mutator,
+    expected_message,
+):
+    config, materialization_packet, run_id, _direct_artifact_id = (
+        build_model_backed_local_law_diagnostic_source_chain(tmp_path)
+    )
+    clients: list[StubLocalLawRivalDiagnosticClient] = []
+
+    result = run_model_backed_local_law_diagnostic(
+        config,
+        client_name="openai",
+        direct_rival_materialization_packet=materialization_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-local-law-rival-model",
+        client_factory=local_law_rival_diagnostic_client_factory(
+            clients,
+            mutator=mutator,
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["client"] == "openai"
+    assert result.payload["model_backed"] is True
+    assert result.payload["model_calls"] == 1
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert len(clients) == 1
+    assert len(clients[0].requests) == 1
+    assert not (
+        Path(str(result.payload["packet_dir"]))
+        / "model_backed_local_law_diagnostic_packet.json"
+    ).exists()
+
+    model_call = result.payload["model_call_records"][0]
+    assert model_call["status"] == MODEL_CALL_VALIDATION_FAILED
+    assert expected_message in model_call["error_message"]
+    assert model_call["parsed_output_artifact_id"] is None
+
+    with connect(config.db_path) as connection:
+        calls = list_model_calls(connection, run_id=run_id)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert calls[-1].status == MODEL_CALL_VALIDATION_FAILED
+    assert calls[-1].parsed_output_artifact_id is None
     assert finalization.refused is True
 
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -17,6 +20,13 @@ from abi.controller.state import (
 )
 from abi.db import connect, initialize_database
 from abi.hashing import sha256_text
+from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
+from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
+from abi.model_schemas import (
+    MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
+    ModelValidationError,
+    WorkerRole,
+)
 from abi.modules.direct_rival_subject_materialization import NEXT_STRATEGY_WITH_DIRECT_TEXT
 from abi.modules.local_law_discovery import DISCOVERED_LOCAL_LAW_ID
 from abi.modules.post_local_residual_strategy_synthesis import (
@@ -159,16 +169,21 @@ def run_model_backed_local_law_diagnostic(
     operator_reviewed: bool,
     allow_live_model: bool,
     max_model_calls: int,
+    api_key: str | None = None,
+    model: str | None = None,
+    client_factory: Callable[[str], ModelClient] | None = None,
 ) -> ModelBackedLocalLawDiagnosticResult:
     initialize_database(config)
     materialization_packet_dir = _resolve_path(
         config,
         direct_rival_materialization_packet,
     )
+    configured_model = model or os.environ.get(ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT)
     if client_name not in MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_CLIENTS:
         return _refusal(
             direct_rival_materialization_packet=materialization_packet_dir,
             client_name=client_name,
+            model=configured_model if client_name == "openai" else None,
             message=(
                 "Model-backed local-law diagnostic refused; unsupported "
                 f"client: {client_name}."
@@ -178,24 +193,41 @@ def run_model_backed_local_law_diagnostic(
         return _refusal(
             direct_rival_materialization_packet=materialization_packet_dir,
             client_name=client_name,
+            model=configured_model,
             message=(
                 "Model-backed local-law diagnostic refused; --allow-live-model "
                 "is required for client openai."
             ),
         )
-    if client_name == "openai" and allow_live_model:
-        return _refusal(
-            direct_rival_materialization_packet=materialization_packet_dir,
-            client_name=client_name,
-            message=(
-                "Model-backed local-law diagnostic refused; live OpenAI local-law "
-                "rival diagnosis is not implemented in this diagnostic-only task."
-            ),
+    if client_name == "openai":
+        resolved_api_key = api_key if api_key is not None else os.environ.get(
+            OPENAI_API_KEY_ENV
         )
+        if not resolved_api_key:
+            return _refusal(
+                direct_rival_materialization_packet=materialization_packet_dir,
+                client_name=client_name,
+                model=configured_model,
+                message=(
+                    f"Model-backed local-law diagnostic refused; "
+                    f"{OPENAI_API_KEY_ENV} is not set."
+                ),
+            )
+        if max_model_calls < 1:
+            return _refusal(
+                direct_rival_materialization_packet=materialization_packet_dir,
+                client_name=client_name,
+                model=configured_model,
+                message=(
+                    "Model-backed local-law diagnostic refused; max-model-calls "
+                    "must be at least 1 for client openai."
+                ),
+            )
     if not operator_reviewed:
         return _refusal(
             direct_rival_materialization_packet=materialization_packet_dir,
             client_name=client_name,
+            model=configured_model if client_name == "openai" else None,
             message=(
                 "Model-backed local-law diagnostic refused; --operator-reviewed "
                 "is required."
@@ -205,6 +237,7 @@ def run_model_backed_local_law_diagnostic(
         return _refusal(
             direct_rival_materialization_packet=materialization_packet_dir,
             client_name=client_name,
+            model=configured_model if client_name == "openai" else None,
             message=(
                 "Model-backed local-law diagnostic refused; --max-model-calls "
                 "cannot be negative."
@@ -217,6 +250,7 @@ def run_model_backed_local_law_diagnostic(
         return _refusal(
             direct_rival_materialization_packet=materialization_packet_dir,
             client_name=client_name,
+            model=configured_model if client_name == "openai" else None,
             message=(
                 "Model-backed local-law diagnostic refused; direct-rival "
                 f"materialization packet directory not found: {materialization_packet_dir}"
@@ -232,6 +266,7 @@ def run_model_backed_local_law_diagnostic(
         return _refusal(
             direct_rival_materialization_packet=materialization_packet_dir,
             client_name=client_name,
+            model=configured_model if client_name == "openai" else None,
             message=str(error),
         )
 
@@ -240,6 +275,7 @@ def run_model_backed_local_law_diagnostic(
             return _refusal(
                 direct_rival_materialization_packet=materialization_packet_dir,
                 client_name=client_name,
+                model=configured_model if client_name == "openai" else None,
                 message=(
                     "Model-backed local-law diagnostic refused; run is not "
                     f"registered: {subject.run_id}"
@@ -254,6 +290,31 @@ def run_model_backed_local_law_diagnostic(
         packet_dir = create_packet_dir(
             config.run_dir(subject.run_id) / "model_backed_local_law_diagnostic"
         )
+        model_results: list[ModelDriverResult] = []
+        model_payload: dict[str, object] | None = None
+        if client_name == "openai":
+            connection.commit()
+            factory = client_factory or _default_openai_client_factory
+            model_result = _run_live_diagnostic_model(
+                config=config,
+                subject=subject,
+                packet_dir=packet_dir,
+                model_client=factory(configured_model),
+            )
+            model_results.append(model_result)
+            if not model_result.accepted or model_result.parsed_payload is None:
+                return _live_failure_result(
+                    subject=subject,
+                    packet_dir=packet_dir,
+                    model=configured_model,
+                    model_results=model_results,
+                    message=(
+                        "Model-backed local-law diagnostic stopped by model-call "
+                        "failure or validation failure."
+                    ),
+                )
+            model_payload = model_result.parsed_payload
+
         writer = PacketWriter(
             connection=connection,
             run_id=subject.run_id,
@@ -272,6 +333,8 @@ def run_model_backed_local_law_diagnostic(
                 subject,
                 packet_dir,
                 client_name=client_name,
+                model=configured_model if client_name == "openai" else None,
+                model_results=model_results,
             )
         )
         artifacts["source_direct_rival_materialization_intake_summary"] = (
@@ -305,7 +368,7 @@ def run_model_backed_local_law_diagnostic(
         )
 
         payloads["law_application_comparison_matrix"] = (
-            _build_law_application_comparison_matrix(subject)
+            _build_law_application_comparison_matrix(subject, model_payload=model_payload)
         )
         artifacts["law_application_comparison_matrix"] = writer.write_artifact(
             "law_application_comparison_matrix",
@@ -317,7 +380,10 @@ def run_model_backed_local_law_diagnostic(
         )
 
         payloads["first_read_pressure_diagnostic_report"] = (
-            _build_first_read_pressure_diagnostic_report(subject)
+            _build_first_read_pressure_diagnostic_report(
+                subject,
+                model_payload=model_payload,
+            )
         )
         artifacts["first_read_pressure_diagnostic_report"] = writer.write_artifact(
             "first_read_pressure_diagnostic_report",
@@ -326,7 +392,10 @@ def run_model_backed_local_law_diagnostic(
         )
 
         payloads["rival_advantage_under_law_report"] = (
-            _build_rival_advantage_under_law_report(subject)
+            _build_rival_advantage_under_law_report(
+                subject,
+                model_payload=model_payload,
+            )
         )
         artifacts["rival_advantage_under_law_report"] = writer.write_artifact(
             "rival_advantage_under_law_report",
@@ -334,8 +403,8 @@ def run_model_backed_local_law_diagnostic(
             parent_ids=[artifacts["first_read_pressure_diagnostic_report"].id],
         )
 
-        payloads["packet_0063_law_gap_report"] = _build_packet_0063_law_gap_report(
-            subject
+        payloads["packet_0063_law_gap_report"] = (
+            _build_packet_0063_law_gap_report(subject, model_payload=model_payload)
         )
         artifacts["packet_0063_law_gap_report"] = writer.write_artifact(
             "packet_0063_law_gap_report",
@@ -359,7 +428,11 @@ def run_model_backed_local_law_diagnostic(
         )
 
         payloads["next_strategy_readiness_report"] = (
-            _build_next_strategy_readiness_report(subject)
+            _build_next_strategy_readiness_report(
+                subject,
+                model_payload=model_payload,
+                model_results=model_results,
+            )
         )
         artifacts["next_strategy_readiness_report"] = writer.write_artifact(
             "next_strategy_readiness_report",
@@ -371,7 +444,10 @@ def run_model_backed_local_law_diagnostic(
         )
 
         payloads["project_health_scope_guard_report"] = (
-            _build_project_health_scope_guard_report(subject)
+            _build_project_health_scope_guard_report(
+                subject,
+                model_results=model_results,
+            )
         )
         artifacts["project_health_scope_guard_report"] = writer.write_artifact(
             "project_health_scope_guard_report",
@@ -385,6 +461,7 @@ def run_model_backed_local_law_diagnostic(
         payloads["local_law_rival_diagnostic_gate_report"] = _build_gate_report(
             subject=subject,
             payloads=payloads,
+            model_results=model_results,
         )
         artifacts["local_law_rival_diagnostic_gate_report"] = writer.write_artifact(
             "local_law_rival_diagnostic_gate_report",
@@ -401,6 +478,8 @@ def run_model_backed_local_law_diagnostic(
             payloads=payloads,
             artifacts=artifacts,
             client_name=client_name,
+            model=configured_model if client_name == "openai" else None,
+            model_results=model_results,
         )
         artifacts["model_backed_local_law_diagnostic_packet"] = writer.write_artifact(
             "model_backed_local_law_diagnostic_packet",
@@ -696,8 +775,11 @@ def _build_source_direct_rival_materialization_intake_summary(
     packet_dir: Path,
     *,
     client_name: str,
+    model: str | None,
+    model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
     packet = subject.payloads["direct_rival_subject_materialization_packet"]
+    model_backed = bool(model_results)
     return {
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
@@ -720,8 +802,10 @@ def _build_source_direct_rival_materialization_intake_summary(
         "rival_text_sha256": subject.materialized_subject.materialized_text_sha256,
         "diagnostic_kind": MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_KIND,
         "client": client_name,
-        "model_backed": False,
-        "diagnostic_is_provisional": True,
+        "model": model,
+        "model_backed": model_backed,
+        "live_model_diagnostic": model_backed,
+        "diagnostic_is_provisional": not model_backed,
         "materialization_surface_alias_warning": (
             subject.materialization_surface_alias_warning
         ),
@@ -739,7 +823,8 @@ def _build_source_direct_rival_materialization_intake_summary(
         "work_order_created": False,
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
-        "model_calls": 0,
+        "model_calls": len(model_results),
+        "model_call_ids": _model_call_ids(model_results),
         "finalization_eligible": False,
         "no_final_claim": True,
         "no_phase_shift_claim": True,
@@ -809,18 +894,44 @@ def _build_direct_rival_subject_for_law_comparison(
 
 def _build_law_application_comparison_matrix(
     subject: ModelBackedLocalLawDiagnosticSubject,
+    *,
+    model_payload: dict[str, object] | None,
 ) -> dict[str, object]:
-    return {
-        "law_id": DISCOVERED_LOCAL_LAW_ID,
-        "law_statement": (
-            "A successful next candidate must make first-read pressure arise "
-            "from object-event sequence before explanation, thesis, or named "
-            "pressure appears."
-        ),
-        "diagnostic_kind": MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_KIND,
-        "model_backed": False,
-        "diagnostic_is_provisional": True,
-        "rows": [
+    if model_payload is not None:
+        rows = [
+            _model_finding_row(
+                "Does packet_0063 make pressure felt before naming it?",
+                "packet_0063_law_application",
+                model_payload,
+            ),
+            _model_finding_row(
+                "Does the rival make pressure felt before naming it?",
+                "rival_law_application",
+                model_payload,
+            ),
+            _model_finding_row(
+                "Which text makes object-event consequence arrive first?",
+                "object_event_sequence_findings",
+                model_payload,
+            ),
+            _model_finding_row(
+                "Where does packet_0063 explain too soon?",
+                "explanation_timing_findings",
+                model_payload,
+            ),
+            _model_finding_row(
+                "Where does the rival produce first-read pressure without explanation?",
+                "first_read_pressure_findings",
+                model_payload,
+            ),
+            _model_finding_row(
+                "What must a future candidate learn without imitating the rival?",
+                "future_strategy_implications",
+                model_payload,
+            ),
+        ]
+    else:
+        rows = [
             {
                 "question": "Does packet_0063 make pressure felt before naming it?",
                 "packet_0063_assessment": "partial",
@@ -868,7 +979,24 @@ def _build_law_application_comparison_matrix(
                 "direct_rival_assessment": "learn causal ordering, not diction or scene",
                 "finding": "learn first-read pressure sequencing without transplanting rival form",
             },
-        ],
+        ]
+    return {
+        "law_id": DISCOVERED_LOCAL_LAW_ID,
+        "law_statement": (
+            "A successful next candidate must make first-read pressure arise "
+            "from object-event sequence before explanation, thesis, or named "
+            "pressure appears."
+        ),
+        "diagnostic_kind": MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_KIND,
+        "model_backed": model_payload is not None,
+        "live_model_diagnostic": model_payload is not None,
+        "diagnostic_is_provisional": model_payload is None,
+        "comparison_summary": _model_payload_string(
+            model_payload,
+            "comparison_summary",
+            default="deterministic fake comparison summary",
+        ),
+        "rows": rows,
         "current_best_excerpt": _excerpt(subject.current_best_subject.text),
         "direct_rival_excerpt": _excerpt(subject.materialized_subject.materialized_text),
         "generation_allowed": False,
@@ -885,13 +1013,19 @@ def _build_law_application_comparison_matrix(
 
 def _build_first_read_pressure_diagnostic_report(
     subject: ModelBackedLocalLawDiagnosticSubject,
+    *,
+    model_payload: dict[str, object] | None,
 ) -> dict[str, object]:
     del subject
+    first_read = _model_finding(model_payload, "first_read_pressure_findings")
+    explanation = _model_finding(model_payload, "explanation_timing_findings")
+    object_event = _model_finding(model_payload, "object_event_sequence_findings")
     return {
         "diagnostic_kind": MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_KIND,
         "law_id": DISCOVERED_LOCAL_LAW_ID,
-        "model_backed": False,
-        "diagnostic_is_provisional": True,
+        "model_backed": model_payload is not None,
+        "live_model_diagnostic": model_payload is not None,
+        "diagnostic_is_provisional": model_payload is None,
         "required_questions": [
             "Does packet_0063 make pressure felt before naming it?",
             "Does the rival make pressure felt before naming it?",
@@ -901,12 +1035,29 @@ def _build_first_read_pressure_diagnostic_report(
             "What must a future candidate learn without imitating the rival?",
         ],
         "provisional_findings": {
-            "packet_0063_pressure_before_naming": "partial_or_uncertain",
-            "rival_pressure_before_naming": "likely_stronger",
-            "object_event_consequence_arrives_first": "rival_likely_stronger",
-            "packet_0063_explanation_risk": LIKELY_PACKET_0063_GAP,
-            "rival_support_span_status": "requires future live model-backed diagnostic",
+            "packet_0063_pressure_before_naming": (
+                first_read.get("claim") if first_read else "partial_or_uncertain"
+            ),
+            "rival_pressure_before_naming": (
+                first_read.get("evidence_basis") if first_read else "likely_stronger"
+            ),
+            "object_event_consequence_arrives_first": (
+                object_event.get("claim") if object_event else "rival_likely_stronger"
+            ),
+            "packet_0063_explanation_risk": (
+                explanation.get("claim") if explanation else LIKELY_PACKET_0063_GAP
+            ),
+            "rival_support_span_status": (
+                "live model-backed diagnostic produced support spans"
+                if model_payload
+                else "requires future live model-backed diagnostic"
+            ),
             "future_learning_constraint": "learn law-level causal ordering only",
+        },
+        "model_findings": {
+            "first_read_pressure_findings": first_read,
+            "explanation_timing_findings": explanation,
+            "object_event_sequence_findings": object_event,
         },
         "generation_allowed": False,
         "candidate_generated": False,
@@ -920,21 +1071,38 @@ def _build_first_read_pressure_diagnostic_report(
 
 def _build_rival_advantage_under_law_report(
     subject: ModelBackedLocalLawDiagnosticSubject,
+    *,
+    model_payload: dict[str, object] | None,
 ) -> dict[str, object]:
+    advantage = _model_finding(model_payload, "strongest_rival_advantage_assessment")
     return {
         "law_id": DISCOVERED_LOCAL_LAW_ID,
         "source_direct_rival_materialization_packet_id": (
             subject.materialization_packet_id
         ),
         "rival_text_sha256": subject.materialized_subject.materialized_text_sha256,
-        "model_backed": False,
-        "diagnostic_is_provisional": True,
-        "likely_rival_advantage": LIKELY_RIVAL_ADVANTAGE,
-        "advantage_description": (
-            "The rival likely creates first-read pressure before explanatory "
-            "naming; this remains a provisional deterministic diagnosis until "
-            "a live schema-bound comparison locates support spans."
+        "model_backed": model_payload is not None,
+        "live_model_diagnostic": model_payload is not None,
+        "diagnostic_is_provisional": model_payload is None,
+        "likely_rival_advantage": (
+            advantage.get("claim") if advantage else LIKELY_RIVAL_ADVANTAGE
         ),
+        "advantage_description": (
+            advantage.get("evidence_basis")
+            if advantage
+            else (
+                "The rival likely creates first-read pressure before explanatory "
+                "naming; this remains a provisional deterministic diagnosis until "
+                "a live schema-bound comparison locates support spans."
+            )
+        ),
+        "support_spans_or_passages": advantage.get("support_spans_or_passages")
+        if advantage
+        else [],
+        "uncertainty": advantage.get("uncertainty") if advantage else "high",
+        "risk_if_misused": advantage.get("risk_if_misused")
+        if advantage
+        else "could invite rival imitation if treated as a style target",
         "strongest_rival_pressure_remains_blocking": True,
         "strongest_rival_defeated": False,
         "strongest_rival_defeat_claim": False,
@@ -950,20 +1118,38 @@ def _build_rival_advantage_under_law_report(
 
 def _build_packet_0063_law_gap_report(
     subject: ModelBackedLocalLawDiagnosticSubject,
+    *,
+    model_payload: dict[str, object] | None,
 ) -> dict[str, object]:
+    packet_finding = _model_finding(model_payload, "packet_0063_law_application")
+    explanation = _model_finding(model_payload, "explanation_timing_findings")
     return {
         "current_best_candidate_packet_id": EXPECTED_CURRENT_BEST_PACKET_ID,
         "proof_packet_id": EXPECTED_PROOF_PACKET_ID,
         "reader_state_packet_id": EXPECTED_READER_STATE_PACKET_ID,
         "law_id": DISCOVERED_LOCAL_LAW_ID,
-        "model_backed": False,
-        "diagnostic_is_provisional": True,
-        "likely_packet_0063_gap": LIKELY_PACKET_0063_GAP,
-        "gap_description": (
-            "packet_0063 has object/tactile causal gains, but the discovered "
-            "law still points to first-read pressure arriving after conceptual "
-            "orientation rather than before it."
+        "model_backed": model_payload is not None,
+        "live_model_diagnostic": model_payload is not None,
+        "diagnostic_is_provisional": model_payload is None,
+        "likely_packet_0063_gap": (
+            explanation.get("claim") if explanation else LIKELY_PACKET_0063_GAP
         ),
+        "gap_description": (
+            packet_finding.get("evidence_basis")
+            if packet_finding
+            else (
+                "packet_0063 has object/tactile causal gains, but the discovered "
+                "law still points to first-read pressure arriving after conceptual "
+                "orientation rather than before it."
+            )
+        ),
+        "support_spans_or_passages": (
+            packet_finding.get("support_spans_or_passages") if packet_finding else []
+        ),
+        "uncertainty": packet_finding.get("uncertainty") if packet_finding else "high",
+        "risk_if_misused": packet_finding.get("risk_if_misused")
+        if packet_finding
+        else "could overfit packet_0063 to the rival rather than to the causal law",
         "current_best_text_available": subject.current_best_subject.text_available,
         "current_best_text_sha256": subject.current_best_subject.text_sha256,
         "future_live_diagnostic_needed": True,
@@ -1011,9 +1197,17 @@ def _build_non_imitation_constraint_report(
 
 def _build_next_strategy_readiness_report(
     subject: ModelBackedLocalLawDiagnosticSubject,
+    *,
+    model_payload: dict[str, object] | None,
+    model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
+    model_backed = bool(model_results)
     return {
-        "recommended_next_strategy_class": NEXT_FAKE_RECOMMENDED_STRATEGY_CLASS,
+        "recommended_next_strategy_class": (
+            "review_live_local_law_rival_diagnostic_before_nonlocal_strategy"
+            if model_backed
+            else NEXT_FAKE_RECOMMENDED_STRATEGY_CLASS
+        ),
         "recommended_next_action": NEXT_RECOMMENDED_ACTION,
         "next_recommended_action": NEXT_RECOMMENDED_ACTION,
         "future_likely_next_strategy_class_after_live_model_backed_diagnostic": (
@@ -1024,8 +1218,14 @@ def _build_next_strategy_readiness_report(
         ),
         "direct_rival_text_available": True,
         "rival_text_sha256": subject.materialized_subject.materialized_text_sha256,
-        "model_backed": False,
-        "diagnostic_is_provisional": True,
+        "model_backed": model_backed,
+        "live_model_diagnostic": model_backed,
+        "diagnostic_is_provisional": not model_backed,
+        "model_call_ids": _model_call_ids(model_results),
+        "future_strategy_implications": _model_finding(
+            model_payload,
+            "future_strategy_implications",
+        ),
         "ready_for_live_model_backed_local_law_diagnostic": True,
         "ready_for_generation": False,
         "generation_allowed": False,
@@ -1035,7 +1235,7 @@ def _build_next_strategy_readiness_report(
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
         "candidate_generated": False,
-        "model_calls": 0,
+        "model_calls": len(model_results),
         "finalization_eligible": False,
         "no_final_claim": True,
         "no_phase_shift_claim": True,
@@ -1045,8 +1245,11 @@ def _build_next_strategy_readiness_report(
 
 def _build_project_health_scope_guard_report(
     subject: ModelBackedLocalLawDiagnosticSubject,
+    *,
+    model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
     packet = subject.payloads["direct_rival_subject_materialization_packet"]
+    model_backed = bool(model_results)
     checks = [
         _check("source_materialization_packet_expected", subject.materialization_packet_id.startswith("packet_")),
         _check(
@@ -1061,7 +1264,7 @@ def _build_project_health_scope_guard_report(
         ),
         _check("direct_rival_text_materialized", True),
         _check("command_is_diagnostic_only", True),
-        _check("no_model_calls_in_fake_mode", True),
+        _check("model_call_budget_respected", len(model_results) <= 1),
         _check("no_new_generation_path_introduced", True),
         _check("no_target_selection_introduced", True),
         _check("no_work_order_path_introduced", True),
@@ -1084,12 +1287,15 @@ def _build_project_health_scope_guard_report(
         "law_id": packet.get("law_id"),
         "direct_rival_text_available": True,
         "rival_text_sha256": subject.materialized_subject.materialized_text_sha256,
+        "model_backed": model_backed,
+        "live_model_diagnostic": model_backed,
+        "model_call_ids": _model_call_ids(model_results),
         "materialization_surface_alias_warning": (
             subject.materialization_surface_alias_warning
         ),
         "consumed_materialized_subject_from_artifact": True,
         "command_is_diagnostic_only": True,
-        "no_model_calls": True,
+        "model_calls": len(model_results),
         "no_new_generation_path_introduced": True,
         "no_target_selection_introduced": True,
         "no_work_order_path_introduced": True,
@@ -1100,7 +1306,6 @@ def _build_project_health_scope_guard_report(
         "next_generation_authorized": False,
         "residual_target_selected": False,
         "work_order_created": False,
-        "model_calls": 0,
         "finalization_eligible": False,
         "no_final_claim": True,
         "no_phase_shift_claim": True,
@@ -1112,9 +1317,11 @@ def _build_gate_report(
     *,
     subject: ModelBackedLocalLawDiagnosticSubject,
     payloads: dict[str, dict[str, object]],
+    model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
     health = payloads["project_health_scope_guard_report"]
     constraints = payloads["non_imitation_constraint_report"]
+    model_backed = bool(model_results)
     gate_results = [
         _gate_result("source_materialization_consumed", True),
         _gate_result("operator_review_recorded", True),
@@ -1132,7 +1339,12 @@ def _build_gate_report(
         _gate_result("no_work_order_created", True),
         _gate_result("no_ablation_authorized", True),
         _gate_result("no_reader_state_eval_authorized", True),
-        _gate_result("no_model_calls", True),
+        (
+            _gate_result("exactly_one_model_call", len(model_results) == 1)
+            if model_backed
+            else _gate_result("no_model_calls", True)
+        ),
+        _gate_result("model_call_budget_respected", len(model_results) <= 1),
         _gate_result("no_final_claim", True),
         _gate_result("no_phase_shift_claim", True),
         _gate_result(
@@ -1146,7 +1358,12 @@ def _build_gate_report(
         str(gate["gate_name"]) for gate in gate_results if not bool(gate["passed"])
     ]
     blockers = [
-        "live model-backed local-law diagnostic has not run",
+        (
+            "live model-backed local-law diagnostic requires operator review before "
+            "any future strategy"
+            if model_backed
+            else "live model-backed local-law diagnostic has not run"
+        ),
         "generation remains unauthorized",
         "candidate has not been generated",
         "strongest rival remains blocking",
@@ -1161,6 +1378,9 @@ def _build_gate_report(
         ),
         "direct_rival_text_available": True,
         "rival_text_sha256": subject.materialized_subject.materialized_text_sha256,
+        "model_backed": model_backed,
+        "live_model_diagnostic": model_backed,
+        "model_call_ids": _model_call_ids(model_results),
         "generation_authorized": False,
         "next_generation_authorized": False,
         "candidate_generated": False,
@@ -1168,7 +1388,7 @@ def _build_gate_report(
         "work_order_created": False,
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
-        "model_calls": 0,
+        "model_calls": len(model_results),
         "finalization_eligible": False,
         "not_finalization_eligible": True,
         "no_final_claim": True,
@@ -1193,10 +1413,15 @@ def _build_packet_summary(
     payloads: dict[str, dict[str, object]],
     artifacts: dict[str, ArtifactRecord],
     client_name: str,
+    model: str | None,
+    model_results: list[ModelDriverResult],
 ) -> dict[str, object]:
     packet = subject.payloads["direct_rival_subject_materialization_packet"]
     readiness = payloads["next_strategy_readiness_report"]
     health = payloads["project_health_scope_guard_report"]
+    rival_report = payloads["rival_advantage_under_law_report"]
+    gap_report = payloads["packet_0063_law_gap_report"]
+    model_backed = bool(model_results)
     counts = packet_artifact_count_summary(
         required_artifact_types=MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_ARTIFACT_TYPES,
         produced_artifact_types=list(artifacts),
@@ -1219,10 +1444,14 @@ def _build_packet_summary(
         "rival_text_sha256": subject.materialized_subject.materialized_text_sha256,
         "diagnostic_kind": MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_KIND,
         "client": client_name,
-        "model_backed": False,
-        "diagnostic_is_provisional": True,
-        "likely_rival_advantage": LIKELY_RIVAL_ADVANTAGE,
-        "likely_packet_0063_gap": LIKELY_PACKET_0063_GAP,
+        "model": model,
+        "model_backed": model_backed,
+        "live_model_diagnostic": model_backed,
+        "diagnostic_is_provisional": not model_backed,
+        "model_call_ids": _model_call_ids(model_results),
+        "model_call_records": _model_call_dicts(model_results),
+        "likely_rival_advantage": rival_report["likely_rival_advantage"],
+        "likely_packet_0063_gap": gap_report["likely_packet_0063_gap"],
         "generation_allowed": False,
         "next_recommended_action": readiness["next_recommended_action"],
         "recommended_next_action": readiness["recommended_next_action"],
@@ -1251,7 +1480,7 @@ def _build_packet_summary(
         ],
         "counts": {
             **counts,
-            "model_calls": 0,
+            "model_calls": len(model_results),
             "candidate_artifacts_created": 0,
             "work_order_artifacts_created": 0,
             "residual_target_selection_artifacts_created": 0,
@@ -1263,7 +1492,7 @@ def _build_packet_summary(
         "work_order_created": False,
         "ablation_authorized": False,
         "reader_state_eval_authorized": False,
-        "model_calls": 0,
+        "model_calls": len(model_results),
         "finalization_eligible": False,
         "not_finalization_eligible": True,
         "no_final_claim": True,
@@ -1286,6 +1515,284 @@ def _result_payload(
             artifact_type: str(packet_dir / f"{artifact_type}.json")
             for artifact_type in artifacts
         },
+    }
+
+
+def _default_openai_client_factory(model: str) -> ModelClient:
+    from abi.openai_adapter import OpenAIResponsesClient
+
+    return OpenAIResponsesClient(model=model)
+
+
+def _run_live_diagnostic_model(
+    *,
+    config: AbiConfig,
+    subject: ModelBackedLocalLawDiagnosticSubject,
+    packet_dir: Path,
+    model_client: ModelClient,
+) -> ModelDriverResult:
+    request = WorkerRequest(
+        run_id=subject.run_id,
+        worker_role=WorkerRole.MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC,
+        prompt_contract_id="autonomous.local_law_rival_diagnostic.v1",
+        schema=MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
+        input_text=_live_diagnostic_prompt_input(subject),
+        input_artifact_ids=list(subject.source_parent_ids),
+        input_packet_path=str(subject.materialization_packet_dir),
+        lineage_id=MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_LINEAGE_ID,
+        parent_ids=list(subject.source_parent_ids),
+        fixture_only=False,
+        output_dir=str(packet_dir),
+        register_parsed_artifact=False,
+        parsed_payload_validator=lambda payload: _validate_live_diagnostic_payload(
+            subject,
+            payload,
+        ),
+    )
+    return ModelDriver(config=config, client=model_client).run(request)
+
+
+def _live_diagnostic_prompt_input(
+    subject: ModelBackedLocalLawDiagnosticSubject,
+) -> str:
+    current = subject.current_best_subject
+    rival = subject.materialized_subject
+    payload = {
+        "prompt_contract_id": "autonomous.local_law_rival_diagnostic.v1",
+        "task": "compare_only_non_generative_local_law_rival_diagnostic",
+        "law_id": DISCOVERED_LOCAL_LAW_ID,
+        "law_statement": (
+            "A successful next candidate must make first-read pressure arise "
+            "from object-event sequence before explanation, thesis, or named "
+            "pressure appears."
+        ),
+        "current_best": {
+            "candidate_packet_id": EXPECTED_CURRENT_BEST_PACKET_ID,
+            "proof_packet_id": EXPECTED_PROOF_PACKET_ID,
+            "reader_state_packet_id": EXPECTED_READER_STATE_PACKET_ID,
+            "text_sha256": current.text_sha256,
+            "text": current.text or "",
+        },
+        "direct_rival_subject": {
+            "materialization_packet_id": subject.materialization_packet_id,
+            "text_sha256": rival.materialized_text_sha256,
+            "text": rival.materialized_text,
+        },
+        "non_imitation_constraints": list(NON_IMITATION_CONSTRAINTS),
+        "forbidden_outputs": [
+            "candidate text",
+            "rewrite text",
+            "target selection",
+            "work order",
+            "ablation plan",
+            "reader-state evaluation",
+            "generation authorization",
+            "strongest-rival defeat claim",
+            "finality claim",
+            "phase-shift claim",
+        ],
+    }
+    return json.dumps(payload, indent=2, sort_keys=True)
+
+
+def _validate_live_diagnostic_payload(
+    subject: ModelBackedLocalLawDiagnosticSubject,
+    payload: dict[str, object],
+) -> None:
+    if payload.get("law_id") != DISCOVERED_LOCAL_LAW_ID:
+        raise ModelValidationError(f"law_id must be {DISCOVERED_LOCAL_LAW_ID}")
+    if payload.get("generation_allowed") is not False:
+        raise ModelValidationError("generation_allowed must be false")
+    if payload.get("finality_claimed") is not False:
+        raise ModelValidationError("finality_claimed must be false")
+    if payload.get("phase_shift_claimed") is not False:
+        raise ModelValidationError("phase_shift_claimed must be false")
+    if payload.get("non_imitation_constraints_acknowledged") is not True:
+        raise ModelValidationError(
+            "non_imitation_constraints_acknowledged must be true"
+        )
+    _reject_disallowed_live_payload_fields(payload)
+    _reject_live_generation_recommendation(payload)
+
+    rival = subject.materialized_subject
+    if sha256_text(rival.materialized_text) != rival.materialized_text_sha256:
+        raise ModelValidationError("direct rival text hash does not match source packet")
+    if not subject.current_best_subject.text_available:
+        raise ModelValidationError("current best text is unavailable")
+    packet = subject.payloads["direct_rival_subject_materialization_packet"]
+    if packet.get("current_best_candidate_packet_id") != EXPECTED_CURRENT_BEST_PACKET_ID:
+        raise ModelValidationError("current best packet chain was not preserved")
+    if packet.get("proof_packet_id") != EXPECTED_PROOF_PACKET_ID:
+        raise ModelValidationError("proof packet chain was not preserved")
+    if packet.get("reader_state_packet_id") != EXPECTED_READER_STATE_PACKET_ID:
+        raise ModelValidationError("reader-state packet chain was not preserved")
+
+
+def _reject_disallowed_live_payload_fields(value: object, path: str = "") -> None:
+    forbidden_keys = {
+        "candidate_text",
+        "generated_candidate",
+        "generated_text",
+        "rewrite_text",
+        "rewritten_text",
+        "revision_text",
+        "revised_text",
+        "revised_candidate_text",
+        "replacement_text",
+        "replacement_region_text",
+        "replacement_section_text",
+        "work_order",
+        "target_selection",
+    }
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_path = f"{path}.{key}".strip(".")
+            if str(key).lower() in forbidden_keys:
+                raise ModelValidationError(
+                    "model-backed local-law diagnostic must not return candidate, "
+                    f"rewrite, target, or work-order fields: {key_path}"
+                )
+            _reject_disallowed_live_payload_fields(item, key_path)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_disallowed_live_payload_fields(item, f"{path}[{index}]")
+
+
+def _reject_live_generation_recommendation(payload: dict[str, object]) -> None:
+    finding = _model_finding(payload, "future_strategy_implications")
+    if not finding:
+        return
+    text = " ".join(
+        str(finding.get(key, ""))
+        for key in ("claim", "evidence_basis", "risk_if_misused")
+    ).lower()
+    forbidden = (
+        "authorize generation",
+        "generation is authorized",
+        "generate immediately",
+        "immediate generation",
+        "create a candidate now",
+        "write the next candidate",
+    )
+    if any(phrase in text for phrase in forbidden):
+        raise ModelValidationError(
+            "future_strategy_implications must not recommend immediate generation"
+        )
+
+
+def _live_failure_result(
+    *,
+    subject: ModelBackedLocalLawDiagnosticSubject,
+    packet_dir: Path,
+    model: str,
+    model_results: list[ModelDriverResult],
+    message: str,
+) -> ModelBackedLocalLawDiagnosticResult:
+    return ModelBackedLocalLawDiagnosticResult(
+        exit_code=1,
+        payload={
+            "accepted": False,
+            "refused": True,
+            "message": message,
+            "run_id": subject.run_id,
+            "packet_id": packet_dir.name,
+            "packet_dir": str(packet_dir),
+            "client": "openai",
+            "model": model,
+            "model_backed": True,
+            "live_model_diagnostic": True,
+            "source_direct_rival_materialization_packet_id": (
+                subject.materialization_packet_id
+            ),
+            "current_best_candidate_packet_id": EXPECTED_CURRENT_BEST_PACKET_ID,
+            "proof_packet_id": EXPECTED_PROOF_PACKET_ID,
+            "reader_state_packet_id": EXPECTED_READER_STATE_PACKET_ID,
+            "law_id": DISCOVERED_LOCAL_LAW_ID,
+            "direct_rival_text_available": True,
+            "rival_text_sha256": (
+                subject.materialized_subject.materialized_text_sha256
+            ),
+            "diagnostic_kind": MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_KIND,
+            "candidate_generated": False,
+            "generation_authorized": False,
+            "next_generation_authorized": False,
+            "residual_target_selected": False,
+            "work_order_created": False,
+            "ablation_authorized": False,
+            "reader_state_eval_authorized": False,
+            "model_calls": len(model_results),
+            "model_call_ids": _model_call_ids(model_results),
+            "model_call_records": _model_call_dicts(model_results),
+            "counts": {
+                "model_calls": len(model_results),
+                "candidate_artifacts_created": 0,
+                "work_order_artifacts_created": 0,
+                "residual_target_selection_artifacts_created": 0,
+            },
+            "finalization_eligible": False,
+            "not_finalization_eligible": True,
+            "no_final_claim": True,
+            "no_phase_shift_claim": True,
+        },
+    )
+
+
+def _model_call_ids(model_results: list[ModelDriverResult]) -> list[str]:
+    return [result.model_call.id for result in model_results]
+
+
+def _model_call_dicts(
+    model_results: list[ModelDriverResult],
+) -> list[dict[str, object]]:
+    return [result.model_call_to_dict() for result in model_results]
+
+
+def _model_finding(
+    model_payload: dict[str, object] | None,
+    field_name: str,
+) -> dict[str, object] | None:
+    if not isinstance(model_payload, dict):
+        return None
+    value = model_payload.get(field_name)
+    return value if isinstance(value, dict) else None
+
+
+def _model_payload_string(
+    model_payload: dict[str, object] | None,
+    field_name: str,
+    *,
+    default: str,
+) -> str:
+    if not isinstance(model_payload, dict):
+        return default
+    value = model_payload.get(field_name)
+    return value if isinstance(value, str) and value else default
+
+
+def _model_finding_row(
+    question: str,
+    field_name: str,
+    model_payload: dict[str, object],
+) -> dict[str, object]:
+    finding = _model_finding(model_payload, field_name)
+    if finding is None:
+        return {
+            "question": question,
+            "finding_field": field_name,
+            "finding": "missing structured model finding",
+            "evidence_basis": "",
+            "support_spans_or_passages": [],
+            "uncertainty": "high",
+            "risk_if_misused": "missing finding cannot authorize generation",
+        }
+    return {
+        "question": question,
+        "finding_field": field_name,
+        "finding": finding["claim"],
+        "evidence_basis": finding["evidence_basis"],
+        "support_spans_or_passages": finding["support_spans_or_passages"],
+        "uncertainty": finding["uncertainty"],
+        "risk_if_misused": finding["risk_if_misused"],
     }
 
 
@@ -1429,6 +1936,7 @@ def _refusal(
     *,
     direct_rival_materialization_packet: Path,
     client_name: str,
+    model: str | None = None,
     message: str,
 ) -> ModelBackedLocalLawDiagnosticResult:
     return ModelBackedLocalLawDiagnosticResult(
@@ -1438,6 +1946,7 @@ def _refusal(
             "refused": True,
             "message": message,
             "client": client_name,
+            "model": model,
             "direct_rival_materialization_packet": str(
                 direct_rival_materialization_packet
             ),

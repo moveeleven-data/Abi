@@ -16,6 +16,7 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_MODEL_SCHEMAS,
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     LIVE_MODEL_WORKER_SCHEMAS,
+    MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     PILOT_ABI_CANDIDATE_SCHEMA,
     PILOT_DIRECT_PROMPT_BASELINE_SCHEMA,
@@ -158,6 +159,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_object_motion_causality_generation_prompt
     if schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
         return _build_residual_intervention_generation_prompt
+    if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
+        return _build_model_backed_local_law_rival_diagnostic_prompt
     return _build_live_packet_prompt
 
 
@@ -351,6 +354,23 @@ def _build_residual_intervention_generation_prompt(input_text: str) -> str:
         "human-validation claims, or JSON/procedural leakage inside the "
         f"replacement text. Active materiality policy: {policy_summary}. "
         "Prompt packet:\n"
+        f"{input_text}"
+    )
+
+
+def _build_model_backed_local_law_rival_diagnostic_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema for autonomous.local_law_rival_diagnostic.v1. "
+        "Compare only. Do not rewrite, generate candidate text, select a target, "
+        "create a work order, authorize generation, or propose ablation. Use "
+        "packet_0063 and the materialized strongest-rival text as subjects under "
+        "the supplied law: first-read pressure must arise from object-event "
+        "sequence before explanation, thesis, or named pressure appears. Identify "
+        "where pressure appears before explanation, where explanation appears "
+        "before pressure, and what a future candidate must learn without copying "
+        "the rival. Do not imitate rival diction, transplant rival scenes, copy "
+        "rival structure, claim the rival has been beaten, claim finality, or "
+        "claim phase shift. Prompt packet:\n"
         f"{input_text}"
     )
 
