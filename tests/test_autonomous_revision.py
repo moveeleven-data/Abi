@@ -142,6 +142,20 @@ from abi.modules.nonlocal_law_guided_strategy import (
     SELECTED_NONLOCAL_STRATEGY_CLASS,
     run_nonlocal_law_guided_strategy,
 )
+from abi.modules.nonlocal_law_guided_work_order import (
+    ABLATION_CONTROLS as NONLOCAL_LAW_WORK_ORDER_ABLATION_CONTROLS,
+    FUTURE_SCHEMA_NAME as NONLOCAL_LAW_WORK_ORDER_SCHEMA_NAME,
+    MATERIALITY_POLICY_ID as NONLOCAL_LAW_WORK_ORDER_MATERIALITY_POLICY_ID,
+    NEXT_RECOMMENDED_ACTION as NONLOCAL_LAW_WORK_ORDER_NEXT_ACTION,
+    NONLOCAL_LAW_GUIDED_WORK_ORDER_ARTIFACT_TYPES,
+    NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND,
+    NONLOCAL_LAW_TARGET_SCOPE,
+    NONLOCAL_TARGET_UNIT_IDS,
+    PROMPT_CONTRACT_ID as NONLOCAL_LAW_WORK_ORDER_PROMPT_CONTRACT_ID,
+    READER_STATE_FOCUS as NONLOCAL_LAW_WORK_ORDER_READER_FOCUS,
+    SEMANTIC_VALIDATOR_ID as NONLOCAL_LAW_WORK_ORDER_SEMANTIC_VALIDATOR_ID,
+    run_nonlocal_law_guided_work_order_planning,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -17993,6 +18007,24 @@ def build_nonlocal_law_guided_strategy_source_chain(
     return config, Path(str(diagnostic.payload["packet_dir"])), run_id, diagnostic.payload
 
 
+def build_nonlocal_law_guided_work_order_source_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str, dict[str, object]]:
+    config, diagnostic_packet, run_id, _diagnostic_payload = (
+        build_nonlocal_law_guided_strategy_source_chain(tmp_path)
+    )
+    strategy = run_nonlocal_law_guided_strategy(
+        config,
+        diagnostic_packet=diagnostic_packet,
+        operator_reviewed=True,
+    )
+    assert strategy.exit_code == 0
+    assert strategy.payload["accepted"] is True
+    assert strategy.payload["ready_for_nonlocal_work_order_planning"] is True
+    assert strategy.payload["ready_for_generation"] is False
+    return config, Path(str(strategy.payload["packet_dir"])), run_id, strategy.payload
+
+
 def copy_packet_with_payload_mutation(
     tmp_path: Path,
     source_packet: Path,
@@ -20860,6 +20892,335 @@ def test_nonlocal_law_guided_strategy_refusal_invariants(
     assert result.payload["generation_authorized"] is False
     assert result.payload["residual_target_selected"] is False
     assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_guided_work_order_accepts_strategy_packet(tmp_path):
+    config, strategy_packet, run_id, strategy_payload = (
+        build_nonlocal_law_guided_work_order_source_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection, run_id=run_id)
+
+    result = run_nonlocal_law_guided_work_order_planning(
+        config,
+        strategy_packet=strategy_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_strategy_packet_id"] == strategy_packet.name
+    assert result.payload["source_diagnostic_packet_id"] == (
+        strategy_payload["source_diagnostic_packet_id"]
+    )
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["selected_strategy_class"] == (
+        SELECTED_NONLOCAL_STRATEGY_CLASS
+    )
+    assert result.payload["work_order_kind"] == NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND
+    assert result.payload["target_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["future_generation_authorized"] is False
+    assert result.payload["work_order_created"] is True
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        NONLOCAL_LAW_WORK_ORDER_NEXT_ACTION
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert set(result.payload["artifact_paths"]) == set(
+        NONLOCAL_LAW_GUIDED_WORK_ORDER_ARTIFACT_TYPES
+    )
+    for artifact_type in NONLOCAL_LAW_GUIDED_WORK_ORDER_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    intake = read_payload(packet_dir / "source_strategy_intake_summary.json")
+    assert intake["strategy_optional_aliases_missing"] is True
+    assert intake["consumed_existing_strategy_fields_successfully"] is True
+    assert intake["no_strategy_surface_fix_required_for_work_order_planning"] is True
+    assert "law_transfer_summary.summary" in intake["missing_optional_aliases"]
+
+    scope = read_payload(packet_dir / "selected_nonlocal_intervention_scope.json")
+    assert scope["target_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert scope["nonlocal_but_bounded"] is True
+    assert scope["does_not_permit_free_rewrite"] is True
+    assert "opening pressure distribution" in scope["scope_regions"]
+    assert "proof/no-answer carry as protected pressure only" in scope["scope_regions"]
+
+    units = read_payload(packet_dir / "nonlocal_target_unit_map.json")
+    assert set(units["target_unit_ids"]) == set(NONLOCAL_TARGET_UNIT_IDS)
+    target_units = {unit["target_unit_id"]: unit for unit in units["target_units"]}
+    for target_id in NONLOCAL_TARGET_UNIT_IDS[:-1]:
+        assert target_units[target_id]["material_change_required"] is True
+    assert target_units["non_imitation_constraint_preservation"][
+        "protected_negative_unit"
+    ] is True
+
+    forbidden = read_payload(packet_dir / "forbidden_rival_imitation_inventory.json")
+    for item in (
+        "cup",
+        "windowsill",
+        "bill",
+        "shoes",
+        "drag-mark",
+        "scar",
+        "sink",
+        "payment",
+        "shade",
+        "cup-return sequence",
+        "generic domestic grime as replacement for law",
+        'copying "ordinary consequence" as a phrase or thesis',
+    ):
+        assert item in forbidden["forbidden_rival_material"]
+    assert forbidden["strongest_rival_defeated"] is False
+
+    contract = read_payload(packet_dir / "future_generation_contract.json")
+    assert contract["generation_contract_version"] == "1"
+    assert contract["prompt_contract_id"] == NONLOCAL_LAW_WORK_ORDER_PROMPT_CONTRACT_ID
+    assert contract["materiality_policy_id"] == (
+        NONLOCAL_LAW_WORK_ORDER_MATERIALITY_POLICY_ID
+    )
+    assert contract["semantic_validator_id"] == (
+        NONLOCAL_LAW_WORK_ORDER_SEMANTIC_VALIDATOR_ID
+    )
+    assert contract["schema"] == NONLOCAL_LAW_WORK_ORDER_SCHEMA_NAME
+    assert contract["future_generation_requires_separate_authorization"] is True
+    assert contract["future_generation_authorized"] is False
+    assert contract["generation_attempt_budget"] == 0
+
+    validation = read_payload(
+        packet_dir / "materiality_and_semantic_validation_plan.json"
+    )
+    assert "stages object-event consequence before explanation" in validation[
+        "validation_requirements"
+    ]
+    assert "does not claim strongest-rival defeat" in validation[
+        "validation_requirements"
+    ]
+
+    eval_plan = read_payload(packet_dir / "ablation_and_reader_eval_plan.json")
+    assert set(NONLOCAL_LAW_WORK_ORDER_ABLATION_CONTROLS) <= set(
+        eval_plan["ablation_controls"]
+    )
+    assert set(NONLOCAL_LAW_WORK_ORDER_READER_FOCUS) <= set(
+        eval_plan["reader_state_focus"]
+    )
+
+    gate = read_payload(packet_dir / "nonlocal_law_work_order_gate_report.json")
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate["passed"] is False
+    assert gate_results["work_order_created"]["passed"] is True
+    assert gate_results["no_candidate_generated"]["passed"] is True
+    assert gate_results["no_generation_authorized"]["passed"] is True
+    assert gate_results["future_generation_not_authorized"]["passed"] is True
+    assert gate_results["no_model_calls"]["passed"] is True
+    assert gate_results["finalization_eligible"]["passed"] is False
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection, run_id=run_id)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_nonlocal_law_guided_work_order_cli_surface_contract(tmp_path, capsys):
+    _config, strategy_packet, _run_id, _strategy_payload = (
+        build_nonlocal_law_guided_work_order_source_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "plan-nonlocal-law-work-order",
+            "--strategy-packet",
+            str(strategy_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["work_order_kind"] == NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND
+    assert payload["target_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert payload["work_order_created"] is True
+    assert payload["candidate_generated"] is False
+    assert payload["generation_authorized"] is False
+    assert payload["future_generation_authorized"] is False
+    assert payload["model_calls"] == 0
+
+
+def test_nonlocal_law_guided_work_order_requires_operator_review(tmp_path):
+    config, strategy_packet, _run_id, _strategy_payload = (
+        build_nonlocal_law_guided_work_order_source_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_guided_work_order_planning(
+        config,
+        strategy_packet=strategy_packet,
+        operator_reviewed=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["work_order_created"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_guided_work_order_refuses_duplicate_current_valid_packet(
+    tmp_path,
+):
+    config, strategy_packet, _run_id, _strategy_payload = (
+        build_nonlocal_law_guided_work_order_source_chain(tmp_path)
+    )
+    first = run_nonlocal_law_guided_work_order_planning(
+        config,
+        strategy_packet=strategy_packet,
+        operator_reviewed=True,
+    )
+    assert first.exit_code == 0
+
+    duplicate = run_nonlocal_law_guided_work_order_planning(
+        config,
+        strategy_packet=strategy_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "current-valid work order already exists" in duplicate.payload["message"]
+    assert duplicate.payload["work_order_created"] is False
+    assert duplicate.payload["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "mutator", "expected_message"),
+    [
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__(
+                "selected_strategy_class",
+                "copy_rival_strategy",
+            ),
+            "selected_strategy_class",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__(
+                "ready_for_nonlocal_work_order_planning",
+                False,
+            ),
+            "ready_for_nonlocal_work_order_planning",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__("ready_for_generation", True),
+            "ready_for_generation",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__("generation_authorized", True),
+            "already opens generation",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__("candidate_generated", True),
+            "already opens generation",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__(
+                "current_best_candidate_packet_id",
+                "packet_9999",
+            ),
+            "current_best_candidate_packet_id",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__("proof_packet_id", "packet_9999"),
+            "proof_packet_id",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__(
+                "reader_state_packet_id",
+                "packet_9999",
+            ),
+            "reader_state_packet_id",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__("law_id", "wrong_law"),
+            "law_id",
+        ),
+        (
+            "future_candidate_design_constraints",
+            lambda payload: payload.__setitem__("required_constraints", []),
+            "future candidate constraints",
+        ),
+        (
+            "forbidden_imitation_and_regression_report",
+            lambda payload: payload.__setitem__(
+                "forbidden_rival_objects_or_sequence",
+                [],
+            ),
+            "forbidden rival material inventory",
+        ),
+        (
+            "nonlocal_law_guided_strategy_packet",
+            lambda payload: payload.__setitem__("finalization_eligible", True),
+            "finality or phase-shift claim",
+        ),
+    ],
+)
+def test_nonlocal_law_guided_work_order_refusal_invariants(
+    tmp_path,
+    artifact_type,
+    mutator,
+    expected_message,
+):
+    config, strategy_packet, _run_id, _strategy_payload = (
+        build_nonlocal_law_guided_work_order_source_chain(tmp_path)
+    )
+    bad_packet = copy_packet_with_payload_mutation(
+        tmp_path,
+        strategy_packet,
+        copy_name=f"bad_nonlocal_work_order_{artifact_type}_{expected_message[:8]}",
+        artifact_type=artifact_type,
+        mutator=mutator,
+    )
+
+    result = run_nonlocal_law_guided_work_order_planning(
+        config,
+        strategy_packet=bad_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["work_order_created"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0
 
 
