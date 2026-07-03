@@ -20923,6 +20923,35 @@ def test_nonlocal_law_guided_work_order_accepts_strategy_packet(tmp_path):
     )
     assert result.payload["work_order_kind"] == NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND
     assert result.payload["target_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert result.payload["intervention_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert result.payload["affected_regions"] == [
+        "opening_pressure_distribution",
+        "early_explanation_timing",
+        "middle_object_event_sequence",
+        "return_reread_preparation",
+    ]
+    assert result.payload["protected_regions"] == [
+        "proof_no_answer_carry_as_protected_pressure",
+        "packet_0063_object_tactile_strengths",
+        "non_imitation_constraints",
+    ]
+    assert result.payload["recomposition_principle"] == (
+        "Object-event consequence must accumulate before explicit explanation, "
+        "thesis, crisis, law, or named pressure."
+    )
+    assert result.payload["explanation_policy"] == (
+        "Explanation is allowed, but only after object pressure has been earned "
+        "or embedded in consequence."
+    )
+    assert result.payload["nonlocal_not_local_patch"] is True
+    assert result.payload["rival_imitation_forbidden"] is True
+    assert result.payload["forbidden_rival_objects_or_sequence"]
+    assert result.payload["forbidden_rival_imitation_modes"]
+    assert result.payload["forbidden_regressions"]
+    assert result.payload["materiality_requirements"]
+    assert result.payload["semantic_validation_requirements"]
+    assert result.payload["ready_for_generation_authorization_review"] is True
+    assert result.payload["generation_authorization_still_required"] is True
     assert result.payload["candidate_generated"] is False
     assert result.payload["generation_authorized"] is False
     assert result.payload["next_generation_authorized"] is False
@@ -20952,10 +20981,27 @@ def test_nonlocal_law_guided_work_order_accepts_strategy_packet(tmp_path):
 
     scope = read_payload(packet_dir / "selected_nonlocal_intervention_scope.json")
     assert scope["target_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert scope["intervention_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert scope["affected_regions"] == result.payload["affected_regions"]
+    assert scope["protected_regions"] == result.payload["protected_regions"]
+    assert scope["summary"]
     assert scope["nonlocal_but_bounded"] is True
     assert scope["does_not_permit_free_rewrite"] is True
+    assert scope["free_rewrite_allowed"] is False
+    assert scope["one_region_patch_allowed"] is False
+    assert scope["generation_allowed"] is False
     assert "opening pressure distribution" in scope["scope_regions"]
     assert "proof/no-answer carry as protected pressure only" in scope["scope_regions"]
+
+    recomposition = read_payload(
+        packet_dir / "law_guided_pressure_recomposition_map.json"
+    )
+    assert recomposition["recomposition_principle"] == result.payload[
+        "recomposition_principle"
+    ]
+    assert recomposition["explanation_policy"] == result.payload["explanation_policy"]
+    assert recomposition["nonlocal_not_local_patch"] is True
+    assert recomposition["generation_allowed"] is False
 
     units = read_payload(packet_dir / "nonlocal_target_unit_map.json")
     assert set(units["target_unit_ids"]) == set(NONLOCAL_TARGET_UNIT_IDS)
@@ -20967,6 +21013,17 @@ def test_nonlocal_law_guided_work_order_accepts_strategy_packet(tmp_path):
     ] is True
 
     forbidden = read_payload(packet_dir / "forbidden_rival_imitation_inventory.json")
+    assert forbidden["forbidden_rival_objects_or_sequence"] == result.payload[
+        "forbidden_rival_objects_or_sequence"
+    ]
+    assert forbidden["forbidden_rival_imitation_modes"] == result.payload[
+        "forbidden_rival_imitation_modes"
+    ]
+    assert forbidden["forbidden_regressions"] == result.payload[
+        "forbidden_regressions"
+    ]
+    assert forbidden["rival_imitation_forbidden"] is True
+    assert forbidden["generation_allowed"] is False
     for item in (
         "cup",
         "windowsill",
@@ -20996,11 +21053,30 @@ def test_nonlocal_law_guided_work_order_accepts_strategy_packet(tmp_path):
     assert contract["schema"] == NONLOCAL_LAW_WORK_ORDER_SCHEMA_NAME
     assert contract["future_generation_requires_separate_authorization"] is True
     assert contract["future_generation_authorized"] is False
+    assert contract["ready_for_generation_authorization_review"] is True
+    assert contract["generation_authorization_decision_required"] is True
+    assert contract["generation_authorization_allowed_decisions"] == [
+        "authorize_one_bounded_nonlocal_law_guided_generation",
+        "require_work_order_revision",
+        "pause_generation",
+    ]
     assert contract["generation_attempt_budget"] == 0
 
     validation = read_payload(
         packet_dir / "materiality_and_semantic_validation_plan.json"
     )
+    assert validation["materiality_requirements"] == result.payload[
+        "materiality_requirements"
+    ]
+    assert validation["semantic_validation_requirements"] == result.payload[
+        "semantic_validation_requirements"
+    ]
+    assert validation["target_unit_ids_covered"] == list(NONLOCAL_TARGET_UNIT_IDS)
+    assert validation["protected_unit_ids_covered"] == [
+        "non_imitation_constraint_preservation"
+    ]
+    assert validation["generation_allowed"] is False
+    assert validation["validation_required_before_candidate_evidence"] is True
     assert "stages object-event consequence before explanation" in validation[
         "validation_requirements"
     ]
@@ -21059,6 +21135,20 @@ def test_nonlocal_law_guided_work_order_cli_surface_contract(tmp_path, capsys):
     assert payload["accepted"] is True
     assert payload["work_order_kind"] == NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND
     assert payload["target_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert payload["intervention_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert payload["affected_regions"]
+    assert payload["protected_regions"]
+    assert payload["recomposition_principle"]
+    assert payload["explanation_policy"]
+    assert payload["nonlocal_not_local_patch"] is True
+    assert payload["rival_imitation_forbidden"] is True
+    assert payload["forbidden_rival_objects_or_sequence"]
+    assert payload["forbidden_rival_imitation_modes"]
+    assert payload["forbidden_regressions"]
+    assert payload["materiality_requirements"]
+    assert payload["semantic_validation_requirements"]
+    assert payload["ready_for_generation_authorization_review"] is True
+    assert payload["generation_authorization_still_required"] is True
     assert payload["work_order_created"] is True
     assert payload["candidate_generated"] is False
     assert payload["generation_authorized"] is False
@@ -21084,6 +21174,141 @@ def test_nonlocal_law_guided_work_order_requires_operator_review(tmp_path):
     assert result.payload["generation_authorized"] is False
     assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_guided_work_order_supersedes_stale_generation_surface(
+    tmp_path,
+):
+    config, strategy_packet, _run_id, _strategy_payload = (
+        build_nonlocal_law_guided_work_order_source_chain(tmp_path)
+    )
+    stale = run_nonlocal_law_guided_work_order_planning(
+        config,
+        strategy_packet=strategy_packet,
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_dir = Path(str(stale.payload["packet_dir"]))
+
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    rewrite_payload(
+        stale_dir / "nonlocal_law_guided_work_order_packet.json",
+        remove_fields(
+            "intervention_scope",
+            "affected_regions",
+            "protected_regions",
+            "recomposition_principle",
+            "explanation_policy",
+            "nonlocal_not_local_patch",
+            "rival_imitation_forbidden",
+            "forbidden_rival_objects_or_sequence",
+            "forbidden_rival_imitation_modes",
+            "forbidden_regressions",
+            "materiality_requirements",
+            "semantic_validation_requirements",
+            "ready_for_generation_authorization_review",
+            "generation_authorization_still_required",
+        ),
+    )
+    rewrite_payload(
+        stale_dir / "selected_nonlocal_intervention_scope.json",
+        remove_fields(
+            "intervention_scope",
+            "affected_regions",
+            "protected_regions",
+            "summary",
+            "free_rewrite_allowed",
+            "one_region_patch_allowed",
+            "generation_allowed",
+        ),
+    )
+    rewrite_payload(
+        stale_dir / "law_guided_pressure_recomposition_map.json",
+        remove_fields(
+            "recomposition_principle",
+            "explanation_policy",
+            "nonlocal_not_local_patch",
+            "generation_allowed",
+        ),
+    )
+    rewrite_payload(
+        stale_dir / "forbidden_rival_imitation_inventory.json",
+        remove_fields(
+            "forbidden_rival_objects_or_sequence",
+            "forbidden_rival_imitation_modes",
+            "forbidden_regressions",
+            "rival_imitation_forbidden",
+            "generation_allowed",
+        ),
+    )
+    rewrite_payload(
+        stale_dir / "materiality_and_semantic_validation_plan.json",
+        remove_fields(
+            "materiality_requirements",
+            "semantic_validation_requirements",
+            "generation_allowed",
+            "validation_required_before_candidate_evidence",
+        ),
+    )
+    rewrite_payload(
+        stale_dir / "future_generation_contract.json",
+        remove_fields(
+            "ready_for_generation_authorization_review",
+            "generation_authorization_decision_required",
+            "generation_authorization_allowed_decisions",
+        ),
+    )
+
+    successor = run_nonlocal_law_guided_work_order_planning(
+        config,
+        strategy_packet=strategy_packet,
+        operator_reviewed=True,
+    )
+
+    assert successor.exit_code == 0
+    assert successor.payload["packet_id"] == "packet_0002"
+    assert successor.payload["superseded_work_order_packet_id"] == "packet_0001"
+    assert successor.payload["supersession_reason"] == (
+        "nonlocal_law_work_order_generation_readiness_metadata_missing"
+    )
+    assert successor.payload["intervention_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert successor.payload["affected_regions"]
+    assert successor.payload["protected_regions"]
+    assert successor.payload["recomposition_principle"]
+    assert successor.payload["explanation_policy"]
+    assert successor.payload["nonlocal_not_local_patch"] is True
+    assert successor.payload["rival_imitation_forbidden"] is True
+    assert successor.payload["forbidden_rival_objects_or_sequence"]
+    assert successor.payload["forbidden_rival_imitation_modes"]
+    assert successor.payload["forbidden_regressions"]
+    assert successor.payload["materiality_requirements"]
+    assert successor.payload["semantic_validation_requirements"]
+    assert successor.payload["ready_for_generation_authorization_review"] is True
+    assert successor.payload["generation_authorization_still_required"] is True
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["generation_authorized"] is False
+    assert successor.payload["model_calls"] == 0
+    assert successor.payload["no_final_claim"] is True
+    assert successor.payload["no_phase_shift_claim"] is True
+
+    duplicate = run_nonlocal_law_guided_work_order_planning(
+        config,
+        strategy_packet=strategy_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate.exit_code == 1
+    assert "current-valid work order already exists" in duplicate.payload["message"]
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["generation_authorized"] is False
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_nonlocal_law_guided_work_order_refuses_duplicate_current_valid_packet(

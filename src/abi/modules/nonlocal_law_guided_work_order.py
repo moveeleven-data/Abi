@@ -48,6 +48,17 @@ PROMPT_CONTRACT_ID = "autonomous.nonlocal_law_guided_generation.v1"
 MATERIALITY_POLICY_ID = "nonlocal_law_guided_generation_materiality_v1"
 SEMANTIC_VALIDATOR_ID = "nonlocal_law_guided_semantic_validator_v1"
 FUTURE_SCHEMA_NAME = "NonlocalLawGuidedGenerationOutput@1"
+SUPERSESSION_REASON_GENERATION_READINESS_METADATA_MISSING = (
+    "nonlocal_law_work_order_generation_readiness_metadata_missing"
+)
+RECOMPOSITION_PRINCIPLE = (
+    "Object-event consequence must accumulate before explicit explanation, thesis, "
+    "crisis, law, or named pressure."
+)
+EXPLANATION_POLICY = (
+    "Explanation is allowed, but only after object pressure has been earned or "
+    "embedded in consequence."
+)
 
 NONLOCAL_TARGET_UNIT_IDS = (
     "object_event_consequence_before_explanation",
@@ -64,7 +75,18 @@ NONLOCAL_SCOPE_REGIONS = (
     "return/reread preparation",
     "proof/no-answer carry as protected pressure only",
 )
-FORBIDDEN_RIVAL_MATERIAL = (
+CANONICAL_AFFECTED_REGIONS = (
+    "opening_pressure_distribution",
+    "early_explanation_timing",
+    "middle_object_event_sequence",
+    "return_reread_preparation",
+)
+CANONICAL_PROTECTED_REGIONS = (
+    "proof_no_answer_carry_as_protected_pressure",
+    "packet_0063_object_tactile_strengths",
+    "non_imitation_constraints",
+)
+FORBIDDEN_RIVAL_OBJECTS_OR_SEQUENCE = (
     "cup",
     "windowsill",
     "bill",
@@ -75,12 +97,51 @@ FORBIDDEN_RIVAL_MATERIAL = (
     "payment",
     "shade",
     "cup-return sequence",
+)
+FORBIDDEN_RIVAL_IMITATION_MODES = (
     "rival diction",
     "rival scene structure",
     "rival cadence",
     "rival causal plot",
+    "rival domestic sequence",
+    "rival object inventory",
+)
+FORBIDDEN_NONLOCAL_REGRESSIONS = (
     "generic domestic grime as replacement for law",
+    "copying ordinary consequence as phrase or thesis",
+    "local patching instead of nonlocal pressure redistribution",
+    "deleting explanation rather than earning it",
+    "weakening packet_0063 object/tactile gains",
+    "claiming strongest-rival defeat without ablation/reader-state/synthesis",
+)
+FORBIDDEN_RIVAL_MATERIAL = (
+    *FORBIDDEN_RIVAL_OBJECTS_OR_SEQUENCE,
+    *FORBIDDEN_RIVAL_IMITATION_MODES,
+    *FORBIDDEN_NONLOCAL_REGRESSIONS,
     'copying "ordinary consequence" as a phrase or thesis',
+)
+MATERIALITY_REQUIREMENTS = (
+    "materially re-stage object-event consequence before explanation",
+    "materially delay or embed explanatory naming",
+    "materially make packet_0063's own objects undergo consequence",
+    "materially accumulate middle-sequence pressure through object-events",
+    "materially prepare reread return through first-read pressure",
+    "preserve non-imitation constraints",
+)
+SEMANTIC_VALIDATION_REQUIREMENTS = (
+    "consequence_before_explanation_passed",
+    "explanation_earned_not_abolished",
+    "packet_0063_object_field_preserved",
+    "rival_imitation_absent",
+    "nonlocal_pressure_redistribution_present",
+    "generic_vividness_absent",
+    "strongest_rival_not_claimed_defeated",
+    "no_finality_or_phase_shift_claim",
+)
+GENERATION_AUTHORIZATION_ALLOWED_DECISIONS = (
+    "authorize_one_bounded_nonlocal_law_guided_generation",
+    "require_work_order_revision",
+    "pause_generation",
 )
 ABLATION_CONTROLS = (
     "full_nonlocal_law_guided_intervention",
@@ -159,6 +220,16 @@ class NonlocalLawGuidedWorkOrderSubject:
     payloads: dict[str, dict[str, Any]]
     source_parent_ids: tuple[str, ...]
     missing_optional_aliases: tuple[str, ...]
+    superseded_work_order_packet_id: str | None
+    supersession_reason: str | None
+
+
+@dataclass(frozen=True)
+class WorkOrderSupersessionContext:
+    corrected_current_valid_work_order_exists: bool
+    superseded_work_order_packet_id: str | None = None
+    supersession_reason: str | None = None
+    stale_surface_failures: tuple[str, ...] = ()
 
 
 def run_nonlocal_law_guided_work_order_planning(
@@ -388,11 +459,12 @@ def _load_subject(
         "Nonlocal law-guided work-order planning refused; strategy packet missing run_id.",
     )
     strategy_packet_id = str(packet.get("packet_id") or strategy_packet_dir.name)
-    if _current_valid_work_order_exists(
+    supersession_context = _work_order_supersession_context(
         config=config,
         run_id=run_id,
         source_strategy_packet_id=strategy_packet_id,
-    ):
+    )
+    if supersession_context.corrected_current_valid_work_order_exists:
         raise ValueError(
             "Nonlocal law-guided work-order planning refused; a current-valid "
             "work order already exists for this strategy packet."
@@ -419,6 +491,10 @@ def _load_subject(
         payloads=payloads,
         source_parent_ids=tuple(source_parent_ids),
         missing_optional_aliases=tuple(_missing_optional_aliases(payloads)),
+        superseded_work_order_packet_id=(
+            supersession_context.superseded_work_order_packet_id
+        ),
+        supersession_reason=supersession_context.supersession_reason,
     )
 
 
@@ -594,6 +670,11 @@ def _build_source_strategy_intake_summary(
         "selected_strategy_class": packet.get("selected_strategy_class"),
         "strategy_optional_aliases_missing": bool(subject.missing_optional_aliases),
         "missing_optional_aliases": list(subject.missing_optional_aliases),
+        "superseded_work_order_packet_id": subject.superseded_work_order_packet_id,
+        "supersession_reason": subject.supersession_reason,
+        "stale_work_order_superseded": (
+            subject.superseded_work_order_packet_id is not None
+        ),
         "consumed_existing_strategy_fields_successfully": True,
         "no_strategy_surface_fix_required_for_work_order_planning": True,
         "work_order_kind": NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND,
@@ -617,10 +698,22 @@ def _build_selected_nonlocal_intervention_scope(
     return {
         "work_order_kind": NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND,
         "target_scope": NONLOCAL_LAW_TARGET_SCOPE,
+        "intervention_scope": NONLOCAL_LAW_TARGET_SCOPE,
         "selected_strategy_class": SELECTED_NONLOCAL_STRATEGY_CLASS,
         "nonlocal_but_bounded": True,
         "does_not_permit_free_rewrite": True,
+        "free_rewrite_allowed": False,
+        "one_region_patch_allowed": False,
+        "generation_allowed": False,
+        "affected_regions": list(CANONICAL_AFFECTED_REGIONS),
+        "protected_regions": list(CANONICAL_PROTECTED_REGIONS),
         "scope_regions": list(NONLOCAL_SCOPE_REGIONS),
+        "summary": (
+            "The work order redistributes pressure across the artifact while "
+            "remaining bounded by the selected nonlocal scope, protected "
+            "packet_0063 strengths, and non-imitation constraints; it is not a "
+            "free rewrite or one-region patch."
+        ),
         "proof_no_answer_carry_policy": (
             "proof/no-answer pressure is protected pressure, not a new local "
             "patch target"
@@ -645,6 +738,7 @@ def _build_law_guided_pressure_recomposition_map(
     return {
         "law_id": DISCOVERED_LOCAL_LAW_ID,
         "law_transfer_principle": law["law_transfer_principle"],
+        "recomposition_principle": RECOMPOSITION_PRINCIPLE,
         "source_gap_summary": law["source_gap_summary"],
         "source_rival_advantage_summary": law["source_rival_advantage_summary"],
         "transferable_lesson": law["transferable_lesson"],
@@ -657,7 +751,13 @@ def _build_law_guided_pressure_recomposition_map(
             "redistribute pressure across opening, middle sequence, and return",
             "prepare reread return through first-read object pressure",
         ],
+        "explanation_policy": EXPLANATION_POLICY,
         "not_one_region_patch": True,
+        "nonlocal_not_local_patch": True,
+        "object_event_sequence_before_explanation": True,
+        "explanation_abolition_forbidden": True,
+        "generic_vividness_forbidden": True,
+        "generation_allowed": False,
         "candidate_generated": False,
         "generation_authorized": False,
         "work_order_created": True,
@@ -708,9 +808,15 @@ def _build_forbidden_rival_imitation_inventory(
     forbidden = subject.payloads["forbidden_imitation_and_regression_report"]
     return {
         "non_imitation_constraints_passed": True,
+        "rival_imitation_forbidden": True,
         "source_forbidden_rival_objects_or_sequence": list(
             forbidden["forbidden_rival_objects_or_sequence"]
         ),
+        "forbidden_rival_objects_or_sequence": list(
+            FORBIDDEN_RIVAL_OBJECTS_OR_SEQUENCE
+        ),
+        "forbidden_rival_imitation_modes": list(FORBIDDEN_RIVAL_IMITATION_MODES),
+        "forbidden_regressions": list(FORBIDDEN_NONLOCAL_REGRESSIONS),
         "forbidden_rival_material": list(FORBIDDEN_RIVAL_MATERIAL),
         "forbidden_modes": [
             "rival diction",
@@ -721,6 +827,7 @@ def _build_forbidden_rival_imitation_inventory(
             "generic domestic grime substituted for the law",
             'copying "ordinary consequence" as a phrase or thesis',
         ],
+        "generation_allowed": False,
         "strongest_rival_defeated": False,
         "strongest_rival_pressure_remains_blocking": True,
         "candidate_generated": False,
@@ -837,6 +944,11 @@ def _build_future_generation_contract(
         "schema": FUTURE_SCHEMA_NAME,
         "future_generation_requires_separate_authorization": True,
         "future_generation_authorized": False,
+        "ready_for_generation_authorization_review": True,
+        "generation_authorization_decision_required": True,
+        "generation_authorization_allowed_decisions": list(
+            GENERATION_AUTHORIZATION_ALLOWED_DECISIONS
+        ),
         "generation_attempt_budget": 0,
         "generation_authorized": False,
         "next_generation_authorized": False,
@@ -857,6 +969,12 @@ def _build_materiality_and_semantic_validation_plan(
     return {
         "materiality_policy_id": MATERIALITY_POLICY_ID,
         "semantic_validator_id": SEMANTIC_VALIDATOR_ID,
+        "materiality_requirements": list(MATERIALITY_REQUIREMENTS),
+        "semantic_validation_requirements": list(SEMANTIC_VALIDATION_REQUIREMENTS),
+        "target_unit_ids_covered": list(NONLOCAL_TARGET_UNIT_IDS),
+        "protected_unit_ids_covered": ["non_imitation_constraint_preservation"],
+        "generation_allowed": False,
+        "validation_required_before_candidate_evidence": True,
         "validation_requirements": [
             "stages object-event consequence before explanation",
             "delays or embeds explanation rather than deleting it",
@@ -908,6 +1026,9 @@ def _build_generation_lock_report(
         "generation_authorized": False,
         "next_generation_authorized": False,
         "future_generation_authorized": False,
+        "ready_for_generation_authorization_review": True,
+        "generation_authorization_still_required": True,
+        "generation_authorization_decision_required": True,
         "generation_attempt_budget": 0,
         "work_order_created": True,
         "model_calls": 0,
@@ -1037,6 +1158,10 @@ def _build_packet_summary(
 ) -> dict[str, object]:
     source = subject.payloads["nonlocal_law_guided_strategy_packet"]
     contract = payloads["future_generation_contract"]
+    scope = payloads["selected_nonlocal_intervention_scope"]
+    recomposition = payloads["law_guided_pressure_recomposition_map"]
+    forbidden = payloads["forbidden_rival_imitation_inventory"]
+    validation = payloads["materiality_and_semantic_validation_plan"]
     counts = packet_artifact_count_summary(
         required_artifact_types=NONLOCAL_LAW_GUIDED_WORK_ORDER_ARTIFACT_TYPES,
         produced_artifact_types=list(artifacts),
@@ -1049,6 +1174,11 @@ def _build_packet_summary(
         "packet_dir": str(packet_dir),
         "source_strategy_packet_id": subject.strategy_packet_id,
         "source_strategy_packet_dir": str(subject.strategy_packet_dir),
+        "superseded_work_order_packet_id": subject.superseded_work_order_packet_id,
+        "supersession_reason": subject.supersession_reason,
+        "stale_work_order_superseded": (
+            subject.superseded_work_order_packet_id is not None
+        ),
         "source_diagnostic_packet_id": source.get("source_diagnostic_packet_id"),
         "current_best_candidate_packet_id": source.get("current_best_candidate_packet_id"),
         "proof_packet_id": source.get("proof_packet_id"),
@@ -1057,6 +1187,26 @@ def _build_packet_summary(
         "selected_strategy_class": SELECTED_NONLOCAL_STRATEGY_CLASS,
         "work_order_kind": NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND,
         "target_scope": NONLOCAL_LAW_TARGET_SCOPE,
+        "intervention_scope": scope["intervention_scope"],
+        "affected_regions": list(scope["affected_regions"]),
+        "protected_regions": list(scope["protected_regions"]),
+        "recomposition_principle": recomposition["recomposition_principle"],
+        "explanation_policy": recomposition["explanation_policy"],
+        "nonlocal_not_local_patch": recomposition["nonlocal_not_local_patch"],
+        "rival_imitation_forbidden": forbidden["rival_imitation_forbidden"],
+        "forbidden_rival_objects_or_sequence": list(
+            forbidden["forbidden_rival_objects_or_sequence"]
+        ),
+        "forbidden_rival_imitation_modes": list(
+            forbidden["forbidden_rival_imitation_modes"]
+        ),
+        "forbidden_regressions": list(forbidden["forbidden_regressions"]),
+        "materiality_requirements": list(validation["materiality_requirements"]),
+        "semantic_validation_requirements": list(
+            validation["semantic_validation_requirements"]
+        ),
+        "ready_for_generation_authorization_review": True,
+        "generation_authorization_still_required": True,
         "target_unit_ids": list(NONLOCAL_TARGET_UNIT_IDS),
         "future_generation_contract": contract,
         "future_generation_authorized": False,
@@ -1106,15 +1256,17 @@ def _result_payload(
     }
 
 
-def _current_valid_work_order_exists(
+def _work_order_supersession_context(
     *,
     config: AbiConfig,
     run_id: str,
     source_strategy_packet_id: str,
-) -> bool:
+) -> WorkOrderSupersessionContext:
     root = config.run_dir(run_id) / "nonlocal_law_guided_work_order"
     if not root.exists():
-        return False
+        return WorkOrderSupersessionContext(
+            corrected_current_valid_work_order_exists=False
+        )
     for packet_dir in sorted(root.glob("packet_*"), reverse=True):
         packet_path = packet_dir / "nonlocal_law_guided_work_order_packet.json"
         if not packet_path.exists():
@@ -1135,8 +1287,153 @@ def _current_valid_work_order_exists(
             and payload.get("no_final_claim") is True
             and payload.get("no_phase_shift_claim") is True
         ):
-            return True
-    return False
+            surface_failures = _generation_readiness_surface_failures(
+                packet_dir=packet_dir,
+                packet_payload=payload,
+            )
+            if surface_failures:
+                return WorkOrderSupersessionContext(
+                    corrected_current_valid_work_order_exists=False,
+                    superseded_work_order_packet_id=str(payload.get("packet_id"))
+                    or packet_dir.name,
+                    supersession_reason=(
+                        SUPERSESSION_REASON_GENERATION_READINESS_METADATA_MISSING
+                    ),
+                    stale_surface_failures=tuple(surface_failures),
+                )
+            return WorkOrderSupersessionContext(
+                corrected_current_valid_work_order_exists=True,
+                superseded_work_order_packet_id=str(payload.get("packet_id"))
+                or packet_dir.name,
+            )
+    return WorkOrderSupersessionContext(corrected_current_valid_work_order_exists=False)
+
+
+def _generation_readiness_surface_failures(
+    *,
+    packet_dir: Path,
+    packet_payload: dict[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+
+    def require_string(payload: dict[str, Any], field_name: str, label: str) -> None:
+        if not _string_value(payload.get(field_name)):
+            failures.append(f"{label}.{field_name}")
+
+    def require_string_list(payload: dict[str, Any], field_name: str, label: str) -> None:
+        if not _string_list(payload.get(field_name)):
+            failures.append(f"{label}.{field_name}")
+
+    def require_bool(
+        payload: dict[str, Any],
+        field_name: str,
+        expected: bool,
+        label: str,
+    ) -> None:
+        if payload.get(field_name) is not expected:
+            failures.append(f"{label}.{field_name}")
+
+    require_string(packet_payload, "intervention_scope", "packet")
+    require_string_list(packet_payload, "affected_regions", "packet")
+    require_string_list(packet_payload, "protected_regions", "packet")
+    require_string(packet_payload, "recomposition_principle", "packet")
+    require_string(packet_payload, "explanation_policy", "packet")
+    require_bool(packet_payload, "nonlocal_not_local_patch", True, "packet")
+    require_bool(packet_payload, "rival_imitation_forbidden", True, "packet")
+    require_string_list(packet_payload, "forbidden_rival_objects_or_sequence", "packet")
+    require_string_list(packet_payload, "forbidden_rival_imitation_modes", "packet")
+    require_string_list(packet_payload, "forbidden_regressions", "packet")
+    require_string_list(packet_payload, "materiality_requirements", "packet")
+    require_string_list(packet_payload, "semantic_validation_requirements", "packet")
+    require_bool(
+        packet_payload,
+        "ready_for_generation_authorization_review",
+        True,
+        "packet",
+    )
+    require_bool(
+        packet_payload,
+        "generation_authorization_still_required",
+        True,
+        "packet",
+    )
+    require_bool(packet_payload, "future_generation_authorized", False, "packet")
+
+    artifact_requirements = (
+        (
+            "selected_nonlocal_intervention_scope",
+            (
+                ("string", "intervention_scope", None),
+                ("list", "affected_regions", None),
+                ("list", "protected_regions", None),
+                ("string", "summary", None),
+                ("bool", "nonlocal_but_bounded", True),
+                ("bool", "free_rewrite_allowed", False),
+                ("bool", "one_region_patch_allowed", False),
+                ("bool", "generation_allowed", False),
+            ),
+        ),
+        (
+            "law_guided_pressure_recomposition_map",
+            (
+                ("string", "recomposition_principle", None),
+                ("string", "explanation_policy", None),
+                ("bool", "nonlocal_not_local_patch", True),
+                ("bool", "generation_allowed", False),
+            ),
+        ),
+        (
+            "forbidden_rival_imitation_inventory",
+            (
+                ("list", "forbidden_rival_objects_or_sequence", None),
+                ("list", "forbidden_rival_imitation_modes", None),
+                ("list", "forbidden_regressions", None),
+                ("bool", "rival_imitation_forbidden", True),
+                ("bool", "generation_allowed", False),
+            ),
+        ),
+        (
+            "materiality_and_semantic_validation_plan",
+            (
+                ("list", "materiality_requirements", None),
+                ("list", "semantic_validation_requirements", None),
+                ("bool", "generation_allowed", False),
+                ("bool", "validation_required_before_candidate_evidence", True),
+            ),
+        ),
+        (
+            "future_generation_contract",
+            (
+                ("bool", "ready_for_generation_authorization_review", True),
+                ("bool", "generation_authorization_decision_required", True),
+                ("list", "generation_authorization_allowed_decisions", None),
+                ("bool", "future_generation_authorized", False),
+            ),
+        ),
+    )
+    for artifact_type, requirements in artifact_requirements:
+        payload = _read_work_order_payload(packet_dir, artifact_type)
+        if not payload:
+            failures.append(f"{artifact_type}.payload")
+            continue
+        for requirement_type, field_name, expected in requirements:
+            if requirement_type == "string":
+                require_string(payload, field_name, artifact_type)
+            elif requirement_type == "list":
+                require_string_list(payload, field_name, artifact_type)
+            elif requirement_type == "bool" and isinstance(expected, bool):
+                require_bool(payload, field_name, expected, artifact_type)
+    return failures
+
+
+def _read_work_order_payload(
+    packet_dir: Path,
+    artifact_type: str,
+) -> dict[str, Any]:
+    try:
+        return _read_envelope_payload(packet_dir / f"{artifact_type}.json")
+    except (OSError, ValueError, TypeError):
+        return {}
 
 
 def _missing_optional_aliases(payloads: dict[str, dict[str, Any]]) -> list[str]:
