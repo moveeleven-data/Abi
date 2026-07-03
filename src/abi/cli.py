@@ -53,6 +53,9 @@ from abi.modules.strongest_rival_forensic_diagnosis import (
     run_strongest_rival_forensic_diagnosis,
 )
 from abi.modules.local_law_discovery import run_local_law_discovery
+from abi.modules.direct_rival_subject_materialization import (
+    run_direct_rival_subject_materialization,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -591,6 +594,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm the operator reviewed the source diagnosis packet.",
     )
+    autonomous_direct_rival_parser = autonomous_subparsers.add_parser(
+        "materialize-direct-rival-subject",
+        help="Materialize direct strongest-rival subject evidence if present",
+    )
+    autonomous_direct_rival_parser.add_argument(
+        "--local-law-packet",
+        type=Path,
+        required=True,
+        help="Local-law discovery packet directory to consume.",
+    )
+    autonomous_direct_rival_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the source local-law packet.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -982,6 +1000,15 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_discover_local_law(
             config,
             diagnosis_packet=args.diagnosis_packet,
+            operator_reviewed=args.operator_reviewed,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "materialize-direct-rival-subject"
+    ):
+        return _cmd_autonomous_materialize_direct_rival_subject(
+            config,
+            local_law_packet=args.local_law_packet,
             operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
@@ -1480,6 +1507,21 @@ def _cmd_autonomous_discover_local_law(
     result = run_local_law_discovery(
         config,
         diagnosis_packet=diagnosis_packet,
+        operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_materialize_direct_rival_subject(
+    config: AbiConfig,
+    *,
+    local_law_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_direct_rival_subject_materialization(
+        config,
+        local_law_packet=local_law_packet,
         operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))

@@ -9,7 +9,7 @@ from abi.cli import main
 import abi.modules.ablation_informed_revision as ablation_informed_revision_module
 import abi.modules.autonomous_revision as autonomous_revision_module
 import abi.modules.residual_targets as residual_targets_module
-from abi.artifacts import list_artifacts
+from abi.artifacts import list_artifacts, register_artifact
 from abi.config import AbiConfig
 from abi.controller.finalization import check_finalization
 from abi.controller.policy import GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE
@@ -118,6 +118,12 @@ from abi.modules.local_law_discovery import (
     LOCAL_LAW_DISCOVERY_KIND,
     NEXT_RECOMMENDED_STRATEGY_CLASS as LOCAL_LAW_NEXT_STRATEGY_CLASS,
     run_local_law_discovery,
+)
+from abi.modules.direct_rival_subject_materialization import (
+    DIRECT_RIVAL_SUBJECT_MATERIALIZATION_ARTIFACT_TYPES,
+    NEXT_STRATEGY_WITH_DIRECT_TEXT,
+    NEXT_STRATEGY_WITHOUT_DIRECT_TEXT,
+    run_direct_rival_subject_materialization,
 )
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
@@ -17820,6 +17826,47 @@ def build_local_law_discovery_source_chain(
     return config, Path(str(diagnosis.payload["packet_dir"])), run_id
 
 
+def build_direct_rival_materialization_source_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str]:
+    config, diagnosis_packet, run_id = build_local_law_discovery_source_chain(tmp_path)
+    local_law = run_local_law_discovery(
+        config,
+        diagnosis_packet=diagnosis_packet,
+        operator_reviewed=True,
+    )
+    assert local_law.exit_code == 0
+    return config, Path(str(local_law.payload["packet_dir"])), run_id
+
+
+def register_direct_rival_text_fixture(config: AbiConfig, run_id: str) -> str:
+    packet_dir = config.run_dir(run_id) / "rival_subject_fixture" / "packet_0001"
+    path = write_test_packet_artifact(
+        packet_dir,
+        run_id=run_id,
+        artifact_type="direct_rival_subject_fixture",
+        payload={
+            "source_class": "strongest_rival",
+            "text": (
+                "The table stood where the morning left it, colder than the "
+                "room expected, and every object around it seemed to have "
+                "arrived a second before the person looking."
+            ),
+            "fixture_role": "direct_rival_text_fixture",
+        },
+    )
+    with connect(config.db_path) as connection:
+        artifact = register_artifact(
+            connection,
+            run_id=run_id,
+            artifact_type="direct_rival_subject_fixture",
+            path=path,
+            lineage_id="direct_rival_subject_test_fixture",
+            parent_ids=[],
+        )
+    return artifact.id
+
+
 def write_checkpoint_fixture_current_best_candidate(config: AbiConfig, run_id: str) -> Path:
     candidate_dir = config.run_dir(run_id) / "bounded_macro_recomposition" / "packet_0063"
     candidate_text = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
@@ -19453,6 +19500,303 @@ def test_local_law_discovery_refusal_invariants(tmp_path):
     )
     assert refused_health.exit_code == 1
     assert "project-health guard" in refused_health.payload["message"]
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+
+
+def test_direct_rival_materialization_accepts_summary_only_local_law_packet(tmp_path):
+    config, local_law_packet, run_id = build_direct_rival_materialization_source_chain(
+        tmp_path
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_direct_rival_subject_materialization(
+        config,
+        local_law_packet=local_law_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["source_local_law_packet_id"] == local_law_packet.name
+    assert result.payload["source_diagnosis_packet_id"]
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["direct_rival_subject_required_before_generation"] is True
+    assert result.payload["direct_rival_text_available"] is False
+    assert result.payload["summary_only_rival_evidence_available"] is True
+    assert result.payload["summary_evidence_available"] is True
+    assert result.payload["direct_rival_subject_missing_reason"] == (
+        "direct rival text not found in current run artifacts"
+    )
+    assert result.payload["recommended_next_strategy_class"] == (
+        NEXT_STRATEGY_WITHOUT_DIRECT_TEXT
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["next_generation_authorized"] is False
+    assert result.payload["residual_target_selected"] is False
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["no_rival_text_fabricated"] is True
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert set(result.payload["artifact_paths"]) == set(
+        DIRECT_RIVAL_SUBJECT_MATERIALIZATION_ARTIFACT_TYPES
+    )
+    for artifact_type in DIRECT_RIVAL_SUBJECT_MATERIALIZATION_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    materialized = read_payload(packet_dir / "materialized_direct_rival_subject.json")
+    assert materialized["direct_rival_text_available"] is False
+    assert materialized["materialized_text"] is None
+    assert materialized["materialized_text_sha256"] is None
+    assert materialized["reason"] == "direct rival text not found in current run artifacts"
+    assert materialized["no_rival_text_fabricated"] is True
+
+    summary = read_payload(packet_dir / "rival_summary_evidence_bundle.json")
+    assert summary["summary_only_rival_evidence_available"] is True
+    assert summary["summary_evidence_entries"]
+    assert summary["summary_not_materialized_as_direct_text"] is True
+
+    provenance = read_payload(packet_dir / "provenance_and_hash_report.json")
+    assert provenance["materialized_text_sha256"] is None
+    assert provenance["direct_candidate_provenance"] == []
+    assert provenance["summary_evidence_provenance"]
+    assert provenance["no_rival_text_fabricated"] is True
+
+    limitations = read_payload(packet_dir / "evidence_limitations_report.json")
+    assert limitations["direct_rival_text_available"] is False
+    assert limitations["summary_only_rival_evidence_available"] is True
+    assert "Only summary/comparison rival evidence was found" in limitations[
+        "evidence_limitation"
+    ]
+
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["passed"] is True
+    assert health["project_health_scope_guard_passed"] is True
+    assert all(not check["blocking_defects"] for check in health["checks"])
+    assert health["no_direct_rival_text_fabricated"] is True
+    assert health["no_new_generation_path_introduced"] is True
+    assert health["no_new_target_adapter_introduced"] is True
+    assert health["no_work_order_path_introduced"] is True
+
+    gate = read_payload(packet_dir / "direct_rival_subject_gate_report.json")
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate["passed"] is False
+    assert gate_results["direct_text_status_explicit"]["passed"] is True
+    assert gate_results["summary_evidence_status_explicit"]["passed"] is True
+    assert gate_results["no_rival_text_fabricated"]["passed"] is True
+    assert gate_results["no_candidate_generated"]["passed"] is True
+    assert gate_results["no_generation_authorized"]["passed"] is True
+    assert gate_results["no_residual_target_selected"]["passed"] is True
+    assert gate_results["no_work_order_created"]["passed"] is True
+    assert gate_results["no_model_calls"]["passed"] is True
+
+    assert not (config.run_dir(run_id) / "residual_target_selection").exists()
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_direct_rival_materialization_materializes_registered_direct_text(tmp_path):
+    config, local_law_packet, run_id = build_direct_rival_materialization_source_chain(
+        tmp_path
+    )
+    direct_artifact_id = register_direct_rival_text_fixture(config, run_id)
+
+    result = run_direct_rival_subject_materialization(
+        config,
+        local_law_packet=local_law_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["direct_rival_text_available"] is True
+    assert result.payload["summary_only_rival_evidence_available"] is False
+    assert result.payload["summary_evidence_available"] is True
+    assert result.payload["rival_text_sha256"]
+    assert result.payload["materialized_source_artifact_id"] == direct_artifact_id
+    assert result.payload["recommended_next_strategy_class"] == (
+        NEXT_STRATEGY_WITH_DIRECT_TEXT
+    )
+    assert result.payload["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    materialized = read_payload(packet_dir / "materialized_direct_rival_subject.json")
+    assert materialized["direct_rival_text_available"] is True
+    assert materialized["materialized_text"]
+    assert materialized["materialized_text_sha256"] == result.payload[
+        "rival_text_sha256"
+    ]
+    assert materialized["source_artifact_id"] == direct_artifact_id
+    assert materialized["reason"] is None
+    assert materialized["no_rival_text_fabricated"] is True
+
+    provenance = read_payload(packet_dir / "provenance_and_hash_report.json")
+    assert provenance["materialized_text_sha256"] == result.payload[
+        "rival_text_sha256"
+    ]
+    assert provenance["materialized_source_artifact_id"] == direct_artifact_id
+    assert provenance["direct_candidate_provenance"]
+
+
+def test_direct_rival_materialization_cli_surface_contract(tmp_path, capsys):
+    _config, local_law_packet, _run_id = (
+        build_direct_rival_materialization_source_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "materialize-direct-rival-subject",
+            "--local-law-packet",
+            str(local_law_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["source_local_law_packet_id"] == local_law_packet.name
+    assert payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert payload["proof_packet_id"] == "packet_0034"
+    assert payload["reader_state_packet_id"] == "packet_0013"
+    assert payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert payload["direct_rival_text_available"] is False
+    assert payload["summary_only_rival_evidence_available"] is True
+    assert payload["candidate_generated"] is False
+    assert payload["generation_authorized"] is False
+    assert payload["residual_target_selected"] is False
+    assert payload["work_order_created"] is False
+    assert payload["model_calls"] == 0
+    assert payload["no_final_claim"] is True
+    assert payload["no_phase_shift_claim"] is True
+
+
+def test_direct_rival_materialization_refusal_invariants(tmp_path):
+    config, local_law_packet, run_id = build_direct_rival_materialization_source_chain(
+        tmp_path
+    )
+
+    missing_review = run_direct_rival_subject_materialization(
+        config,
+        local_law_packet=local_law_packet,
+        operator_reviewed=False,
+    )
+    assert missing_review.exit_code == 1
+    assert "--operator-reviewed" in missing_review.payload["message"]
+    assert missing_review.payload["model_calls"] == 0
+
+    wrong_strategy = tmp_path / "wrong_direct_rival_strategy"
+    shutil.copytree(local_law_packet, wrong_strategy)
+
+    def _wrong_strategy(payload):
+        payload["recommended_next_strategy_class"] = "immediate_generation"
+
+    rewrite_payload(wrong_strategy / "local_law_discovery_packet.json", _wrong_strategy)
+    refused_wrong_strategy = run_direct_rival_subject_materialization(
+        config,
+        local_law_packet=wrong_strategy,
+        operator_reviewed=True,
+    )
+    assert refused_wrong_strategy.exit_code == 1
+    assert "does not recommend" in refused_wrong_strategy.payload["message"]
+
+    not_required = tmp_path / "direct_rival_not_required"
+    shutil.copytree(local_law_packet, not_required)
+
+    def _not_required(payload):
+        payload["direct_rival_subject_required_before_generation"] = False
+
+    rewrite_payload(not_required / "local_law_discovery_packet.json", _not_required)
+    refused_not_required = run_direct_rival_subject_materialization(
+        config,
+        local_law_packet=not_required,
+        operator_reviewed=True,
+    )
+    assert refused_not_required.exit_code == 1
+    assert "not marked required" in refused_not_required.payload["message"]
+
+    not_ready = tmp_path / "direct_rival_not_ready"
+    shutil.copytree(local_law_packet, not_ready)
+
+    def _not_ready(payload):
+        payload["ready_for_direct_rival_subject_materialization"] = False
+
+    rewrite_payload(not_ready / "local_law_discovery_packet.json", _not_ready)
+    refused_not_ready = run_direct_rival_subject_materialization(
+        config,
+        local_law_packet=not_ready,
+        operator_reviewed=True,
+    )
+    assert refused_not_ready.exit_code == 1
+    assert "not ready" in refused_not_ready.payload["message"]
+
+    for field_name, bad_value, message in (
+        ("current_best_candidate_packet_id", "packet_9999", "packet_0063"),
+        ("proof_packet_id", "packet_9999", "packet_0034"),
+        ("reader_state_packet_id", "packet_9999", "packet_0013"),
+        ("discovered_local_law_id", "wrong_law", DISCOVERED_LOCAL_LAW_ID),
+    ):
+        wrong_packet = tmp_path / f"wrong_direct_rival_{field_name}"
+        shutil.copytree(local_law_packet, wrong_packet)
+
+        def _wrong_packet(payload, *, field_name=field_name, bad_value=bad_value):
+            payload[field_name] = bad_value
+
+        rewrite_payload(wrong_packet / "local_law_discovery_packet.json", _wrong_packet)
+        refused_wrong_packet = run_direct_rival_subject_materialization(
+            config,
+            local_law_packet=wrong_packet,
+            operator_reviewed=True,
+        )
+        assert refused_wrong_packet.exit_code == 1
+        assert message in refused_wrong_packet.payload["message"]
+
+    for field_name, name, message in (
+        ("generation_authorized", "direct_rival_generation", "authorizes generation"),
+        ("candidate_generated", "direct_rival_candidate", "generated a candidate"),
+        ("work_order_created", "direct_rival_work_order", "created a work order"),
+    ):
+        bad_packet = tmp_path / name
+        shutil.copytree(local_law_packet, bad_packet)
+
+        def _mark_true(payload, *, field_name=field_name):
+            payload[field_name] = True
+
+        rewrite_payload(bad_packet / "local_law_discovery_packet.json", _mark_true)
+        refused_bad_packet = run_direct_rival_subject_materialization(
+            config,
+            local_law_packet=bad_packet,
+            operator_reviewed=True,
+        )
+        assert refused_bad_packet.exit_code == 1
+        assert message in refused_bad_packet.payload["message"]
 
     with connect(config.db_path) as connection:
         finalization = check_finalization(
