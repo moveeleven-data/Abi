@@ -56,6 +56,11 @@ from abi.modules.local_law_discovery import run_local_law_discovery
 from abi.modules.direct_rival_subject_materialization import (
     run_direct_rival_subject_materialization,
 )
+from abi.modules.model_backed_local_law_diagnostic import (
+    MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_CLIENTS,
+    MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_MAX_MODEL_CALLS_DEFAULT,
+    run_model_backed_local_law_diagnostic,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -609,6 +614,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm the operator reviewed the source local-law packet.",
     )
+    autonomous_local_law_rival_diagnostic_parser = autonomous_subparsers.add_parser(
+        "diagnose-local-law-with-rival",
+        help="Diagnose a local law against a materialized direct rival subject",
+    )
+    autonomous_local_law_rival_diagnostic_parser.add_argument(
+        "--client",
+        choices=MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_CLIENTS,
+        required=True,
+        help="Local-law rival diagnostic client path to use.",
+    )
+    autonomous_local_law_rival_diagnostic_parser.add_argument(
+        "--direct-rival-materialization-packet",
+        type=Path,
+        required=True,
+        help="Direct-rival subject materialization packet directory to consume.",
+    )
+    autonomous_local_law_rival_diagnostic_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the materialized direct rival subject.",
+    )
+    autonomous_local_law_rival_diagnostic_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_local_law_rival_diagnostic_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=MODEL_BACKED_LOCAL_LAW_DIAGNOSTIC_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model-shaped calls allowed for local-law rival diagnosis.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -1010,6 +1047,20 @@ def main(argv: list[str] | None = None) -> int:
             config,
             local_law_packet=args.local_law_packet,
             operator_reviewed=args.operator_reviewed,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "diagnose-local-law-with-rival"
+    ):
+        return _cmd_autonomous_diagnose_local_law_with_rival(
+            config,
+            client_name=args.client,
+            direct_rival_materialization_packet=(
+                args.direct_rival_materialization_packet
+            ),
+            operator_reviewed=args.operator_reviewed,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1523,6 +1574,27 @@ def _cmd_autonomous_materialize_direct_rival_subject(
         config,
         local_law_packet=local_law_packet,
         operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_diagnose_local_law_with_rival(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    direct_rival_materialization_packet: Path,
+    operator_reviewed: bool,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_model_backed_local_law_diagnostic(
+        config,
+        client_name=client_name,
+        direct_rival_materialization_packet=direct_rival_materialization_packet,
+        operator_reviewed=operator_reviewed,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
