@@ -38,6 +38,7 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
+    NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
     NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
@@ -178,6 +179,12 @@ from abi.modules.nonlocal_law_candidate_ablation import (
     NONLOCAL_LAW_CANDIDATE_ABLATION_ARTIFACT_TYPES,
     READER_STATE_NEXT_ACTION as NONLOCAL_LAW_CANDIDATE_READER_STATE_NEXT_ACTION,
     run_nonlocal_law_candidate_ablation,
+)
+from abi.modules.nonlocal_law_candidate_reader_state_evaluation import (
+    FAILED_NONLOCAL_LAW_CANDIDATE_READER_STATE_ARTIFACT_TYPES,
+    NONLOCAL_LAW_CANDIDATE_READER_STATE_ARTIFACT_TYPES,
+    FakeNonlocalLawCandidateReaderStateModelClient,
+    run_nonlocal_law_candidate_reader_state_evaluation,
 )
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
@@ -18101,6 +18108,24 @@ def copy_packet_with_payload_mutation(
     return copied_packet
 
 
+def copy_packet_with_payload_mutations(
+    tmp_path: Path,
+    source_packet: Path,
+    *,
+    copy_name: str,
+    mutations: tuple[tuple[str, object], ...],
+) -> Path:
+    safe_copy_name = "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in copy_name
+    ).rstrip(" .")
+    copied_packet = tmp_path / safe_copy_name
+    shutil.copytree(source_packet, copied_packet)
+    for artifact_type, mutator in mutations:
+        rewrite_payload(copied_packet / f"{artifact_type}.json", mutator)
+    return copied_packet
+
+
 def write_checkpoint_fixture_current_best_candidate(config: AbiConfig, run_id: str) -> Path:
     candidate_dir = config.run_dir(run_id) / "bounded_macro_recomposition" / "packet_0063"
     candidate_text = """The table is still there in the morning. Dust gathers under it, the spoon rests beside the saucer, and the room keeps the night's small pressure without explaining it.
@@ -22620,6 +22645,636 @@ def test_nonlocal_law_candidate_ablation_refuses_duplicate_for_same_candidate(
     assert "current-valid ablation packet already exists" in duplicate.payload["message"]
     assert duplicate.payload["ablation_executed"] is False
     assert duplicate.payload["model_calls"] == 0
+
+
+def build_nonlocal_law_candidate_reader_state_ready_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str, dict[str, object]]:
+    config, candidate_packet, run_id, _candidate_payload = (
+        build_nonlocal_law_candidate_ablation_ready_chain(tmp_path)
+    )
+    ablation = run_nonlocal_law_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+        operator_reviewed=True,
+    )
+    assert ablation.exit_code == 0
+    assert ablation.payload["accepted"] is True
+    return config, Path(str(ablation.payload["packet_dir"])), run_id, ablation.payload
+
+
+def nonlocal_law_reader_state_client_factory(mode: str = "valid"):
+    def _factory(model: str) -> FakeNonlocalLawCandidateReaderStateModelClient:
+        return FakeNonlocalLawCandidateReaderStateModelClient(
+            mode=mode,
+            provider="openai",
+            model=model,
+        )
+
+    return _factory
+
+
+def assert_nonlocal_law_reader_state_acceptance(
+    config: AbiConfig,
+    run_id: str,
+    result,
+    source_ablation_payload: dict[str, object],
+    *,
+    expected_model_calls: int,
+) -> Path:
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["reader_state_evaluation_executed"] is True
+    assert result.payload["source_ablation_packet_id"] == source_ablation_payload["packet_id"]
+    assert result.payload["source_candidate_packet_id"] == (
+        source_ablation_payload["source_candidate_packet_id"]
+    )
+    assert result.payload["base_candidate_packet_id"] == "packet_0063"
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["prior_reader_state_packet_id"] == "packet_0013"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["candidate_text_sha256"] == (
+        source_ablation_payload["candidate_text_sha256"]
+    )
+    assert result.payload["candidate_word_count"] == (
+        source_ablation_payload["candidate_word_count"]
+    )
+    assert result.payload["ablation_control_count"] == 7
+    assert result.payload["law_bearing_choice_count"] == 9
+    assert result.payload["candidate_review_risk_count"] == 4
+    assert result.payload["model_calls"] == expected_model_calls
+    assert result.payload["counts"]["model_calls"] == expected_model_calls
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["synthesis_authorized"] is False
+    assert result.payload["ready_for_synthesis"] is True
+    assert result.payload["current_best_updated"] is False
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["next_recommended_action"] == (
+        "review_nonlocal_law_reader_state_evaluation_before_synthesis"
+    )
+    assert result.payload["first_read_pressure_result"] in {
+        "improved",
+        "unchanged",
+        "worsened",
+        "inconclusive",
+    }
+    assert result.payload["object_event_consequence_result"] in {
+        "improved",
+        "unchanged",
+        "worsened",
+        "inconclusive",
+    }
+    assert result.payload["explanation_timing_result"] in {
+        "improved",
+        "unchanged",
+        "worsened",
+        "inconclusive",
+    }
+    assert result.payload["reread_return_result"] in {
+        "improved",
+        "unchanged",
+        "worsened",
+        "inconclusive",
+    }
+    assert result.payload["non_imitation_result"] == "passed"
+    assert result.payload["strongest_rival_pressure_result"] in {
+        "still_blocking",
+        "narrowed_but_blocking",
+        "worsened",
+        "inconclusive",
+    }
+    assert set(result.payload["artifact_paths"]) == set(
+        NONLOCAL_LAW_CANDIDATE_READER_STATE_ARTIFACT_TYPES
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "nonlocal_law_candidate_reader_state_evaluation"
+    for artifact_type in NONLOCAL_LAW_CANDIDATE_READER_STATE_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    intake = read_payload(packet_dir / "source_ablation_intake_summary.json")
+    assert intake["candidate_text_extracted_from"] == "generated_candidate_text.payload.text"
+    assert intake["base_subject_hash_missing"] is True
+    assert intake["base_subject_resolved_from_packet_id"] == "packet_0063"
+    assert intake["consumed_base_candidate_packet_successfully"] is True
+
+    candidate_subject = read_payload(packet_dir / "candidate_reader_state_subject.json")
+    source_candidate_dir = Path(str(source_ablation_payload["source_candidate_packet_dir"]))
+    source_generated = read_payload(source_candidate_dir / "generated_candidate_text.json")
+    assert candidate_subject["candidate_text"] == source_generated["text"]
+    assert candidate_subject["candidate_text_sha256"] == sha256_text(
+        source_generated["text"]
+    )
+
+    matrix = read_payload(packet_dir / "ablation_control_reader_state_matrix.json")
+    assert [row["control_id"] for row in matrix["ablation_controls"]] == list(
+        NONLOCAL_LAW_CANDIDATE_ABLATION_CONTROLS
+    )
+
+    risk_probe = read_payload(packet_dir / "candidate_review_risk_probe_report.json")
+    assert {row["risk_id"] for row in risk_probe["risk_probe_results"]} == {
+        risk["risk_id"] for risk in NONLOCAL_LAW_CANDIDATE_ABLATION_REVIEW_RISKS
+    }
+
+    rival = read_payload(packet_dir / "strongest_rival_pressure_status_report.json")
+    assert rival["strongest_rival_remains_blocking"] is True
+    assert rival["strongest_rival_defeated_claimed"] is False
+
+    readiness = read_payload(packet_dir / "synthesis_readiness_report.json")
+    assert readiness["ready_for_synthesis"] is True
+    assert readiness["synthesis_authorized"] is False
+    assert readiness["current_best_updated"] is False
+
+    gate = read_payload(packet_dir / "nonlocal_law_reader_state_gate_report.json")
+    assert gate["passed"] is False
+    assert "strongest rival remains blocking" in gate["unresolved_blockers"]
+    assert "finalization remains refused" in gate["unresolved_blockers"]
+
+    if expected_model_calls:
+        assert len(result.payload["model_call_ids"]) == expected_model_calls
+        first_pass_envelope = json.loads(
+            (
+                packet_dir / "first_pass_pressure_before_explanation_report.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert first_pass_envelope["model_call_id"] == result.payload["model_call_ids"][0]
+        assert first_pass_envelope["fixture_only"] is False
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+    return packet_dir
+
+
+def test_nonlocal_law_candidate_reader_state_fake_accepts(tmp_path):
+    config, ablation_packet, run_id, ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+    )
+
+    packet_dir = assert_nonlocal_law_reader_state_acceptance(
+        config,
+        run_id,
+        result,
+        ablation_payload,
+        expected_model_calls=0,
+    )
+    packet = read_payload(
+        packet_dir / "nonlocal_law_candidate_reader_state_evaluation_packet.json"
+    )
+    assert packet["client"] == "fake"
+
+
+def test_nonlocal_law_candidate_reader_state_cli_fake_accepts(tmp_path, capsys):
+    _config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "evaluate-nonlocal-law-candidate-reader-state",
+            "--client",
+            "fake",
+            "--ablation-packet",
+            str(ablation_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["reader_state_evaluation_executed"] is True
+    assert payload["model_calls"] == 0
+    assert payload["synthesis_authorized"] is False
+    assert payload["current_best_updated"] is False
+
+
+def test_nonlocal_law_candidate_reader_state_openai_guard_refuses_without_allow(
+    tmp_path,
+):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--allow-live-model" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+    assert result.payload["reader_state_evaluation_executed"] is False
+    assert result.payload["synthesis_authorized"] is False
+    assert result.payload["current_best_updated"] is False
+
+
+def test_nonlocal_law_candidate_reader_state_openai_requires_api_key(tmp_path):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        api_key="",
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "OPENAI_API_KEY" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+    assert result.payload["reader_state_evaluation_executed"] is False
+
+
+def test_nonlocal_law_candidate_reader_state_stubbed_openai_accepts(tmp_path):
+    config, ablation_packet, run_id, ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-reader-state-model",
+        client_factory=nonlocal_law_reader_state_client_factory(),
+    )
+
+    assert_nonlocal_law_reader_state_acceptance(
+        config,
+        run_id,
+        result,
+        ablation_payload,
+        expected_model_calls=1,
+    )
+    with connect(config.db_path) as connection:
+        reader_calls = [
+            call
+            for call in list_model_calls(connection, run_id=run_id)
+            if call.worker_role
+            == WorkerRole.NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATOR.value
+        ]
+    assert len(reader_calls) == 1
+    assert reader_calls[0].status == MODEL_CALL_SUCCESS
+    assert reader_calls[0].provider == "openai"
+    assert reader_calls[0].model == "stub-nonlocal-law-reader-state-model"
+    assert reader_calls[0].prompt_contract_id == (
+        "autonomous.nonlocal_law_candidate_reader_state_evaluation.v1"
+    )
+
+
+def test_nonlocal_law_candidate_reader_state_requires_operator_review(tmp_path):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["reader_state_evaluation_executed"] is False
+    assert result.payload["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "mutator", "expected_message"),
+    [
+        (
+            "nonlocal_law_candidate_ablation_packet",
+            lambda payload: payload.update({"accepted": False}),
+            "accepted must be true",
+        ),
+        (
+            "nonlocal_law_candidate_ablation_packet",
+            lambda payload: payload.update({"ablation_executed": False}),
+            "ablation_executed must be true",
+        ),
+        (
+            "nonlocal_law_candidate_ablation_packet",
+            lambda payload: payload.update({"ready_for_reader_state_evaluation": False}),
+            "ready_for_reader_state_evaluation must be true",
+        ),
+        (
+            "nonlocal_law_candidate_ablation_packet",
+            lambda payload: payload.update({"finalization_eligible": True}),
+            "finality, phase-shift, or rival-defeat claim",
+        ),
+    ],
+)
+def test_nonlocal_law_candidate_reader_state_refuses_invalid_ablation_packet(
+    tmp_path,
+    artifact_type,
+    mutator,
+    expected_message,
+):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    copied_packet = copy_packet_with_payload_mutation(
+        tmp_path,
+        ablation_packet,
+        copy_name=f"mutated_reader_state_{artifact_type}_{expected_message}",
+        artifact_type=artifact_type,
+        mutator=mutator,
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=copied_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["reader_state_evaluation_executed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["synthesis_authorized"] is False
+    assert result.payload["current_best_updated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_reader_state_refuses_missing_ablation_controls(
+    tmp_path,
+):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    copied_packet = copy_packet_with_payload_mutations(
+        tmp_path,
+        ablation_packet,
+        copy_name="mutated_reader_state_missing_ablation_controls",
+        mutations=(
+            (
+                "nonlocal_law_candidate_ablation_packet",
+                lambda payload: payload.update(
+                    {
+                        "ablation_controls": list(
+                            NONLOCAL_LAW_CANDIDATE_ABLATION_CONTROLS
+                        )[:-1]
+                    }
+                ),
+            ),
+            (
+                "ablation_control_matrix",
+                lambda payload: payload.update(
+                    {
+                        "ablation_controls": payload["ablation_controls"][:-1],
+                    }
+                ),
+            ),
+        ),
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=copied_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "ablation controls missing" in result.payload["message"]
+    assert result.payload["reader_state_evaluation_executed"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_reader_state_refuses_missing_law_bearing_choices(
+    tmp_path,
+):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    copied_packet = copy_packet_with_payload_mutations(
+        tmp_path,
+        ablation_packet,
+        copy_name="mutated_reader_state_missing_law_choices",
+        mutations=(
+            (
+                "law_bearing_choice_map",
+                lambda payload: payload.update(
+                    {
+                        "law_bearing_choices": [],
+                        "law_bearing_spans": [],
+                    }
+                ),
+            ),
+        ),
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=copied_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "law-bearing choices missing" in result.payload["message"]
+    assert result.payload["reader_state_evaluation_executed"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_reader_state_refuses_missing_candidate_review_risks(
+    tmp_path,
+):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    copied_packet = copy_packet_with_payload_mutations(
+        tmp_path,
+        ablation_packet,
+        copy_name="mutated_reader_state_missing_review_risks",
+        mutations=(
+            (
+                "nonlocal_law_candidate_ablation_packet",
+                lambda payload: payload.update({"candidate_review_risks": []}),
+            ),
+            (
+                "law_bearing_choice_map",
+                lambda payload: payload.update({"candidate_review_risks": []}),
+            ),
+        ),
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=copied_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "candidate review risks missing" in result.payload["message"]
+    assert result.payload["reader_state_evaluation_executed"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_reader_state_refuses_missing_candidate_text(tmp_path):
+    config, ablation_packet, _run_id, ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    source_candidate_dir = Path(str(ablation_payload["source_candidate_packet_dir"]))
+    rewrite_payload(
+        source_candidate_dir / "generated_candidate_text.json",
+        lambda payload: payload.update({"text": ""}),
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "generated_candidate_text.payload.text missing" in result.payload["message"]
+    assert result.payload["reader_state_evaluation_executed"] is False
+
+
+def test_nonlocal_law_candidate_reader_state_model_validation_failure_fails_closed(
+    tmp_path,
+):
+    config, ablation_packet, run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-reader-state-model",
+        client_factory=nonlocal_law_reader_state_client_factory("synthesis_authorized"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert result.payload["model_calls"] == 1
+    assert result.payload["reader_state_evaluation_executed"] is False
+    assert result.payload["synthesis_authorized"] is False
+    assert set(result.payload["artifact_paths"]) == set(
+        FAILED_NONLOCAL_LAW_CANDIDATE_READER_STATE_ARTIFACT_TYPES
+    )
+    assert "synthesis_authorized must be false" in result.payload["message"]
+    with connect(config.db_path) as connection:
+        accepted_reader_state = [
+            artifact
+            for artifact in list_artifacts(connection, run_id)
+            if artifact.type == "nonlocal_law_candidate_reader_state_evaluation_packet"
+        ]
+        reader_calls = [
+            call
+            for call in list_model_calls(connection, run_id=run_id)
+            if call.worker_role
+            == WorkerRole.NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATOR.value
+        ]
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert accepted_reader_state == []
+    assert len(reader_calls) == 1
+    assert reader_calls[0].status == MODEL_CALL_VALIDATION_FAILED
+    assert finalization.refused is True
+
+
+def test_nonlocal_law_candidate_reader_state_refuses_duplicate_for_same_ablation(
+    tmp_path,
+):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    first = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+    )
+    assert first.exit_code == 0
+
+    duplicate = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "current-valid reader-state evaluation packet already exists" in (
+        duplicate.payload["message"]
+    )
+    assert duplicate.payload["reader_state_evaluation_executed"] is False
+    assert duplicate.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_reader_state_schema_is_strict():
+    schema = json_schema_for_worker_schema(
+        NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA
+    )
+
+    assert schema["additionalProperties"] is False
+    assert (
+        schema["properties"]["ablation_control_reader_state_matrix"]["items"][
+            "additionalProperties"
+        ]
+        is False
+    )
+    assert (
+        schema["properties"]["reader_state_summary"]["properties"][
+            "candidate_superiority_claimed"
+        ]["enum"]
+        == [False]
+    )
 
 
 def test_direction_review_residual_target_selection_accepts_proof_no_answer(

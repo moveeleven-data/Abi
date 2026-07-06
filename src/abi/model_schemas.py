@@ -69,6 +69,9 @@ class WorkerRole(str, Enum):
     OBJECT_MOTION_CAUSALITY_GENERATOR = "object_motion_causality_generator"
     RESIDUAL_INTERVENTION_GENERATOR = "residual_intervention_generator"
     NONLOCAL_LAW_GUIDED_GENERATOR = "nonlocal_law_guided_generator"
+    NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATOR = (
+        "nonlocal_law_candidate_reader_state_evaluator"
+    )
     MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC = (
         "model_backed_local_law_rival_diagnostic"
     )
@@ -492,6 +495,12 @@ NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA = WorkerSchema(
     artifact_type="model_nonlocal_law_guided_generation",
 )
 
+NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA = WorkerSchema(
+    name="NonlocalLawCandidateReaderStateEvaluationOutput",
+    version="1",
+    artifact_type="model_nonlocal_law_candidate_reader_state_evaluation",
+)
+
 MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA = WorkerSchema(
     name="ModelBackedLocalLawRivalDiagnosticOutput",
     version="1",
@@ -509,6 +518,10 @@ LOCAL_LAW_RIVAL_DIAGNOSTIC_MODEL_SCHEMAS = (
     MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
 )
 
+NONLOCAL_LAW_CANDIDATE_READER_STATE_MODEL_SCHEMAS = (
+    NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
+)
+
 LIVE_MODEL_WORKER_SCHEMAS = (
     LIVE_ABI_EAR_PACKET_MODEL_SCHEMAS
     + LIVE_MINIMAL_REREAD_MODEL_SCHEMAS
@@ -520,6 +533,7 @@ LIVE_MODEL_WORKER_SCHEMAS = (
     + ABLATION_INFORMED_REVISION_MODEL_SCHEMAS
     + BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS
     + LOCAL_LAW_RIVAL_DIAGNOSTIC_MODEL_SCHEMAS
+    + NONLOCAL_LAW_CANDIDATE_READER_STATE_MODEL_SCHEMAS
 )
 
 
@@ -2530,6 +2544,176 @@ def nonlocal_law_guided_generation_json_schema() -> dict[str, Any]:
     )
 
 
+def nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dict[str, Any]:
+    safety_false = {
+        "type": "boolean",
+        "enum": [False],
+        "description": "Must be false; this worker evaluates only.",
+    }
+    dimension_result = {
+        "type": "string",
+        "enum": ["improved", "unchanged", "worsened", "inconclusive"],
+    }
+    strongest_rival_result = {
+        "type": "string",
+        "enum": [
+            "still_blocking",
+            "narrowed_but_blocking",
+            "worsened",
+            "inconclusive",
+        ],
+    }
+    overall_result = {
+        "type": "string",
+        "enum": [
+            "supports_candidate_for_synthesis",
+            "does_not_support_candidate",
+            "mixed_requires_synthesis",
+            "inconclusive",
+        ],
+    }
+    risk_result = {
+        "type": "string",
+        "enum": ["passed", "at_risk", "failed", "inconclusive"],
+    }
+    control_result = {
+        "type": "string",
+        "enum": [
+            "supports_candidate",
+            "weakens_candidate",
+            "mixed",
+            "inconclusive",
+        ],
+    }
+    reader_state_observation = _object_schema(
+        {
+            "result": dimension_result,
+            "evidence": {"type": "string"},
+            "reader_state_effect": {"type": "string"},
+            "packet_0063_contrast": {"type": "string"},
+        },
+        ["result", "evidence", "reader_state_effect", "packet_0063_contrast"],
+    )
+    comparison = _object_schema(
+        {
+            "first_read_pressure_result": dimension_result,
+            "object_event_consequence_result": dimension_result,
+            "explanation_timing_result": dimension_result,
+            "reread_return_result": dimension_result,
+            "comparison_summary": {"type": "string"},
+        },
+        [
+            "first_read_pressure_result",
+            "object_event_consequence_result",
+            "explanation_timing_result",
+            "reread_return_result",
+            "comparison_summary",
+        ],
+    )
+    control_item = _object_schema(
+        {
+            "control_id": {"type": "string"},
+            "expected_reader_state_contrast": {"type": "string"},
+            "predicted_result": control_result,
+            "evidence": {"type": "string"},
+        },
+        [
+            "control_id",
+            "expected_reader_state_contrast",
+            "predicted_result",
+            "evidence",
+        ],
+    )
+    law_assessment = _object_schema(
+        {
+            "object_event_consequence_result": dimension_result,
+            "explanation_timing_result": dimension_result,
+            "explanation_earned_not_abolished": {"type": "boolean"},
+            "law_effect_summary": {"type": "string"},
+        },
+        [
+            "object_event_consequence_result",
+            "explanation_timing_result",
+            "explanation_earned_not_abolished",
+            "law_effect_summary",
+        ],
+    )
+    risk_item = _object_schema(
+        {
+            "risk_id": {"type": "string"},
+            "result": risk_result,
+            "evidence": {"type": "string"},
+        },
+        ["risk_id", "result", "evidence"],
+    )
+    rival_assessment = _object_schema(
+        {
+            "strongest_rival_pressure_result": strongest_rival_result,
+            "pressure_summary": {"type": "string"},
+            "strongest_rival_remains_blocking": {"type": "boolean"},
+        },
+        [
+            "strongest_rival_pressure_result",
+            "pressure_summary",
+            "strongest_rival_remains_blocking",
+        ],
+    )
+    summary = _object_schema(
+        {
+            "overall_reader_state_result": overall_result,
+            "summary": {"type": "string"},
+            "candidate_superiority_claimed": safety_false,
+            "current_best_supersession_claimed": safety_false,
+        },
+        [
+            "overall_reader_state_result",
+            "summary",
+            "candidate_superiority_claimed",
+            "current_best_supersession_claimed",
+        ],
+    )
+    return _schema_with_properties(
+        {
+            "first_pass_reader_state": reader_state_observation,
+            "second_pass_reader_state": reader_state_observation,
+            "candidate_vs_packet_0063_comparison": comparison,
+            "ablation_control_reader_state_matrix": {
+                "type": "array",
+                "items": control_item,
+            },
+            "law_effect_assessment": law_assessment,
+            "risk_probe_results": {
+                "type": "array",
+                "items": risk_item,
+            },
+            "strongest_rival_pressure_assessment": rival_assessment,
+            "reader_state_summary": summary,
+            "recommended_next_evidence_step": {"type": "string"},
+            "generation_allowed": safety_false,
+            "synthesis_authorized": safety_false,
+            "finality_claimed": safety_false,
+            "phase_shift_claimed": safety_false,
+            "strongest_rival_defeated_claimed": safety_false,
+        },
+        [
+            "first_pass_reader_state",
+            "second_pass_reader_state",
+            "candidate_vs_packet_0063_comparison",
+            "ablation_control_reader_state_matrix",
+            "law_effect_assessment",
+            "risk_probe_results",
+            "strongest_rival_pressure_assessment",
+            "reader_state_summary",
+            "recommended_next_evidence_step",
+            "generation_allowed",
+            "synthesis_authorized",
+            "finality_claimed",
+            "phase_shift_claimed",
+            "strongest_rival_defeated_claimed",
+        ],
+    )
+
+
 def model_backed_local_law_rival_diagnostic_json_schema() -> dict[str, Any]:
     finding_schema = _local_law_diagnostic_finding_schema()
     return _schema_with_properties(
@@ -2690,6 +2874,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return residual_intervention_generation_json_schema()
     if schema == NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA:
         return nonlocal_law_guided_generation_json_schema()
+    if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
+        return nonlocal_law_candidate_reader_state_evaluation_json_schema()
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
         return model_backed_local_law_rival_diagnostic_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
@@ -2803,6 +2989,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_residual_intervention_generation(payload)
     if schema == NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA:
         return _validate_nonlocal_law_guided_generation(payload)
+    if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
+        return _validate_nonlocal_law_candidate_reader_state_evaluation(payload)
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
         return _validate_model_backed_local_law_rival_diagnostic(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
@@ -4502,6 +4690,285 @@ def _validate_nonlocal_law_guided_generation(
     }
 
 
+def _validate_nonlocal_law_candidate_reader_state_evaluation(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_fields = {
+        "first_pass_reader_state",
+        "second_pass_reader_state",
+        "candidate_vs_packet_0063_comparison",
+        "ablation_control_reader_state_matrix",
+        "law_effect_assessment",
+        "risk_probe_results",
+        "strongest_rival_pressure_assessment",
+        "reader_state_summary",
+        "recommended_next_evidence_step",
+        "generation_allowed",
+        "synthesis_authorized",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+    }
+    extra_fields = sorted(set(payload) - allowed_fields)
+    if extra_fields:
+        forbidden = [
+            field
+            for field in extra_fields
+            if _looks_like_candidate_or_rewrite_field(field)
+            or field in {"current_best_updated", "candidate_text", "revised_text"}
+        ]
+        if forbidden:
+            raise ModelValidationError(
+                "nonlocal law candidate reader-state evaluation must not return "
+                f"candidate/rewrite/current-best fields: {forbidden}"
+            )
+        raise ModelValidationError(
+            "nonlocal law candidate reader-state evaluation contains unsupported "
+            f"fields: {extra_fields}"
+        )
+
+    first_pass = _validate_reader_state_observation(
+        payload.get("first_pass_reader_state"),
+        "first_pass_reader_state",
+    )
+    second_pass = _validate_reader_state_observation(
+        payload.get("second_pass_reader_state"),
+        "second_pass_reader_state",
+    )
+    comparison = _validate_nonlocal_reader_state_comparison(
+        payload.get("candidate_vs_packet_0063_comparison")
+    )
+    controls = _validate_nonlocal_reader_state_controls(
+        payload,
+        "ablation_control_reader_state_matrix",
+    )
+    law = _validate_nonlocal_reader_state_law_assessment(
+        payload.get("law_effect_assessment")
+    )
+    risks = _validate_nonlocal_reader_state_risks(payload, "risk_probe_results")
+    rival = _validate_nonlocal_reader_state_rival_assessment(
+        payload.get("strongest_rival_pressure_assessment")
+    )
+    summary = _validate_nonlocal_reader_state_summary(
+        payload.get("reader_state_summary")
+    )
+    _require_type(payload, "recommended_next_evidence_step", str)
+    if not payload["recommended_next_evidence_step"].strip():
+        raise ModelValidationError("recommended_next_evidence_step must not be empty")
+    _require_false(payload, "generation_allowed")
+    _require_false(payload, "synthesis_authorized")
+    _require_false(payload, "finality_claimed")
+    _require_false(payload, "phase_shift_claimed")
+    _require_false(payload, "strongest_rival_defeated_claimed")
+    return {
+        "first_pass_reader_state": first_pass,
+        "second_pass_reader_state": second_pass,
+        "candidate_vs_packet_0063_comparison": comparison,
+        "ablation_control_reader_state_matrix": controls,
+        "law_effect_assessment": law,
+        "risk_probe_results": risks,
+        "strongest_rival_pressure_assessment": rival,
+        "reader_state_summary": summary,
+        "recommended_next_evidence_step": payload["recommended_next_evidence_step"],
+        "generation_allowed": False,
+        "synthesis_authorized": False,
+        "finality_claimed": False,
+        "phase_shift_claimed": False,
+        "strongest_rival_defeated_claimed": False,
+    }
+
+
+def _validate_reader_state_observation(
+    value: object,
+    label: str,
+) -> dict[str, str]:
+    observation = _validate_object(
+        value,
+        label,
+        ("result", "evidence", "reader_state_effect", "packet_0063_contrast"),
+    )
+    _require_enum_value(
+        observation["result"],
+        f"{label}.result",
+        ("improved", "unchanged", "worsened", "inconclusive"),
+    )
+    _require_nonempty_strings(observation, label)
+    return observation
+
+
+def _validate_nonlocal_reader_state_comparison(value: object) -> dict[str, str]:
+    comparison = _validate_object(
+        value,
+        "candidate_vs_packet_0063_comparison",
+        (
+            "first_read_pressure_result",
+            "object_event_consequence_result",
+            "explanation_timing_result",
+            "reread_return_result",
+            "comparison_summary",
+        ),
+    )
+    for key in (
+        "first_read_pressure_result",
+        "object_event_consequence_result",
+        "explanation_timing_result",
+        "reread_return_result",
+    ):
+        _require_enum_value(
+            comparison[key],
+            f"candidate_vs_packet_0063_comparison.{key}",
+            ("improved", "unchanged", "worsened", "inconclusive"),
+        )
+    _require_nonempty_strings(comparison, "candidate_vs_packet_0063_comparison")
+    return comparison
+
+
+def _validate_nonlocal_reader_state_controls(
+    payload: dict[str, Any],
+    key: str,
+) -> list[dict[str, str]]:
+    _require_object_list(payload, key)
+    controls = []
+    for index, item in enumerate(payload[key]):
+        control = _validate_object(
+            item,
+            f"{key}[{index}]",
+            (
+                "control_id",
+                "expected_reader_state_contrast",
+                "predicted_result",
+                "evidence",
+            ),
+        )
+        _require_enum_value(
+            control["predicted_result"],
+            f"{key}[{index}].predicted_result",
+            ("supports_candidate", "weakens_candidate", "mixed", "inconclusive"),
+        )
+        _require_nonempty_strings(control, f"{key}[{index}]")
+        controls.append(control)
+    if not controls:
+        raise ModelValidationError(f"{key} must not be empty")
+    return controls
+
+
+def _validate_nonlocal_reader_state_law_assessment(value: object) -> dict[str, object]:
+    law = _validate_object(
+        value,
+        "law_effect_assessment",
+        (
+            "object_event_consequence_result",
+            "explanation_timing_result",
+            "law_effect_summary",
+        ),
+    )
+    for key in ("object_event_consequence_result", "explanation_timing_result"):
+        _require_enum_value(
+            law[key],
+            f"law_effect_assessment.{key}",
+            ("improved", "unchanged", "worsened", "inconclusive"),
+        )
+    if not isinstance(value, dict):
+        raise ModelValidationError("law_effect_assessment must be an object")
+    _require_type(
+        value,
+        "explanation_earned_not_abolished",
+        bool,
+        field_prefix="law_effect_assessment.",
+    )
+    _require_nonempty_strings(law, "law_effect_assessment")
+    return {
+        **law,
+        "explanation_earned_not_abolished": value[
+            "explanation_earned_not_abolished"
+        ],
+    }
+
+
+def _validate_nonlocal_reader_state_risks(
+    payload: dict[str, Any],
+    key: str,
+) -> list[dict[str, str]]:
+    _require_object_list(payload, key)
+    risks = []
+    for index, item in enumerate(payload[key]):
+        risk = _validate_object(
+            item,
+            f"{key}[{index}]",
+            ("risk_id", "result", "evidence"),
+        )
+        _require_enum_value(
+            risk["result"],
+            f"{key}[{index}].result",
+            ("passed", "at_risk", "failed", "inconclusive"),
+        )
+        _require_nonempty_strings(risk, f"{key}[{index}]")
+        risks.append(risk)
+    if not risks:
+        raise ModelValidationError(f"{key} must not be empty")
+    return risks
+
+
+def _validate_nonlocal_reader_state_rival_assessment(value: object) -> dict[str, object]:
+    rival = _validate_object(
+        value,
+        "strongest_rival_pressure_assessment",
+        ("strongest_rival_pressure_result", "pressure_summary"),
+    )
+    _require_enum_value(
+        rival["strongest_rival_pressure_result"],
+        "strongest_rival_pressure_assessment.strongest_rival_pressure_result",
+        ("still_blocking", "narrowed_but_blocking", "worsened", "inconclusive"),
+    )
+    if not isinstance(value, dict):
+        raise ModelValidationError("strongest_rival_pressure_assessment must be an object")
+    _require_type(
+        value,
+        "strongest_rival_remains_blocking",
+        bool,
+        field_prefix="strongest_rival_pressure_assessment.",
+    )
+    if value["strongest_rival_remains_blocking"] is not True:
+        raise ModelValidationError(
+            "strongest_rival_pressure_assessment.strongest_rival_remains_blocking "
+            "must be true"
+        )
+    _require_nonempty_strings(rival, "strongest_rival_pressure_assessment")
+    return {**rival, "strongest_rival_remains_blocking": True}
+
+
+def _validate_nonlocal_reader_state_summary(value: object) -> dict[str, object]:
+    summary = _validate_object(
+        value,
+        "reader_state_summary",
+        ("overall_reader_state_result", "summary"),
+    )
+    _require_enum_value(
+        summary["overall_reader_state_result"],
+        "reader_state_summary.overall_reader_state_result",
+        (
+            "supports_candidate_for_synthesis",
+            "does_not_support_candidate",
+            "mixed_requires_synthesis",
+            "inconclusive",
+        ),
+    )
+    if not isinstance(value, dict):
+        raise ModelValidationError("reader_state_summary must be an object")
+    _require_false(value, "candidate_superiority_claimed", field_prefix="reader_state_summary.")
+    _require_false(
+        value,
+        "current_best_supersession_claimed",
+        field_prefix="reader_state_summary.",
+    )
+    _require_nonempty_strings(summary, "reader_state_summary")
+    return {
+        **summary,
+        "candidate_superiority_claimed": False,
+        "current_best_supersession_claimed": False,
+    }
+
+
 def _validate_requirement_self_report(
     payload: dict[str, Any],
     key: str,
@@ -4974,6 +5441,19 @@ def _validate_object(
         _require_type(value, field, str, field_prefix=f"{label}.")
         validated[field] = value[field]
     return validated
+
+
+def _require_enum_value(value: object, label: str, allowed_values: tuple[str, ...]) -> None:
+    if value not in allowed_values:
+        raise ModelValidationError(
+            f"{label} must be one of: {', '.join(allowed_values)}"
+        )
+
+
+def _require_nonempty_strings(payload: dict[str, str], label: str) -> None:
+    for key, value in payload.items():
+        if isinstance(value, str) and not value.strip():
+            raise ModelValidationError(f"{label}.{key} must not be empty")
 
 
 def _require_type(

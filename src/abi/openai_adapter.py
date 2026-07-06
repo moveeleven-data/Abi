@@ -17,6 +17,7 @@ from abi.model_schemas import (
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     LIVE_MODEL_WORKER_SCHEMAS,
     MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
+    NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
     NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     PILOT_ABI_CANDIDATE_SCHEMA,
@@ -162,6 +163,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_residual_intervention_generation_prompt
     if schema == NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA:
         return _build_nonlocal_law_guided_generation_prompt
+    if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
+        return _build_nonlocal_law_candidate_reader_state_prompt
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
         return _build_model_backed_local_law_rival_diagnostic_prompt
     return _build_live_packet_prompt
@@ -380,6 +383,27 @@ def _build_nonlocal_law_guided_generation_prompt(input_text: str) -> str:
         "generation_allowed: false; finality_claimed: false; "
         "phase_shift_claimed: false; strongest_rival_defeated_claimed: false. "
         "Output structured schema only. Prompt packet:\n"
+        f"{input_text}"
+    )
+
+
+def _build_nonlocal_law_candidate_reader_state_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema for "
+        "autonomous.nonlocal_law_candidate_reader_state_evaluation.v1. Evaluate "
+        "reader-state effects only. Do not generate, rewrite, patch, authorize "
+        "generation, run synthesis, update current best, claim candidate "
+        "superiority, claim finality, claim phase shift, or claim strongest-rival "
+        "defeat. Compare the nonlocal law-guided candidate against packet_0063 "
+        "and the ablation controls. Test whether object-event consequence is "
+        "felt before explanation, whether explanation is earned rather than "
+        "abolished, whether reread return is prepared, whether rival imitation "
+        "is absent, and whether the recorded risk probes remain active. Keep "
+        "strongest-rival pressure blocking. Set generation_allowed, "
+        "synthesis_authorized, finality_claimed, phase_shift_claimed, "
+        "strongest_rival_defeated_claimed, candidate_superiority_claimed, and "
+        "current_best_supersession_claimed to false. Output structured schema "
+        "only. Prompt packet:\n"
         f"{input_text}"
     )
 
