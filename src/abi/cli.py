@@ -69,8 +69,12 @@ from abi.modules.nonlocal_law_guided_work_order import (
 )
 from abi.modules.nonlocal_law_guided_generation_authorization import (
     NONLOCAL_LAW_GENERATION_AUTHORIZATION_DECISIONS,
-    run_nonlocal_law_candidate_generation_placeholder,
     run_nonlocal_law_generation_authorization,
+)
+from abi.modules.nonlocal_law_guided_candidate_generation import (
+    NONLOCAL_LAW_CANDIDATE_GENERATION_CLIENTS,
+    NONLOCAL_LAW_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
+    run_nonlocal_law_candidate_generation,
 )
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
@@ -710,13 +714,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     autonomous_nonlocal_law_candidate_parser = autonomous_subparsers.add_parser(
         "generate-nonlocal-law-candidate",
-        help="Guarded placeholder for future nonlocal law-guided generation",
+        help="Generate one bounded nonlocal law-guided candidate",
     )
     autonomous_nonlocal_law_candidate_parser.add_argument(
         "--client",
-        choices=("openai",),
+        choices=NONLOCAL_LAW_CANDIDATE_GENERATION_CLIENTS,
         required=True,
-        help="Future nonlocal law-guided generation client path.",
+        help="Nonlocal law-guided generation client path.",
     )
     autonomous_nonlocal_law_candidate_parser.add_argument(
         "--authorization-packet",
@@ -728,6 +732,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-live-model",
         action="store_true",
         help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_nonlocal_law_candidate_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=NONLOCAL_LAW_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model calls allowed for guarded live-model paths.",
     )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
@@ -1182,6 +1192,7 @@ def main(argv: list[str] | None = None) -> int:
             client_name=args.client,
             authorization_packet=args.authorization_packet,
             allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1774,12 +1785,14 @@ def _cmd_autonomous_generate_nonlocal_law_candidate(
     client_name: str,
     authorization_packet: Path,
     allow_live_model: bool,
+    max_model_calls: int,
 ) -> int:
-    result = run_nonlocal_law_candidate_generation_placeholder(
+    result = run_nonlocal_law_candidate_generation(
         config,
         client_name=client_name,
         authorization_packet=authorization_packet,
         allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code

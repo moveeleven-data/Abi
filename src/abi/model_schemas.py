@@ -68,6 +68,7 @@ class WorkerRole(str, Enum):
     BOUNDED_MACRO_RECOMPOSER = "bounded_macro_recomposer"
     OBJECT_MOTION_CAUSALITY_GENERATOR = "object_motion_causality_generator"
     RESIDUAL_INTERVENTION_GENERATOR = "residual_intervention_generator"
+    NONLOCAL_LAW_GUIDED_GENERATOR = "nonlocal_law_guided_generator"
     MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC = (
         "model_backed_local_law_rival_diagnostic"
     )
@@ -485,6 +486,12 @@ RESIDUAL_INTERVENTION_GENERATION_SCHEMA = WorkerSchema(
     artifact_type="model_residual_intervention_generation",
 )
 
+NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA = WorkerSchema(
+    name="NonlocalLawGuidedGenerationOutput",
+    version="1",
+    artifact_type="model_nonlocal_law_guided_generation",
+)
+
 MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA = WorkerSchema(
     name="ModelBackedLocalLawRivalDiagnosticOutput",
     version="1",
@@ -495,6 +502,7 @@ BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS = (
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
+    NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA,
 )
 
 LOCAL_LAW_RIVAL_DIAGNOSTIC_MODEL_SCHEMAS = (
@@ -2408,6 +2416,112 @@ def residual_intervention_generation_json_schema() -> dict[str, Any]:
     )
 
 
+def nonlocal_law_guided_generation_json_schema() -> dict[str, Any]:
+    target_unit_item = _object_schema(
+        {
+            "target_unit_id": {"type": "string"},
+            "change_summary": {"type": "string"},
+            "materiality_satisfied": {"type": "boolean"},
+            "semantic_satisfied": {"type": "boolean"},
+        },
+        [
+            "target_unit_id",
+            "change_summary",
+            "materiality_satisfied",
+            "semantic_satisfied",
+        ],
+    )
+    requirement_item = _object_schema(
+        {
+            "requirement": {"type": "string"},
+            "satisfied": {"type": "boolean"},
+            "evidence": {"type": "string"},
+        },
+        ["requirement", "satisfied", "evidence"],
+    )
+    non_imitation_report = _object_schema(
+        {
+            "passed": {"type": "boolean"},
+            "evidence": {"type": "string"},
+            "forbidden_material_absent": _string_array_schema(),
+        },
+        ["passed", "evidence", "forbidden_material_absent"],
+    )
+    protected_strengths_report = _object_schema(
+        {
+            "preserved": {"type": "boolean"},
+            "evidence": {"type": "string"},
+            "protected_strengths": _string_array_schema(),
+        },
+        ["preserved", "evidence", "protected_strengths"],
+    )
+    forbidden_regression_report = _object_schema(
+        {
+            "passed": {"type": "boolean"},
+            "evidence": {"type": "string"},
+            "avoided_regressions": _string_array_schema(),
+        },
+        ["passed", "evidence", "avoided_regressions"],
+    )
+    evidence_acknowledgment = _object_schema(
+        {
+            "ablation_required": {"type": "boolean"},
+            "reader_state_eval_required": {"type": "boolean"},
+            "synthesis_required": {"type": "boolean"},
+            "strongest_rival_remains_blocking": {"type": "boolean"},
+        },
+        [
+            "ablation_required",
+            "reader_state_eval_required",
+            "synthesis_required",
+            "strongest_rival_remains_blocking",
+        ],
+    )
+    return _schema_with_properties(
+        {
+            "revised_text": {"type": "string"},
+            "revision_summary": {"type": "string"},
+            "law_application_summary": {"type": "string"},
+            "target_unit_change_report": {
+                "type": "array",
+                "items": target_unit_item,
+            },
+            "materiality_self_report": {
+                "type": "array",
+                "items": requirement_item,
+            },
+            "semantic_self_report": {
+                "type": "array",
+                "items": requirement_item,
+            },
+            "non_imitation_report": non_imitation_report,
+            "protected_strengths_report": protected_strengths_report,
+            "forbidden_regression_report": forbidden_regression_report,
+            "post_generation_evidence_plan_acknowledgment": evidence_acknowledgment,
+            "generation_allowed": {"type": "boolean"},
+            "finality_claimed": {"type": "boolean"},
+            "phase_shift_claimed": {"type": "boolean"},
+            "strongest_rival_defeated_claimed": {"type": "boolean"},
+        },
+        [
+            "revised_text",
+            "revision_summary",
+            "law_application_summary",
+            "target_unit_change_report",
+            "materiality_self_report",
+            "semantic_self_report",
+            "non_imitation_report",
+            "protected_strengths_report",
+            "forbidden_regression_report",
+            "post_generation_evidence_plan_acknowledgment",
+            "generation_allowed",
+            "finality_claimed",
+            "phase_shift_claimed",
+            "strongest_rival_defeated_claimed",
+        ],
+    )
+
+
 def model_backed_local_law_rival_diagnostic_json_schema() -> dict[str, Any]:
     finding_schema = _local_law_diagnostic_finding_schema()
     return _schema_with_properties(
@@ -2566,6 +2680,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return object_motion_causality_generation_json_schema()
     if schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
         return residual_intervention_generation_json_schema()
+    if schema == NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA:
+        return nonlocal_law_guided_generation_json_schema()
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
         return model_backed_local_law_rival_diagnostic_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
@@ -2677,6 +2793,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_object_motion_causality_generation(payload)
     if schema == RESIDUAL_INTERVENTION_GENERATION_SCHEMA:
         return _validate_residual_intervention_generation(payload)
+    if schema == NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA:
+        return _validate_nonlocal_law_guided_generation(payload)
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
         return _validate_model_backed_local_law_rival_diagnostic(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
@@ -4253,6 +4371,170 @@ def _validate_residual_intervention_generation(
         "protected_effects_notes": list(payload["protected_effects_notes"]),
         "forbidden_change_self_check": list(payload["forbidden_change_self_check"]),
         "uncertainty": payload["uncertainty"],
+    }
+
+
+def _validate_nonlocal_law_guided_generation(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_fields = {
+        "revised_text",
+        "revision_summary",
+        "law_application_summary",
+        "target_unit_change_report",
+        "materiality_self_report",
+        "semantic_self_report",
+        "non_imitation_report",
+        "protected_strengths_report",
+        "forbidden_regression_report",
+        "post_generation_evidence_plan_acknowledgment",
+        "generation_allowed",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+    }
+    extra_fields = sorted(set(payload) - allowed_fields)
+    if extra_fields:
+        raise ModelValidationError(
+            "unexpected fields in nonlocal law-guided generation output: "
+            + ", ".join(extra_fields)
+        )
+    for key in ("revised_text", "revision_summary", "law_application_summary"):
+        _require_type(payload, key, str)
+        if not payload[key].strip():
+            raise ModelValidationError(f"{key} must not be empty")
+    _require_object_list(payload, "target_unit_change_report")
+    target_report = []
+    for index, item in enumerate(payload["target_unit_change_report"]):
+        validated = _validate_object(
+            item,
+            f"target_unit_change_report[{index}]",
+            ("target_unit_id", "change_summary"),
+        )
+        _require_type(
+            item,
+            "materiality_satisfied",
+            bool,
+            field_prefix=f"target_unit_change_report[{index}].",
+        )
+        _require_type(
+            item,
+            "semantic_satisfied",
+            bool,
+            field_prefix=f"target_unit_change_report[{index}].",
+        )
+        validated["materiality_satisfied"] = item["materiality_satisfied"]
+        validated["semantic_satisfied"] = item["semantic_satisfied"]
+        target_report.append(validated)
+    if not target_report:
+        raise ModelValidationError("target_unit_change_report must not be empty")
+
+    materiality_report = _validate_requirement_self_report(
+        payload,
+        "materiality_self_report",
+    )
+    semantic_report = _validate_requirement_self_report(
+        payload,
+        "semantic_self_report",
+    )
+    non_imitation = _validate_nonlocal_boolean_report(
+        payload,
+        "non_imitation_report",
+        bool_key="passed",
+        array_key="forbidden_material_absent",
+    )
+    protected = _validate_nonlocal_boolean_report(
+        payload,
+        "protected_strengths_report",
+        bool_key="preserved",
+        array_key="protected_strengths",
+    )
+    forbidden = _validate_nonlocal_boolean_report(
+        payload,
+        "forbidden_regression_report",
+        bool_key="passed",
+        array_key="avoided_regressions",
+    )
+    acknowledgment = _validate_object(
+        payload.get("post_generation_evidence_plan_acknowledgment"),
+        "post_generation_evidence_plan_acknowledgment",
+        (),
+    )
+    for key in (
+        "ablation_required",
+        "reader_state_eval_required",
+        "synthesis_required",
+        "strongest_rival_remains_blocking",
+    ):
+        _require_true(
+            payload["post_generation_evidence_plan_acknowledgment"],
+            key,
+            field_prefix="post_generation_evidence_plan_acknowledgment.",
+        )
+        acknowledgment[key] = True
+    _require_false(payload, "generation_allowed")
+    _require_false(payload, "finality_claimed")
+    _require_false(payload, "phase_shift_claimed")
+    _require_false(payload, "strongest_rival_defeated_claimed")
+    return {
+        "revised_text": payload["revised_text"],
+        "revision_summary": payload["revision_summary"],
+        "law_application_summary": payload["law_application_summary"],
+        "target_unit_change_report": target_report,
+        "materiality_self_report": materiality_report,
+        "semantic_self_report": semantic_report,
+        "non_imitation_report": non_imitation,
+        "protected_strengths_report": protected,
+        "forbidden_regression_report": forbidden,
+        "post_generation_evidence_plan_acknowledgment": acknowledgment,
+        "generation_allowed": False,
+        "finality_claimed": False,
+        "phase_shift_claimed": False,
+        "strongest_rival_defeated_claimed": False,
+    }
+
+
+def _validate_requirement_self_report(
+    payload: dict[str, Any],
+    key: str,
+) -> list[dict[str, object]]:
+    _require_object_list(payload, key)
+    report = []
+    for index, item in enumerate(payload[key]):
+        validated = _validate_object(
+            item,
+            f"{key}[{index}]",
+            ("requirement", "evidence"),
+        )
+        _require_type(item, "satisfied", bool, field_prefix=f"{key}[{index}].")
+        validated["satisfied"] = item["satisfied"]
+        report.append(validated)
+    if not report:
+        raise ModelValidationError(f"{key} must not be empty")
+    return report
+
+
+def _validate_nonlocal_boolean_report(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    bool_key: str,
+    array_key: str,
+) -> dict[str, object]:
+    if not isinstance(payload.get(key), dict):
+        raise ModelValidationError(f"{key} must be an object")
+    report = payload[key]
+    _require_type(report, bool_key, bool, field_prefix=f"{key}.")
+    _require_type(report, "evidence", str, field_prefix=f"{key}.")
+    if not report["evidence"].strip():
+        raise ModelValidationError(f"{key}.evidence must not be empty")
+    _require_string_list(report, array_key, field_prefix=f"{key}.")
+    if not report[array_key]:
+        raise ModelValidationError(f"{key}.{array_key} must not be empty")
+    return {
+        bool_key: report[bool_key],
+        "evidence": report["evidence"],
+        array_key: list(report[array_key]),
     }
 
 

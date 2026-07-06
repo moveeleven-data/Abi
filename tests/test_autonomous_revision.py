@@ -145,6 +145,7 @@ from abi.modules.nonlocal_law_guided_strategy import (
 from abi.modules.nonlocal_law_guided_work_order import (
     ABLATION_CONTROLS as NONLOCAL_LAW_WORK_ORDER_ABLATION_CONTROLS,
     FUTURE_SCHEMA_NAME as NONLOCAL_LAW_WORK_ORDER_SCHEMA_NAME,
+    MATERIALITY_REQUIREMENTS as NONLOCAL_LAW_WORK_ORDER_MATERIALITY_REQUIREMENTS,
     MATERIALITY_POLICY_ID as NONLOCAL_LAW_WORK_ORDER_MATERIALITY_POLICY_ID,
     NEXT_RECOMMENDED_ACTION as NONLOCAL_LAW_WORK_ORDER_NEXT_ACTION,
     NONLOCAL_LAW_GUIDED_WORK_ORDER_ARTIFACT_TYPES,
@@ -153,6 +154,7 @@ from abi.modules.nonlocal_law_guided_work_order import (
     NONLOCAL_TARGET_UNIT_IDS,
     PROMPT_CONTRACT_ID as NONLOCAL_LAW_WORK_ORDER_PROMPT_CONTRACT_ID,
     READER_STATE_FOCUS as NONLOCAL_LAW_WORK_ORDER_READER_FOCUS,
+    SEMANTIC_VALIDATION_REQUIREMENTS as NONLOCAL_LAW_WORK_ORDER_SEMANTIC_REQUIREMENTS,
     SEMANTIC_VALIDATOR_ID as NONLOCAL_LAW_WORK_ORDER_SEMANTIC_VALIDATOR_ID,
     run_nonlocal_law_guided_work_order_planning,
 )
@@ -161,8 +163,13 @@ from abi.modules.nonlocal_law_guided_generation_authorization import (
     AUTHORIZATION_DECISION_PAUSE as NONLOCAL_LAW_AUTH_DECISION_PAUSE,
     AUTHORIZATION_DECISION_REQUIRE_REVISION as NONLOCAL_LAW_AUTH_DECISION_REVISION,
     NONLOCAL_LAW_GENERATION_AUTHORIZATION_ARTIFACT_TYPES,
-    run_nonlocal_law_candidate_generation_placeholder,
     run_nonlocal_law_generation_authorization,
+)
+from abi.modules.nonlocal_law_guided_candidate_generation import (
+    FAILED_NONLOCAL_LAW_CANDIDATE_ARTIFACT_TYPES,
+    NONLOCAL_LAW_CANDIDATE_ARTIFACT_TYPES,
+    FakeNonlocalLawGuidedGenerationModelClient,
+    run_nonlocal_law_candidate_generation,
 )
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
@@ -18051,6 +18058,23 @@ def build_nonlocal_law_generation_authorization_ready_chain(
     return config, Path(str(work_order.payload["packet_dir"])), run_id, work_order.payload
 
 
+def build_nonlocal_law_candidate_generation_ready_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str, dict[str, object]]:
+    config, work_order_packet, run_id, _work_order_payload = (
+        build_nonlocal_law_generation_authorization_ready_chain(tmp_path)
+    )
+    authorization = run_nonlocal_law_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=NONLOCAL_LAW_AUTH_DECISION_AUTHORIZE,
+    )
+    assert authorization.exit_code == 0
+    assert authorization.payload["accepted"] is True
+    return config, Path(str(authorization.payload["packet_dir"])), run_id, authorization.payload
+
+
 def copy_packet_with_payload_mutation(
     tmp_path: Path,
     source_packet: Path,
@@ -21867,36 +21891,320 @@ def test_nonlocal_law_generation_authorization_decisions(
     assert result.payload["next_recommended_action"] == next_action
 
 
-def test_nonlocal_law_candidate_generation_placeholder_refuses_without_allow(
+def nonlocal_law_candidate_client_factory(mode: str = "valid"):
+    def _factory(model: str) -> FakeNonlocalLawGuidedGenerationModelClient:
+        return FakeNonlocalLawGuidedGenerationModelClient(
+            mode=mode,
+            provider="openai",
+            model=model,
+        )
+
+    return _factory
+
+
+def assert_nonlocal_law_candidate_acceptance(
+    config: AbiConfig,
+    run_id: str,
+    result,
+    *,
+    expected_model_calls: int,
+) -> Path:
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["candidate_generated"] is True
+    assert result.payload["candidate_artifact_created"] is True
+    assert result.payload["authorization_consumed"] is True
+    assert result.payload["model_calls"] == expected_model_calls
+    assert result.payload["base_candidate_packet_id"] == "packet_0063"
+    assert result.payload["current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["reader_state_packet_id"] == "packet_0013"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["selected_strategy_class"] == SELECTED_NONLOCAL_STRATEGY_CLASS
+    assert result.payload["work_order_kind"] == NONLOCAL_LAW_GUIDED_WORK_ORDER_KIND
+    assert result.payload["target_scope"] == NONLOCAL_LAW_TARGET_SCOPE
+    assert result.payload["prompt_contract_id"] == NONLOCAL_LAW_WORK_ORDER_PROMPT_CONTRACT_ID
+    assert result.payload["schema"] == NONLOCAL_LAW_WORK_ORDER_SCHEMA_NAME
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["next_recommended_action"] == (
+        "review_nonlocal_law_candidate_before_ablation"
+    )
+    assert set(result.payload["artifact_paths"]) == set(NONLOCAL_LAW_CANDIDATE_ARTIFACT_TYPES)
+    assert result.payload["counts"]["model_calls"] == expected_model_calls
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "nonlocal_law_guided_candidate"
+    for artifact_type in NONLOCAL_LAW_CANDIDATE_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    target = read_payload(packet_dir / "target_unit_change_report.json")
+    assert target["target_units_reported"] == list(NONLOCAL_TARGET_UNIT_IDS)
+    assert target["target_unit_count"] == len(NONLOCAL_TARGET_UNIT_IDS)
+    assert target["passed"] is True
+
+    materiality = read_payload(packet_dir / "materiality_validation_report.json")
+    assert materiality["passed"] is True
+    assert materiality["required_requirements"] == list(
+        NONLOCAL_LAW_WORK_ORDER_MATERIALITY_REQUIREMENTS
+    )
+
+    semantic = read_payload(packet_dir / "semantic_validation_report.json")
+    assert semantic["passed"] is True
+    assert semantic["required_requirements"] == list(
+        NONLOCAL_LAW_WORK_ORDER_SEMANTIC_REQUIREMENTS
+    )
+
+    non_imitation = read_payload(packet_dir / "non_imitation_validation_report.json")
+    assert non_imitation["passed"] is True
+    assert non_imitation["forbidden_rival_hits"] == []
+
+    protected = read_payload(packet_dir / "protected_strengths_preservation_report.json")
+    assert protected["preserved"] is True
+
+    evidence_plan = read_payload(packet_dir / "post_generation_evidence_plan.json")
+    assert evidence_plan["ablation_required"] is True
+    assert evidence_plan["reader_state_eval_required"] is True
+    assert evidence_plan["synthesis_required"] is True
+    assert evidence_plan["strongest_rival_remains_blocking"] is True
+
+    gate = read_payload(packet_dir / "nonlocal_law_candidate_gate_report.json")
+    assert gate["passed"] is False
+    assert gate["finalization_eligible"] is False
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+    return packet_dir
+
+
+def test_nonlocal_law_candidate_generation_fake_accepts(tmp_path):
+    config, authorization_packet, run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+
+    packet_dir = assert_nonlocal_law_candidate_acceptance(
+        config,
+        run_id,
+        result,
+        expected_model_calls=0,
+    )
+    generated = read_payload(packet_dir / "generated_candidate_text.json")
+    assert generated["fixture_only"] is True
+    assert generated["model_call_id"] is None
+    assert "table" in generated["text"]
+
+
+def test_nonlocal_law_candidate_generation_cli_fake_accepts(tmp_path, capsys):
+    _config, authorization_packet, _run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "generate-nonlocal-law-candidate",
+            "--client",
+            "fake",
+            "--authorization-packet",
+            str(authorization_packet),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["candidate_generated"] is True
+    assert payload["authorization_consumed"] is True
+    assert payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_generation_openai_guard_refuses_without_allow(
     tmp_path,
 ):
-    config, work_order_packet, _run_id, _work_order_payload = (
-        build_nonlocal_law_generation_authorization_ready_chain(tmp_path)
+    config, authorization_packet, _run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
     )
-    authorization = run_nonlocal_law_generation_authorization(
-        config,
-        work_order_packet=work_order_packet,
-        operator_reviewed=True,
-        decision=NONLOCAL_LAW_AUTH_DECISION_AUTHORIZE,
-    )
-    assert authorization.exit_code == 0
 
-    result = run_nonlocal_law_candidate_generation_placeholder(
+    result = run_nonlocal_law_candidate_generation(
         config,
         client_name="openai",
-        authorization_packet=Path(str(authorization.payload["packet_dir"])),
+        authorization_packet=authorization_packet,
         allow_live_model=False,
     )
 
     assert result.exit_code == 1
     assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
     assert "--allow-live-model" in result.payload["message"]
     assert result.payload["authorization_consumed"] is False
     assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0
-    assert result.payload["next_recommended_action"] == (
-        "implement_nonlocal_law_guided_candidate_generation"
+
+
+def test_nonlocal_law_candidate_generation_openai_requires_api_key(tmp_path):
+    config, authorization_packet, _run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
     )
+
+    result = run_nonlocal_law_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        api_key="",
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "OPENAI_API_KEY" in result.payload["message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_generation_stubbed_openai_accepts(tmp_path):
+    config, authorization_packet, run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-model",
+        client_factory=nonlocal_law_candidate_client_factory(),
+    )
+
+    packet_dir = assert_nonlocal_law_candidate_acceptance(
+        config,
+        run_id,
+        result,
+        expected_model_calls=1,
+    )
+    assert len(result.payload["model_call_ids"]) == 1
+    generated_envelope = json.loads(
+        (packet_dir / "generated_candidate_text.json").read_text(encoding="utf-8")
+    )
+    assert generated_envelope["model_call_id"] == result.payload["model_call_ids"][0]
+    assert generated_envelope["fixture_only"] is False
+
+    with connect(config.db_path) as connection:
+        candidate_calls = [
+            call
+            for call in list_model_calls(connection, run_id=run_id)
+            if call.worker_role == WorkerRole.NONLOCAL_LAW_GUIDED_GENERATOR.value
+        ]
+    assert len(candidate_calls) == 1
+    assert candidate_calls[0].status == MODEL_CALL_SUCCESS
+    assert candidate_calls[0].provider == "openai"
+    assert candidate_calls[0].model == "stub-nonlocal-law-model"
+    assert candidate_calls[0].prompt_contract_id == NONLOCAL_LAW_WORK_ORDER_PROMPT_CONTRACT_ID
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_message"),
+    [
+        ("forbidden_rival_material", "forbidden rival material"),
+        ("missing_target_unit", "missing required units"),
+        ("finality", "finality_claimed must be false"),
+        ("phase_shift", "phase_shift_claimed must be false"),
+        ("rival_defeat", "strongest_rival_defeated_claimed must be false"),
+        ("abolish_explanation", "explanation is abolished"),
+        ("missing_object_field", "packet_0063 object field absent"),
+        ("thesis_statement", "thesis statement"),
+        ("unchanged", "unchanged from packet_0063"),
+    ],
+)
+def test_nonlocal_law_candidate_generation_validation_failures_fail_closed(
+    tmp_path,
+    mode,
+    expected_message,
+):
+    config, authorization_packet, run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-model",
+        client_factory=nonlocal_law_candidate_client_factory(mode),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert expected_message in result.payload["message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 1
+    assert set(result.payload["artifact_paths"]) == set(
+        FAILED_NONLOCAL_LAW_CANDIDATE_ARTIFACT_TYPES
+    )
+    assert "generated_candidate_text" not in result.payload["artifact_paths"]
+
+    with connect(config.db_path) as connection:
+        accepted_candidates = [
+            artifact
+            for artifact in list_artifacts(connection, run_id)
+            if artifact.type == "nonlocal_law_guided_candidate_packet"
+        ]
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert accepted_candidates == []
+    assert finalization.refused is True
+
+
+def test_nonlocal_law_candidate_generation_duplicate_consumed_authorization_refuses(
+    tmp_path,
+):
+    config, authorization_packet, _run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
+    )
+    first = run_nonlocal_law_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+    assert first.exit_code == 0
+
+    duplicate = run_nonlocal_law_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "existing accepted candidate already consumed" in duplicate.payload["message"]
+    assert duplicate.payload["authorization_consumed"] is False
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_direction_review_residual_target_selection_accepts_proof_no_answer(
