@@ -22,7 +22,7 @@ from abi.controller.state import (
 from abi.db import connect, initialize_database
 from abi.hashing import sha256_text
 from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
-from abi.model_calls import link_model_call_parsed_artifact
+from abi.model_calls import MODEL_CALL_VALIDATION_FAILED, link_model_call_parsed_artifact
 from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
 from abi.model_schemas import (
     ModelValidationError,
@@ -74,6 +74,12 @@ NONLOCAL_LAW_CANDIDATE_GENERATION_REQUIRED_MODEL_CALLS = 1
 NONLOCAL_LAW_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT = 1
 NEXT_RECOMMENDED_ACTION = "review_nonlocal_law_candidate_before_ablation"
 FAILED_NEXT_RECOMMENDED_ACTION = "review_failed_nonlocal_law_candidate_generation"
+SAFETY_METADATA_FAILURE_CLASS = "nonlocal_law_generation_safety_metadata_failure"
+SAFETY_GENERATION_ALLOWED_REASON = "generation_allowed_true_or_not_false"
+GENERATION_ALLOWED_DIAGNOSTIC_MESSAGE = (
+    "The model treated generation_allowed as current-call permission. This field "
+    "is a downstream safety/escalation assertion and must be false."
+)
 
 NONLOCAL_LAW_CANDIDATE_ARTIFACT_TYPES = (
     "source_authorization_intake_summary",
@@ -220,6 +226,8 @@ class FakeNonlocalLawGuidedGenerationModelClient:
             payload["phase_shift_claimed"] = True
         elif self.mode == "rival_defeat":
             payload["strongest_rival_defeated_claimed"] = True
+        elif self.mode == "generation_allowed":
+            payload["generation_allowed"] = True
         elif self.mode == "abolish_explanation":
             payload["revised_text"] = payload["revised_text"].replace(
                 "Only after",
@@ -1422,9 +1430,11 @@ def _failure_result(
         )
         payloads: dict[str, dict[str, object]] = {}
         artifacts: dict[str, ArtifactRecord] = {}
+        failure_surface = _failure_surface_fields(validation_report, model_results)
         payloads["failed_generation_diagnostic"] = {
             "accepted": False,
             "message": message,
+            **failure_surface,
             "client": client_name,
             "model": model,
             "source_authorization_packet_id": subject.authorization_packet_id,
@@ -1471,6 +1481,7 @@ def _failure_result(
             "accepted": False,
             "refused": True,
             "message": message,
+            **failure_surface,
             "packet_id": packet_dir.name,
             "packet_dir": str(packet_dir),
             "source_authorization_packet_id": subject.authorization_packet_id,
@@ -1511,14 +1522,103 @@ def _failure_result(
     )
 
 
+def _failure_surface_fields(
+    validation_report: dict[str, object],
+    model_results: list[ModelDriverResult],
+) -> dict[str, object]:
+    latest_result = model_results[-1] if model_results else None
+    output_payload = (
+        _model_output_payload_for_result(latest_result)
+        if latest_result is not None
+        else {}
+    )
+    validation_failures = _validation_failures(validation_report)
+    model_call_status = (
+        str(validation_report.get("model_call_status"))
+        if validation_report.get("model_call_status")
+        else (
+            latest_result.model_call.status
+            if latest_result is not None
+            else None
+        )
+    )
+    observation = _model_output_observation(output_payload)
+    if _is_generation_allowed_failure(validation_failures, output_payload):
+        failure_class = SAFETY_METADATA_FAILURE_CLASS
+        failure_reason = SAFETY_GENERATION_ALLOWED_REASON
+        diagnostic_message = GENERATION_ALLOWED_DIAGNOSTIC_MESSAGE
+    else:
+        failure_class = "nonlocal_law_generation_validation_failure"
+        failure_reason = (
+            "structured_output_validation_failed"
+            if model_call_status == MODEL_CALL_VALIDATION_FAILED
+            else "controller_validation_failed"
+        )
+        diagnostic_message = "Nonlocal law-guided candidate generation failed validation."
+    return {
+        "failure_class": failure_class,
+        "failure_reason": failure_reason,
+        "validation_failures": validation_failures,
+        "model_call_status": model_call_status,
+        "diagnostic_message": diagnostic_message,
+        **observation,
+    }
+
+
+def _is_generation_allowed_failure(
+    validation_failures: list[str],
+    output_payload: dict[str, object],
+) -> bool:
+    return any("generation_allowed" in failure for failure in validation_failures) or (
+        "generation_allowed" in output_payload
+        and output_payload.get("generation_allowed") is not False
+    )
+
+
+def _validation_failures(validation_report: dict[str, object]) -> list[str]:
+    failures = validation_report.get("validation_failures")
+    if isinstance(failures, list):
+        return [str(failure) for failure in failures]
+    return []
+
+
+def _model_output_observation(output_payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "model_output_keys": sorted(output_payload),
+        "generation_allowed": output_payload.get("generation_allowed"),
+        "finality_claimed": output_payload.get("finality_claimed"),
+        "phase_shift_claimed": output_payload.get("phase_shift_claimed"),
+        "strongest_rival_defeated_claimed": output_payload.get(
+            "strongest_rival_defeated_claimed"
+        ),
+    }
+
+
+def _model_output_payload_for_result(
+    model_result: ModelDriverResult,
+) -> dict[str, object]:
+    if isinstance(model_result.parsed_payload, dict):
+        return dict(model_result.parsed_payload)
+    path = model_result.model_call.raw_output_path
+    if not path:
+        return {}
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _validation_report_for_model_failure(
     model_result: ModelDriverResult,
 ) -> dict[str, object]:
-    return {
+    report: dict[str, object] = {
         "validation_passed": False,
         "validation_failures": [model_result.model_call.error_message or model_result.model_call.status],
         "model_call_status": model_result.model_call.status,
     }
+    report.update(_model_output_observation(_model_output_payload_for_result(model_result)))
+    return report
 
 
 def _model_failure_message(result: ModelDriverResult) -> str:

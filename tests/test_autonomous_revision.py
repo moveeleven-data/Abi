@@ -37,15 +37,16 @@ from abi.model_schemas import (
     AUTONOMOUS_REVISION_PROVENANCE_SOURCE_TOKENS,
     AUTONOMOUS_REVISION_REVISED_CANDIDATE_SCHEMA,
     BOUNDED_MACRO_RECOMPOSITION_SCHEMA,
+    MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
+    NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA,
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
-    MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA,
     ModelValidationError,
     WorkerRole,
     json_schema_for_worker_schema,
     parse_and_validate_structured_output,
 )
-from abi.openai_adapter import openai_response_format_for_request
+from abi.openai_adapter import _prompt_builder_for_schema, openai_response_format_for_request
 from abi.loop_integrity import (
     build_proof_before_next_generation_guard,
     build_repeated_target_drift_guard,
@@ -21891,6 +21892,43 @@ def test_nonlocal_law_generation_authorization_decisions(
     assert result.payload["next_recommended_action"] == next_action
 
 
+def test_nonlocal_law_guided_generation_schema_and_prompt_lock_safety_fields():
+    schema = json_schema_for_worker_schema(NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA)
+    for field_name in (
+        "generation_allowed",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+    ):
+        field_schema = schema["properties"][field_name]
+        assert field_schema["enum"] == [False]
+        assert "Must be false" in field_schema["description"]
+
+    request = WorkerRequest(
+        run_id="run_schema_test",
+        worker_role=WorkerRole.NONLOCAL_LAW_GUIDED_GENERATOR,
+        prompt_contract_id=NONLOCAL_LAW_WORK_ORDER_PROMPT_CONTRACT_ID,
+        schema=NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA,
+        input_text="{}",
+    )
+    response_format = openai_response_format_for_request(request)
+    assert response_format["strict"] is True
+    for field_name in (
+        "generation_allowed",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+    ):
+        assert response_format["schema"]["properties"][field_name]["enum"] == [False]
+
+    prompt = _prompt_builder_for_schema(NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA)("{}")
+    assert "generation_allowed is a downstream safety/escalation field" in prompt
+    assert "generation_allowed: false" in prompt
+    assert "finality_claimed: false" in prompt
+    assert "phase_shift_claimed: false" in prompt
+    assert "strongest_rival_defeated_claimed: false" in prompt
+
+
 def nonlocal_law_candidate_client_factory(mode: str = "valid"):
     def _factory(model: str) -> FakeNonlocalLawGuidedGenerationModelClient:
         return FakeNonlocalLawGuidedGenerationModelClient(
@@ -22117,6 +22155,77 @@ def test_nonlocal_law_candidate_generation_stubbed_openai_accepts(tmp_path):
     assert candidate_calls[0].provider == "openai"
     assert candidate_calls[0].model == "stub-nonlocal-law-model"
     assert candidate_calls[0].prompt_contract_id == NONLOCAL_LAW_WORK_ORDER_PROMPT_CONTRACT_ID
+
+
+def test_nonlocal_law_candidate_generation_generation_allowed_failure_surface(
+    tmp_path,
+):
+    config, authorization_packet, run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-model",
+        client_factory=nonlocal_law_candidate_client_factory("generation_allowed"),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert result.payload["failure_class"] == (
+        "nonlocal_law_generation_safety_metadata_failure"
+    )
+    assert result.payload["failure_reason"] == "generation_allowed_true_or_not_false"
+    assert result.payload["validation_failures"] == ["generation_allowed must be false"]
+    assert result.payload["model_call_status"] == MODEL_CALL_VALIDATION_FAILED
+    assert result.payload["generation_allowed"] is True
+    assert result.payload["finality_claimed"] is False
+    assert result.payload["phase_shift_claimed"] is False
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert "generation_allowed" in result.payload["model_output_keys"]
+    assert "current-call permission" in result.payload["diagnostic_message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 1
+    assert set(result.payload["artifact_paths"]) == set(
+        FAILED_NONLOCAL_LAW_CANDIDATE_ARTIFACT_TYPES
+    )
+    assert "generated_candidate_text" not in result.payload["artifact_paths"]
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    diagnostic = read_payload(packet_dir / "failed_generation_diagnostic.json")
+    failed_packet = read_payload(packet_dir / "nonlocal_law_failed_generation_packet.json")
+    for payload in (diagnostic, failed_packet):
+        assert payload["failure_class"] == (
+            "nonlocal_law_generation_safety_metadata_failure"
+        )
+        assert payload["failure_reason"] == "generation_allowed_true_or_not_false"
+        assert payload["validation_failures"] == ["generation_allowed must be false"]
+        assert payload["model_call_status"] == MODEL_CALL_VALIDATION_FAILED
+        assert payload["generation_allowed"] is True
+        assert payload["finality_claimed"] is False
+        assert payload["phase_shift_claimed"] is False
+        assert payload["strongest_rival_defeated_claimed"] is False
+        assert payload["source_authorization_packet_id"] == authorization_packet.name
+        assert payload["authorization_consumed"] is False
+        assert payload["candidate_generated"] is False
+        assert payload["model_calls"] == 1
+        assert payload["no_final_claim"] is True
+        assert payload["no_phase_shift_claim"] is True
+
+    with connect(config.db_path) as connection:
+        accepted_candidates = [
+            artifact
+            for artifact in list_artifacts(connection, run_id)
+            if artifact.type == "nonlocal_law_guided_candidate_packet"
+        ]
+    assert accepted_candidates == []
 
 
 @pytest.mark.parametrize(

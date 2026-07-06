@@ -2417,6 +2417,14 @@ def residual_intervention_generation_json_schema() -> dict[str, Any]:
 
 
 def nonlocal_law_guided_generation_json_schema() -> dict[str, Any]:
+    safety_false = {
+        "type": "boolean",
+        "enum": [False],
+        "description": (
+            "Must be false. This is a downstream safety/escalation assertion, "
+            "not current-call generation permission."
+        ),
+    }
     target_unit_item = _object_schema(
         {
             "target_unit_id": {"type": "string"},
@@ -2498,10 +2506,10 @@ def nonlocal_law_guided_generation_json_schema() -> dict[str, Any]:
             "protected_strengths_report": protected_strengths_report,
             "forbidden_regression_report": forbidden_regression_report,
             "post_generation_evidence_plan_acknowledgment": evidence_acknowledgment,
-            "generation_allowed": {"type": "boolean"},
-            "finality_claimed": {"type": "boolean"},
-            "phase_shift_claimed": {"type": "boolean"},
-            "strongest_rival_defeated_claimed": {"type": "boolean"},
+            "generation_allowed": safety_false,
+            "finality_claimed": safety_false,
+            "phase_shift_claimed": safety_false,
+            "strongest_rival_defeated_claimed": safety_false,
         },
         [
             "revised_text",

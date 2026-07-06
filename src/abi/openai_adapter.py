@@ -372,6 +372,13 @@ def _build_nonlocal_law_guided_generation_prompt(input_text: str) -> str:
         "consequence before explanation. Delay or embed explanation; do not "
         "abolish explanation. Do not claim success, improvement, finality, phase "
         "shift, human validation, synthesis, ablation proof, or rival defeat. "
+        "generation_allowed is a downstream safety/escalation field, not an "
+        "answer to whether this current call was authorized to generate. It "
+        "means whether this output authorizes further generation, evidence "
+        "escalation, finalization, or autonomous continuation without later "
+        "review. The only valid value is false. Set these exact fields: "
+        "generation_allowed: false; finality_claimed: false; "
+        "phase_shift_claimed: false; strongest_rival_defeated_claimed: false. "
         "Output structured schema only. Prompt packet:\n"
         f"{input_text}"
     )
