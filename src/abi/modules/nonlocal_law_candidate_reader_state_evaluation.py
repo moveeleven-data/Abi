@@ -131,6 +131,17 @@ class NonlocalLawCandidateReaderStateSubject:
     base_subject_hash_missing: bool
 
 
+@dataclass(frozen=True)
+class ExistingReaderStateEvaluation:
+    artifact: ArtifactRecord
+    payload: dict[str, Any]
+    packet_id: str
+    client: str
+    model_backed: bool
+    provisional: bool
+    usable_for_synthesis: bool
+
+
 class FakeNonlocalLawCandidateReaderStateModelClient:
     provider = "fake"
     model = "fake-nonlocal-law-candidate-reader-state-v1"
@@ -253,9 +264,14 @@ def run_nonlocal_law_candidate_reader_state_evaluation(
         )
 
     try:
+        superseded_evaluation: ExistingReaderStateEvaluation | None = None
         with connect(config.db_path) as connection:
             subject = _load_subject(connection, config, resolved_packet)
-            _validate_subject_before_evaluation(connection, subject)
+            superseded_evaluation = _validate_subject_before_evaluation(
+                connection,
+                subject,
+                client_name=client_name,
+            )
             if get_run(connection, subject.run_id) is None:
                 return _refusal(
                     client_name=client_name,
@@ -358,6 +374,7 @@ def run_nonlocal_law_candidate_reader_state_evaluation(
             model=configured_model if client_name == "openai" else None,
             model_payload=model_payload,
             model_results=model_results,
+            superseded_evaluation=superseded_evaluation,
         )
         if model_results:
             linked_call = link_model_call_parsed_artifact(
@@ -496,7 +513,9 @@ def _load_subject(
 def _validate_subject_before_evaluation(
     connection: sqlite3.Connection,
     subject: NonlocalLawCandidateReaderStateSubject,
-) -> None:
+    *,
+    client_name: str,
+) -> ExistingReaderStateEvaluation | None:
     packet = subject.ablation_payloads["nonlocal_law_candidate_ablation_packet"]
     _require_bool(packet, "accepted", True)
     _require_bool(packet, "ablation_executed", True)
@@ -527,10 +546,28 @@ def _validate_subject_before_evaluation(
         subject.source_candidate_payloads
     ):
         raise ValueError("source carries finality, phase-shift, or rival-defeat claim")
-    if _accepted_reader_state_for_ablation(connection, subject) is not None:
+    existing_evaluations = _accepted_reader_state_for_ablation(connection, subject)
+    if client_name == "fake" and existing_evaluations:
         raise ValueError(
-            "current-valid reader-state evaluation packet already exists for ablation"
+            "accepted reader-state evaluation packet already exists for ablation"
         )
+    blocking_evaluations = [
+        evaluation
+        for evaluation in existing_evaluations
+        if evaluation.model_backed
+        or (evaluation.usable_for_synthesis and not evaluation.provisional)
+    ]
+    if blocking_evaluations:
+        raise ValueError(
+            "current-valid model-backed reader-state evaluation packet already "
+            "exists for ablation"
+        )
+    provisional_evaluations = [
+        evaluation for evaluation in existing_evaluations if evaluation.provisional
+    ]
+    if provisional_evaluations:
+        return provisional_evaluations[-1]
+    return None
 
 
 def _run_live_reader_state_model(
@@ -570,6 +607,7 @@ def _write_evaluation_artifacts(
     model: str | None,
     model_payload: dict[str, object],
     model_results: list[ModelDriverResult],
+    superseded_evaluation: ExistingReaderStateEvaluation | None,
 ) -> tuple[dict[str, dict[str, object]], dict[str, ArtifactRecord]]:
     payloads: dict[str, dict[str, object]] = {}
     artifacts: dict[str, ArtifactRecord] = {}
@@ -579,11 +617,13 @@ def _write_evaluation_artifacts(
         packet_dir,
         client_name,
         model,
+        model_results,
+        superseded_evaluation,
     )
     artifacts["source_ablation_intake_summary"] = writer.write_artifact(
         "source_ablation_intake_summary",
         payloads["source_ablation_intake_summary"],
-        parent_ids=list(subject.source_parent_ids),
+        parent_ids=_source_parent_ids(subject, superseded_evaluation),
     )
 
     payloads["candidate_reader_state_subject"] = _build_candidate_subject(subject)
@@ -663,6 +703,9 @@ def _write_evaluation_artifacts(
     payloads["synthesis_readiness_report"] = _build_synthesis_readiness(
         subject,
         model_payload,
+        client_name,
+        model_results,
+        superseded_evaluation,
     )
     artifacts["synthesis_readiness_report"] = writer.write_artifact(
         "synthesis_readiness_report",
@@ -673,6 +716,9 @@ def _write_evaluation_artifacts(
     payloads["nonlocal_law_reader_state_gate_report"] = _build_gate_report(
         subject,
         model_payload,
+        client_name,
+        model_results,
+        superseded_evaluation,
     )
     artifacts["nonlocal_law_reader_state_gate_report"] = writer.write_artifact(
         "nonlocal_law_reader_state_gate_report",
@@ -684,6 +730,7 @@ def _write_evaluation_artifacts(
         subject,
         model_payload,
         model_results,
+        superseded_evaluation,
     )
     artifacts["project_health_scope_guard_report"] = writer.write_artifact(
         "project_health_scope_guard_report",
@@ -701,6 +748,7 @@ def _write_evaluation_artifacts(
             artifacts=artifacts,
             model_payload=model_payload,
             model_results=model_results,
+            superseded_evaluation=superseded_evaluation,
         )
     )
     artifacts["nonlocal_law_candidate_reader_state_evaluation_packet"] = (
@@ -723,9 +771,17 @@ def _build_source_intake(
     packet_dir: Path,
     client_name: str,
     model: str | None,
+    model_results: list[ModelDriverResult],
+    superseded_evaluation: ExistingReaderStateEvaluation | None,
 ) -> dict[str, object]:
+    mode_fields = _reader_state_mode_fields(
+        client_name,
+        model_results,
+        superseded_evaluation,
+    )
     return {
         **_source_fields(subject),
+        **mode_fields,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
         "client": client_name,
@@ -961,12 +1017,23 @@ def _build_strongest_rival_report(
 def _build_synthesis_readiness(
     subject: NonlocalLawCandidateReaderStateSubject,
     model_payload: dict[str, object],
+    client_name: str,
+    model_results: list[ModelDriverResult],
+    superseded_evaluation: ExistingReaderStateEvaluation | None,
 ) -> dict[str, object]:
+    mode_fields = _reader_state_mode_fields(
+        client_name,
+        model_results,
+        superseded_evaluation,
+    )
+    usable_for_synthesis = bool(mode_fields["usable_for_synthesis"])
     return {
         **_source_fields(subject),
-        "ready_for_synthesis": True,
+        **mode_fields,
+        "ready_for_synthesis": usable_for_synthesis,
         "synthesis_authorized": False,
         "synthesis_requires_separate_command": True,
+        "synthesis_ready_only_after_model_backed_evaluation": not usable_for_synthesis,
         "recommended_next_action": "review_reader_state_then_run_autonomous_evidence_synthesis",
         "overall_reader_state_result": model_payload["reader_state_summary"][
             "overall_reader_state_result"
@@ -981,12 +1048,26 @@ def _build_synthesis_readiness(
 def _build_gate_report(
     subject: NonlocalLawCandidateReaderStateSubject,
     model_payload: dict[str, object],
+    client_name: str,
+    model_results: list[ModelDriverResult],
+    superseded_evaluation: ExistingReaderStateEvaluation | None,
 ) -> dict[str, object]:
+    mode_fields = _reader_state_mode_fields(
+        client_name,
+        model_results,
+        superseded_evaluation,
+    )
+    model_backed = bool(mode_fields["model_backed"])
     gate_results = [
         _gate_result("operator_reviewed", True),
         _gate_result("source_ablation_accepted", True),
         _gate_result("candidate_text_loaded_from_payload_text", True),
         _gate_result("reader_state_evaluation_executed", True),
+        _gate_result(
+            "model_backed_reader_state_evaluation",
+            model_backed,
+            [] if model_backed else ["fake reader-state evaluation is provisional"],
+        ),
         _gate_result("all_ablation_controls_evaluated", True),
         _gate_result("synthesis_authorized", False, ["synthesis requires separate command"]),
         _gate_result("current_best_updated", False, ["current best remains packet_0063"]),
@@ -1003,6 +1084,7 @@ def _build_gate_report(
     ]
     return {
         **_source_fields(subject),
+        **mode_fields,
         "passed": False,
         "eligible": False,
         "reader_state_evaluation_executed": True,
@@ -1036,7 +1118,13 @@ def _build_health_report(
     subject: NonlocalLawCandidateReaderStateSubject,
     model_payload: dict[str, object],
     model_results: list[ModelDriverResult],
+    superseded_evaluation: ExistingReaderStateEvaluation | None,
 ) -> dict[str, object]:
+    mode_fields = _reader_state_mode_fields(
+        "openai" if model_results else "fake",
+        model_results,
+        superseded_evaluation,
+    )
     checks = [
         _check("source_ablation_accepted", True),
         _check("candidate_text_loaded_from_payload_text", True),
@@ -1051,6 +1139,7 @@ def _build_health_report(
     ]
     return {
         **_source_fields(subject),
+        **mode_fields,
         "checks": checks,
         "passed": True,
         "project_health_scope_guard_passed": True,
@@ -1076,14 +1165,22 @@ def _build_packet_summary(
     artifacts: dict[str, ArtifactRecord],
     model_payload: dict[str, object],
     model_results: list[ModelDriverResult],
+    superseded_evaluation: ExistingReaderStateEvaluation | None,
 ) -> dict[str, object]:
     counts = packet_artifact_count_summary(
         required_artifact_types=NONLOCAL_LAW_CANDIDATE_READER_STATE_ARTIFACT_TYPES,
         produced_artifact_types=list(artifacts),
         packet_artifact_type="nonlocal_law_candidate_reader_state_evaluation_packet",
     )
+    mode_fields = _reader_state_mode_fields(
+        client_name,
+        model_results,
+        superseded_evaluation,
+    )
+    usable_for_synthesis = bool(mode_fields["usable_for_synthesis"])
     return {
         **_source_fields(subject),
+        **mode_fields,
         "accepted": True,
         "client": client_name,
         "model": model,
@@ -1116,7 +1213,8 @@ def _build_packet_summary(
             "overall_reader_state_result"
         ],
         "reader_state_summary": model_payload["reader_state_summary"],
-        "ready_for_synthesis": True,
+        "ready_for_synthesis": usable_for_synthesis,
+        "synthesis_ready_only_after_model_backed_evaluation": not usable_for_synthesis,
         "synthesis_authorized": False,
         "candidate_generated": False,
         "generation_authorized": False,
@@ -1546,7 +1644,8 @@ def _resolve_source_candidate_dir(
 def _accepted_reader_state_for_ablation(
     connection: sqlite3.Connection,
     subject: NonlocalLawCandidateReaderStateSubject,
-) -> ArtifactRecord | None:
+) -> list[ExistingReaderStateEvaluation]:
+    evaluations: list[ExistingReaderStateEvaluation] = []
     for artifact in list_artifacts(connection, subject.run_id):
         if artifact.type != "nonlocal_law_candidate_reader_state_evaluation_packet":
             continue
@@ -1557,8 +1656,37 @@ def _accepted_reader_state_for_ablation(
             payload.get("accepted") is True
             and payload.get("reader_state_evaluation_executed") is True
         ):
-            return artifact
-    return None
+            evaluations.append(_classify_existing_reader_state_evaluation(artifact, payload))
+    return evaluations
+
+
+def _classify_existing_reader_state_evaluation(
+    artifact: ArtifactRecord,
+    payload: dict[str, Any],
+) -> ExistingReaderStateEvaluation:
+    client = str(payload.get("client") or "")
+    raw_model_calls = payload.get("model_calls")
+    model_calls = raw_model_calls if isinstance(raw_model_calls, int) else 0
+    model_backed = bool(payload.get("model_backed") is True) or (
+        client == "openai" and model_calls > 0
+    )
+    provisional = bool(payload.get("provisional_reader_state_evaluation") is True) or (
+        client == "fake" or not model_backed
+    )
+    usable_for_synthesis = (
+        bool(payload.get("usable_for_synthesis") is True)
+        and model_backed
+        and not provisional
+    )
+    return ExistingReaderStateEvaluation(
+        artifact=artifact,
+        payload=payload,
+        packet_id=str(payload.get("packet_id") or Path(artifact.path).parent.name),
+        client=client,
+        model_backed=model_backed,
+        provisional=provisional,
+        usable_for_synthesis=usable_for_synthesis,
+    )
 
 
 def _artifact_payload(artifact: ArtifactRecord) -> dict[str, Any]:
@@ -1755,6 +1883,58 @@ def _write_artifact(
         payload,
         parent_ids=parent_ids,
     )
+
+
+def _source_parent_ids(
+    subject: NonlocalLawCandidateReaderStateSubject,
+    superseded_evaluation: ExistingReaderStateEvaluation | None,
+) -> list[str]:
+    parent_ids = list(subject.source_parent_ids)
+    if superseded_evaluation is not None:
+        parent_ids.append(superseded_evaluation.artifact.id)
+    return parent_ids
+
+
+def _reader_state_mode_fields(
+    client_name: str,
+    model_results: list[ModelDriverResult],
+    superseded_evaluation: ExistingReaderStateEvaluation | None,
+) -> dict[str, object]:
+    model_backed = client_name == "openai" and bool(model_results)
+    provisional = not model_backed
+    fields: dict[str, object] = {
+        "model_backed": model_backed,
+        "reader_state_evaluation_mode": (
+            "model_backed_live"
+            if model_backed
+            else "deterministic_fake_verification"
+        ),
+        "provisional_reader_state_evaluation": provisional,
+        "usable_for_command_verification": True,
+        "usable_for_synthesis": model_backed,
+        "ready_for_live_reader_state_evaluation": not model_backed,
+    }
+    if not model_backed:
+        fields["synthesis_ready_only_after_model_backed_evaluation"] = True
+    if superseded_evaluation is not None:
+        fields.update(
+            {
+                "superseded_reader_state_evaluation_packet_id": (
+                    superseded_evaluation.packet_id
+                ),
+                "supersession_reason": (
+                    "model_backed_reader_state_evaluation_supersedes_fake_evaluation"
+                ),
+                "superseded_evaluation_client": superseded_evaluation.client,
+                "superseded_evaluation_model_backed": (
+                    superseded_evaluation.model_backed
+                ),
+                "superseded_evaluation_was_provisional": (
+                    superseded_evaluation.provisional
+                ),
+            }
+        )
+    return fields
 
 
 def _model_call_count(model_payload: dict[str, object]) -> int:

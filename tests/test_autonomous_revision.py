@@ -22681,7 +22681,9 @@ def assert_nonlocal_law_reader_state_acceptance(
     source_ablation_payload: dict[str, object],
     *,
     expected_model_calls: int,
+    expected_superseded_packet_id: str | None = None,
 ) -> Path:
+    expected_model_backed = expected_model_calls > 0
     assert result.exit_code == 0
     assert result.payload["accepted"] is True
     assert result.payload["reader_state_evaluation_executed"] is True
@@ -22708,7 +22710,26 @@ def assert_nonlocal_law_reader_state_acceptance(
     assert result.payload["candidate_generated"] is False
     assert result.payload["generation_authorized"] is False
     assert result.payload["synthesis_authorized"] is False
-    assert result.payload["ready_for_synthesis"] is True
+    assert result.payload["model_backed"] is expected_model_backed
+    assert result.payload["provisional_reader_state_evaluation"] is (
+        not expected_model_backed
+    )
+    assert result.payload["usable_for_synthesis"] is expected_model_backed
+    assert result.payload["ready_for_synthesis"] is expected_model_backed
+    assert result.payload["reader_state_evaluation_mode"] == (
+        "model_backed_live"
+        if expected_model_backed
+        else "deterministic_fake_verification"
+    )
+    assert result.payload["ready_for_live_reader_state_evaluation"] is (
+        not expected_model_backed
+    )
+    if expected_model_backed:
+        assert result.payload.get(
+            "synthesis_ready_only_after_model_backed_evaluation"
+        ) is False
+    else:
+        assert result.payload["synthesis_ready_only_after_model_backed_evaluation"] is True
     assert result.payload["current_best_updated"] is False
     assert result.payload["finalization_eligible"] is False
     assert result.payload["no_final_claim"] is True
@@ -22786,7 +22807,8 @@ def assert_nonlocal_law_reader_state_acceptance(
     assert rival["strongest_rival_defeated_claimed"] is False
 
     readiness = read_payload(packet_dir / "synthesis_readiness_report.json")
-    assert readiness["ready_for_synthesis"] is True
+    assert readiness["ready_for_synthesis"] is expected_model_backed
+    assert readiness["usable_for_synthesis"] is expected_model_backed
     assert readiness["synthesis_authorized"] is False
     assert readiness["current_best_updated"] is False
 
@@ -22804,6 +22826,16 @@ def assert_nonlocal_law_reader_state_acceptance(
         )
         assert first_pass_envelope["model_call_id"] == result.payload["model_call_ids"][0]
         assert first_pass_envelope["fixture_only"] is False
+    if expected_superseded_packet_id is not None:
+        assert result.payload["superseded_reader_state_evaluation_packet_id"] == (
+            expected_superseded_packet_id
+        )
+        assert result.payload["supersession_reason"] == (
+            "model_backed_reader_state_evaluation_supersedes_fake_evaluation"
+        )
+        assert result.payload["superseded_evaluation_client"] == "fake"
+        assert result.payload["superseded_evaluation_model_backed"] is False
+        assert result.payload["superseded_evaluation_was_provisional"] is True
 
     with connect(config.db_path) as connection:
         finalization = check_finalization(
@@ -22838,6 +22870,11 @@ def test_nonlocal_law_candidate_reader_state_fake_accepts(tmp_path):
         packet_dir / "nonlocal_law_candidate_reader_state_evaluation_packet.json"
     )
     assert packet["client"] == "fake"
+    assert packet["model_backed"] is False
+    assert packet["provisional_reader_state_evaluation"] is True
+    assert packet["usable_for_command_verification"] is True
+    assert packet["usable_for_synthesis"] is False
+    assert packet["ready_for_live_reader_state_evaluation"] is True
 
 
 def test_nonlocal_law_candidate_reader_state_cli_fake_accepts(tmp_path, capsys):
@@ -22864,6 +22901,10 @@ def test_nonlocal_law_candidate_reader_state_cli_fake_accepts(tmp_path, capsys):
     assert payload["accepted"] is True
     assert payload["reader_state_evaluation_executed"] is True
     assert payload["model_calls"] == 0
+    assert payload["model_backed"] is False
+    assert payload["provisional_reader_state_evaluation"] is True
+    assert payload["usable_for_synthesis"] is False
+    assert payload["ready_for_synthesis"] is False
     assert payload["synthesis_authorized"] is False
     assert payload["current_best_updated"] is False
 
@@ -22952,6 +22993,116 @@ def test_nonlocal_law_candidate_reader_state_stubbed_openai_accepts(tmp_path):
     assert reader_calls[0].prompt_contract_id == (
         "autonomous.nonlocal_law_candidate_reader_state_evaluation.v1"
     )
+
+
+def test_nonlocal_law_candidate_reader_state_openai_supersedes_existing_fake(
+    tmp_path,
+):
+    config, ablation_packet, run_id, ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    fake = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+    )
+    assert fake.exit_code == 0
+    assert fake.payload["packet_id"] == "packet_0001"
+    assert fake.payload["model_backed"] is False
+    assert fake.payload["provisional_reader_state_evaluation"] is True
+    assert fake.payload["usable_for_synthesis"] is False
+
+    live = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-reader-state-model",
+        client_factory=nonlocal_law_reader_state_client_factory(),
+    )
+
+    packet_dir = assert_nonlocal_law_reader_state_acceptance(
+        config,
+        run_id,
+        live,
+        ablation_payload,
+        expected_model_calls=1,
+        expected_superseded_packet_id="packet_0001",
+    )
+    assert packet_dir.name == "packet_0002"
+    packet = read_payload(
+        packet_dir / "nonlocal_law_candidate_reader_state_evaluation_packet.json"
+    )
+    assert packet["client"] == "openai"
+    assert packet["model_backed"] is True
+    assert packet["reader_state_evaluation_mode"] == "model_backed_live"
+    assert packet["provisional_reader_state_evaluation"] is False
+    assert packet["usable_for_synthesis"] is True
+    assert packet["ready_for_synthesis"] is True
+    assert packet["synthesis_authorized"] is False
+    assert packet["current_best_updated"] is False
+    assert packet["candidate_generated"] is False
+    assert packet["generation_authorized"] is False
+    assert packet["strongest_rival_defeated_claimed"] is False
+    assert packet["no_final_claim"] is True
+    assert packet["no_phase_shift_claim"] is True
+
+
+def test_nonlocal_law_candidate_reader_state_refuses_duplicate_model_backed(
+    tmp_path,
+):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    first_live = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-reader-state-model",
+        client_factory=nonlocal_law_reader_state_client_factory(),
+    )
+    assert first_live.exit_code == 0
+    assert first_live.payload["model_backed"] is True
+
+    duplicate_live = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-reader-state-model",
+        client_factory=nonlocal_law_reader_state_client_factory(),
+    )
+    fake_after_live = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate_live.exit_code == 1
+    assert duplicate_live.payload["accepted"] is False
+    assert "model-backed reader-state evaluation packet already exists" in (
+        duplicate_live.payload["message"]
+    )
+    assert duplicate_live.payload["model_calls"] == 0
+    assert duplicate_live.payload["reader_state_evaluation_executed"] is False
+    assert fake_after_live.exit_code == 1
+    assert fake_after_live.payload["accepted"] is False
+    assert "accepted reader-state evaluation packet already exists" in (
+        fake_after_live.payload["message"]
+    )
+    assert fake_after_live.payload["model_calls"] == 0
 
 
 def test_nonlocal_law_candidate_reader_state_requires_operator_review(tmp_path):
@@ -23250,7 +23401,7 @@ def test_nonlocal_law_candidate_reader_state_refuses_duplicate_for_same_ablation
 
     assert duplicate.exit_code == 1
     assert duplicate.payload["accepted"] is False
-    assert "current-valid reader-state evaluation packet already exists" in (
+    assert "accepted reader-state evaluation packet already exists" in (
         duplicate.payload["message"]
     )
     assert duplicate.payload["reader_state_evaluation_executed"] is False
