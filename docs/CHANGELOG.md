@@ -10,7 +10,7 @@ preserved across the build.
 
 Current documented endpoint in Git history:
 
-- `0cb8f24 Add live local law rival diagnostic path`
+- `d53213d Tighten nonlocal law generation safety metadata`
 - Active branch during latest changelog update: `main`
 - The active runtime direction is the autonomous creative-engine path.
 
@@ -2031,6 +2031,260 @@ Latest verification at this endpoint:
 - Guarded OpenAI local-law rival diagnostic without `--allow-live-model`
   refused with `model_calls: 0`.
 
+## Updates Since Live Local-Law Rival Diagnostic
+
+This section records the nonlocal law-guided generation chain built after the
+last changelog endpoint. It is the first path in which Abi learned a local law
+from strongest-rival pressure, turned that law into strategy and work-order
+state, explicitly authorized one generation attempt, and then accepted a live
+model-produced candidate under controller validation.
+
+### Live Local-Law Rival Diagnostic Surface Normalization
+
+Commit:
+
+- `d574acb Normalize live local law rival diagnostic reports`
+
+Implemented/fixed:
+
+- Hardened the live model-backed local-law rival diagnostic output surface.
+- Normalized report richness for the live diagnostic packet so downstream
+  strategy code could rely on the diagnostic fields.
+- Preserved the live diagnostic as diagnostic-only:
+  - no candidate generation
+  - no generation authorization
+  - no ablation
+  - no reader-state evaluation
+  - no finalization claim
+- Kept fake/stub/live-guard behavior intact.
+
+### Nonlocal Law-Guided Strategy
+
+Commit:
+
+- `c3695d5 Add nonlocal law-guided strategy`
+
+Implemented:
+
+- Strategy packet construction from the model-backed local-law rival diagnostic.
+- Strategy class:
+  `consequence_first_nonlocal_recomposition_strategy`
+- Law:
+  `first_read_pressure_precedes_explanation_law`
+- Current-best reference remained:
+  `bounded_macro_recomposition/packet_0063`
+- Proof reference remained:
+  `executed_ablation/packet_0034`
+- Reader-state reference remained:
+  `internal_reader_state_evaluation/packet_0013`
+- Strategy remained planning-only and did not generate a candidate.
+- Tests preserved finalization refusal.
+
+### Nonlocal Law-Guided Work-Order Planning
+
+Commits:
+
+- `5cc8eec Add nonlocal law-guided work-order planning`
+- `553d83c Fix nonlocal law work-order generation readiness surface`
+
+Implemented/fixed:
+
+- Work-order packet creation for the nonlocal law-guided strategy.
+- Target scope:
+  `nonlocal_artifact_pressure_distribution`
+- Work-order kind:
+  `nonlocal_law_guided_work_order`
+- Prompt contract:
+  `autonomous.nonlocal_law_guided_generation.v1`
+- Future schema:
+  `NonlocalLawGuidedGenerationOutput@1`
+- Materiality policy:
+  `nonlocal_law_guided_generation_materiality_v1`
+- Semantic validator:
+  `nonlocal_law_guided_semantic_validator_v1`
+- Target units:
+  - `object_event_consequence_before_explanation`
+  - `delay_or_embed_explanatory_naming`
+  - `packet_0063_objects_undergo_consequence`
+  - `middle_sequence_pressure_accumulation`
+  - `reread_return_prepared_by_first_read_pressure`
+  - `non_imitation_constraint_preservation`
+- Added generation-readiness metadata needed for authorization review.
+- Superseded incomplete work-order surfaces when generation-readiness metadata
+  was missing.
+- Kept the work order bounded and non-generative.
+
+### Nonlocal Law-Guided Generation Authorization
+
+Commit:
+
+- `76e1fea Add nonlocal law-guided generation authorization`
+
+Implemented:
+
+- CLI:
+  `abi autonomous authorize-nonlocal-law-generation`
+- Operator-reviewed authorization record for one bounded nonlocal
+  law-guided generation attempt.
+- Authorization decision:
+  `authorize_one_bounded_nonlocal_law_guided_generation`
+- Runtime authorization packet:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_guided_generation_authorization\packet_0001`
+- Authorization packet state before live candidate generation:
+  - `accepted: true`
+  - `generation_authorized: true`
+  - `next_generation_authorized: true`
+  - `generation_attempt_budget: 1`
+  - `authorization_consumed: false`
+  - `candidate_generated: false`
+  - `model_calls: 0`
+- Authorization did not itself create candidate evidence.
+- Failed attempts do not consume authorization.
+- Accepted candidate generation consumes authorization only after controller
+  validation succeeds.
+
+### Nonlocal Law-Guided Candidate Generation
+
+Commits:
+
+- `c4647e3 Add nonlocal law-guided candidate generation`
+- `d53213d Tighten nonlocal law generation safety metadata`
+
+Implemented:
+
+- CLI:
+  `abi autonomous generate-nonlocal-law-candidate`
+- Client modes:
+  - `--client fake`
+  - `--client openai`
+- Guarded OpenAI path requiring:
+  - `--allow-live-model`
+  - `OPENAI_API_KEY`
+  - `--max-model-calls 1`
+- Structured-output schema:
+  `NonlocalLawGuidedGenerationOutput@1`
+- Worker role:
+  `nonlocal_law_guided_generator`
+- Prompt contract:
+  `autonomous.nonlocal_law_guided_generation.v1`
+- Accepted candidate packet directory:
+  `runs/<run_id>/nonlocal_law_guided_candidate/<packet_id>/`
+- Failed validation packet directory:
+  `runs/<run_id>/nonlocal_law_guided_candidate_failed_generation/<packet_id>/`
+- Accepted packets create and register 15 artifacts:
+  - `nonlocal_law_guided_candidate_packet`
+  - `source_authorization_intake_summary`
+  - `base_candidate_subject`
+  - `generated_candidate_text`
+  - `candidate_diff_summary`
+  - `target_unit_change_report`
+  - `materiality_validation_report`
+  - `semantic_validation_report`
+  - `non_imitation_validation_report`
+  - `protected_strengths_preservation_report`
+  - `forbidden_regression_report`
+  - `post_generation_evidence_plan`
+  - `authorization_consumption_report`
+  - `nonlocal_law_candidate_gate_report`
+  - `project_health_scope_guard_report`
+- Controller validation rejects:
+  - missing or unchanged `revised_text`
+  - forbidden rival material
+  - finality, phase-shift, improvement, or strongest-rival-defeat claims
+  - law-as-thesis output
+  - generic domestic grime as law substitute
+  - missing target units
+  - failed materiality or semantic self-reports
+  - failed non-imitation report
+  - unpreserved protected strengths
+  - explanation abolished rather than delayed or earned
+  - missing packet `0063` object field
+  - local patching instead of nonlocal pressure redistribution
+  - claims that ablation, reader-state evaluation, synthesis, or finalization
+    already happened
+- The prompt and schema now clarify that:
+  - `generation_allowed` is a downstream safety/escalation field
+  - it is not the answer to whether the current call was authorized
+  - `generation_allowed` must be `false`
+  - `finality_claimed` must be `false`
+  - `phase_shift_claimed` must be `false`
+  - `strongest_rival_defeated_claimed` must be `false`
+- The JSON schema constrains those safety/finality fields to enum `[false]`.
+- Failed-generation diagnostics now expose top-level:
+  - `failure_class`
+  - `failure_reason`
+  - `validation_failures`
+  - `model_call_status`
+  - `diagnostic_message`
+  - `model_output_keys`
+  - safety/finality fields when recoverable from raw output
+- Specific `generation_allowed: true` failures are classified as:
+  - `failure_class: nonlocal_law_generation_safety_metadata_failure`
+  - `failure_reason: generation_allowed_true_or_not_false`
+- Failed packets do not create accepted candidate evidence.
+- Failed packets do not consume authorization.
+- Guarded OpenAI refusal without `--allow-live-model` still refuses before any
+  model call with:
+  - `model_calls: 0`
+  - `authorization_consumed: false`
+  - `candidate_generated: false`
+
+Runtime milestone:
+
+- A guarded live OpenAI command was run by the operator with
+  `--allow-live-model --max-model-calls 1`.
+- It produced the first accepted live nonlocal law-guided candidate:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_guided_candidate\packet_0002`
+- The runtime packet reports:
+  - `accepted: true`
+  - `candidate_generated: true`
+  - `candidate_artifact_created: true`
+  - `authorization_consumed: true`
+  - `model_calls: 1`
+  - `base_candidate_packet_id: packet_0063`
+  - `current_best_candidate_packet_id: packet_0063`
+  - `proof_packet_id: packet_0034`
+  - `reader_state_packet_id: packet_0013`
+  - `next_recommended_action: review_nonlocal_law_candidate_before_ablation`
+- The accepted packet created all 15 required artifacts.
+- Its validation report was clean:
+  - `validation_passed: true`
+  - `materiality_passed: true`
+  - `semantic_passed: true`
+  - `non_imitation_passed: true`
+  - `protected_strengths_preserved: true`
+  - `forbidden_regression_passed: true`
+  - `forbidden_rival_hits: []`
+  - `missing_target_units: []`
+- This completed the first live chain:
+  rival pressure -> local law -> direct rival materialization -> live
+  model-backed diagnosis -> nonlocal strategy -> bounded work order ->
+  explicit authorization -> live law-guided candidate.
+
+Milestone meaning:
+
+- This is the first accepted live candidate produced after Abi learned a law
+  from strongest-rival pressure.
+- The accepted candidate is reviewable candidate evidence, not a final artifact.
+- It does not prove the new candidate is better than `packet_0063`.
+- It does not prove the strongest rival has been beaten.
+- It does not prove finalization or phase shift.
+- The current best remains `packet_0063` until later evidence supports a
+  supersession.
+- The correct next stage is review, then executed ablation, reader-state
+  evaluation, and synthesis before any current-best or finalization decision.
+
+Latest verification at this endpoint:
+
+- `ruff check .` passed.
+- `pytest` passed with 564 tests.
+- Guarded OpenAI nonlocal-law candidate generation without
+  `--allow-live-model` refused with `model_calls: 0`.
+- `gate list` succeeded.
+- `finalization status --profile autonomous_creative_candidate` remained
+  ineligible.
+- `finalize --profile autonomous_creative_candidate` refused.
+
 ## Current Runtime Surface
 
 The current repo includes these active areas:
@@ -2081,6 +2335,10 @@ The current repo includes these active areas:
 - local-law discovery from rival forensics
 - direct rival subject materialization
 - model-backed local-law rival diagnostic in fake and guarded live modes
+- nonlocal law-guided strategy planning
+- nonlocal law-guided work-order planning
+- nonlocal law-guided generation authorization
+- nonlocal law-guided candidate generation in fake and guarded live modes
 - target-aware executed ablation controls and comparator consistency checks
 - model-driver demos and model-call inspection
 - guarded live paths behind explicit opt-in

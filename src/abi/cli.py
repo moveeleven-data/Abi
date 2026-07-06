@@ -76,6 +76,9 @@ from abi.modules.nonlocal_law_guided_candidate_generation import (
     NONLOCAL_LAW_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
     run_nonlocal_law_candidate_generation,
 )
+from abi.modules.nonlocal_law_candidate_ablation import (
+    run_nonlocal_law_candidate_ablation,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -739,6 +742,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=NONLOCAL_LAW_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model calls allowed for guarded live-model paths.",
     )
+    autonomous_nonlocal_law_candidate_ablation_parser = (
+        autonomous_subparsers.add_parser(
+            "ablate-nonlocal-law-candidate",
+            help="Create deterministic ablation controls for a reviewed candidate",
+        )
+    )
+    autonomous_nonlocal_law_candidate_ablation_parser.add_argument(
+        "--candidate-packet",
+        type=Path,
+        required=True,
+        help="Accepted nonlocal law-guided candidate packet directory.",
+    )
+    autonomous_nonlocal_law_candidate_ablation_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the accepted candidate before ablation.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -1193,6 +1213,15 @@ def main(argv: list[str] | None = None) -> int:
             authorization_packet=args.authorization_packet,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "ablate-nonlocal-law-candidate"
+    ):
+        return _cmd_autonomous_ablate_nonlocal_law_candidate(
+            config,
+            candidate_packet=args.candidate_packet,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1793,6 +1822,21 @@ def _cmd_autonomous_generate_nonlocal_law_candidate(
         authorization_packet=authorization_packet,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_ablate_nonlocal_law_candidate(
+    config: AbiConfig,
+    *,
+    candidate_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_nonlocal_law_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
