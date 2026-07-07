@@ -189,6 +189,8 @@ from abi.modules.nonlocal_law_candidate_reader_state_evaluation import (
 from abi.modules.nonlocal_law_candidate_evidence_synthesis import (
     CURRENT_BEST_RECOMMENDATION as NONLOCAL_LAW_SYNTHESIS_RECOMMENDATION,
     NONLOCAL_LAW_CANDIDATE_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES,
+    RECOMMENDED_NEXT_DECISION as NONLOCAL_LAW_SYNTHESIS_NEXT_DECISION,
+    SUPERSESSION_REASON_LOOP_REVIEW_SURFACE_MISSING,
     run_nonlocal_law_candidate_evidence_synthesis,
 )
 from abi.modules.executed_ablation import (
@@ -23493,6 +23495,29 @@ def assert_nonlocal_law_candidate_evidence_synthesis_acceptance(
     assert result.payload["candidate_law_effect"] == "supported_but_incomplete"
     assert result.payload["reader_state_support"] == "supportive_mixed"
     assert result.payload["strongest_rival_status"] == "narrowed_but_blocking"
+    assert result.payload["source_chain_coherent"] is True
+    assert result.payload["law_effect_summary"]
+    assert "strongest rival remains blocking" in result.payload["incomplete_evidence"]
+    assert result.payload["comparison_summary"]
+    assert result.payload["packet_0063_preserved_strengths"]
+    assert "first-read pressure improved" in result.payload["packet_0002_advantages"]
+    assert "packet_0063 remains prior current best" in result.payload[
+        "packet_0063_retained_advantages"
+    ]
+    assert result.payload["ablation_reader_state_alignment"]
+    assert result.payload["decision_summary"]
+    assert result.payload["allowed_next_decisions"]
+    assert result.payload["recommended_next_decision"] == (
+        NONLOCAL_LAW_SYNTHESIS_NEXT_DECISION
+    )
+    assert result.payload["future_options"]
+    assert result.payload["recommended_next_option"] == (
+        NONLOCAL_LAW_SYNTHESIS_NEXT_DECISION
+    )
+    assert result.payload["recommended_next_option_rationale"]
+    assert result.payload["ready_for_loop_review"] is True
+    assert result.payload["loop_review_required_before_current_best_update"] is True
+    assert result.payload["current_best_update_requires_separate_loop_review"] is True
     assert result.payload["current_best_decision"] == "do_not_finalize"
     assert result.payload["current_best_update_recommendation"] == (
         NONLOCAL_LAW_SYNTHESIS_RECOMMENDATION
@@ -23521,9 +23546,30 @@ def assert_nonlocal_law_candidate_evidence_synthesis_acceptance(
         assert (packet_dir / f"{artifact_type}.json").exists()
 
     law_effect = read_payload(packet_dir / "candidate_law_effect_synthesis.json")
+    assert law_effect["summary"]
     assert law_effect["candidate_law_effect"] == "supported_but_incomplete"
+    assert law_effect["reader_state_support"] == "supportive_mixed"
     assert "first-read pressure improved" in law_effect["supportive_evidence"]
+    assert "active risks remain" in law_effect["incomplete_evidence"]
+    assert law_effect["synthesis_confidence"] == "moderate"
+    assert law_effect["not_finalization_evidence"] is True
     assert law_effect["current_best_updated"] is False
+
+    comparison = read_payload(packet_dir / "packet_0063_comparison_synthesis.json")
+    assert comparison["summary"]
+    assert comparison["packet_0063_preserved_strengths"]
+    assert "first-read pressure improved" in comparison["packet_0002_advantages"]
+    assert "finalization refused" in comparison["packet_0063_retained_advantages"]
+    assert comparison["current_best_not_updated"] is True
+    assert comparison["packet_0002_not_yet_current_best"] is True
+
+    alignment = read_payload(packet_dir / "ablation_reader_state_alignment_report.json")
+    assert alignment["alignment_summary"]
+    assert alignment["ablation_controls_considered"]
+    assert alignment["reader_state_results_considered"]
+    assert alignment["law_bearing_choices_supported_by_reader_state"]
+    assert alignment["law_bearing_choices_still_at_risk"]
+    assert alignment["alignment_result"] == "supportive_but_incomplete"
 
     risks = read_payload(packet_dir / "active_risk_synthesis_report.json")
     assert {risk["risk_id"] for risk in risks["active_risks"]} == {
@@ -23537,17 +23583,41 @@ def assert_nonlocal_law_candidate_evidence_synthesis_acceptance(
     assert rival["strongest_rival_defeated_claimed"] is False
 
     decision = read_payload(packet_dir / "current_best_decision_recommendation.json")
+    assert decision["summary"]
     assert decision["current_best_update_recommendation"] == (
         NONLOCAL_LAW_SYNTHESIS_RECOMMENDATION
     )
+    assert decision["allowed_next_decisions"]
+    assert decision["recommended_next_decision"] == NONLOCAL_LAW_SYNTHESIS_NEXT_DECISION
+    assert decision["current_best_update_requires_separate_loop_review"] is True
     assert decision["current_best_updated"] is False
     assert decision["candidate_superiority_claimed"] is False
+    assert decision["finalization_allowed"] is False
+
+    future = read_payload(packet_dir / "future_repair_or_supersession_options.json")
+    assert future["options"]
+    assert future["recommended_next_option"] == NONLOCAL_LAW_SYNTHESIS_NEXT_DECISION
+    assert future["recommended_next_option_rationale"]
+    assert future["if_promoted_next_risks"]
+    assert future["if_held_next_repair_targets"]
+    assert future["strongest_rival_remains_blocking"] is True
 
     gate = read_payload(packet_dir / "synthesis_gate_report.json")
     assert gate["passed"] is False
     assert "current_best_updated" in gate["failed_gates"]
     assert "strongest_rival_pressure_resolved" in gate["failed_gates"]
     assert "finalization_eligible" in gate["failed_gates"]
+
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["project_health_scope_guard_passed"] is True
+    assert health["source_chain_coherent"] is True
+    assert health["source_reader_state_model_backed"] is True
+    assert health["source_reader_state_usable_for_synthesis"] is True
+    assert health["no_generation_path_introduced"] is True
+    assert health["no_model_call_introduced"] is True
+    assert health["no_current_best_mutation"] is True
+    assert health["no_finality_claim"] is True
+    assert health["no_phase_shift_claim"] is True
 
     with connect(config.db_path) as connection:
         finalization = check_finalization(
@@ -23578,6 +23648,181 @@ def test_nonlocal_law_candidate_evidence_synthesis_accepts_model_backed_reader_s
         result,
         reader_state_payload,
     )
+
+
+def test_nonlocal_law_candidate_evidence_synthesis_supersedes_stale_loop_review_surface(
+    tmp_path,
+):
+    config, reader_state_packet, _run_id, reader_state_payload = (
+        build_nonlocal_law_candidate_evidence_synthesis_ready_chain(tmp_path)
+    )
+    stale = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    stale_packet_dir = Path(str(stale.payload["packet_dir"]))
+
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    rewrite_payload(
+        stale_packet_dir / "nonlocal_law_candidate_evidence_synthesis_packet.json",
+        remove_fields(
+            "source_chain_coherent",
+            "law_effect_summary",
+            "incomplete_evidence",
+            "comparison_summary",
+            "packet_0063_preserved_strengths",
+            "packet_0002_advantages",
+            "packet_0063_retained_advantages",
+            "ablation_reader_state_alignment",
+            "decision_summary",
+            "allowed_next_decisions",
+            "recommended_next_decision",
+            "future_options",
+            "recommended_next_option",
+            "recommended_next_option_rationale",
+            "ready_for_loop_review",
+            "loop_review_required_before_current_best_update",
+            "current_best_update_requires_separate_loop_review",
+        ),
+    )
+    rewrite_payload(
+        stale_packet_dir / "candidate_law_effect_synthesis.json",
+        remove_fields("summary", "incomplete_evidence", "synthesis_confidence"),
+    )
+    rewrite_payload(
+        stale_packet_dir / "packet_0063_comparison_synthesis.json",
+        remove_fields(
+            "summary",
+            "packet_0063_preserved_strengths",
+            "packet_0002_advantages",
+            "packet_0063_retained_advantages",
+        ),
+    )
+    rewrite_payload(
+        stale_packet_dir / "ablation_reader_state_alignment_report.json",
+        remove_fields("alignment_summary", "law_bearing_choices_still_at_risk"),
+    )
+    rewrite_payload(
+        stale_packet_dir / "current_best_decision_recommendation.json",
+        remove_fields("summary", "allowed_next_decisions", "recommended_next_decision"),
+    )
+    rewrite_payload(
+        stale_packet_dir / "future_repair_or_supersession_options.json",
+        remove_fields("options", "recommended_next_option"),
+    )
+    rewrite_payload(
+        stale_packet_dir / "project_health_scope_guard_report.json",
+        remove_fields("source_chain_coherent"),
+    )
+
+    successor = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=True,
+    )
+
+    assert successor.exit_code == 0
+    assert successor.payload["packet_id"] == "packet_0002"
+    assert successor.payload["superseded_synthesis_packet_id"] == "packet_0001"
+    assert successor.payload["supersession_reason"] == (
+        SUPERSESSION_REASON_LOOP_REVIEW_SURFACE_MISSING
+    )
+    assert successor.payload["source_reader_state_packet_id"] == (
+        reader_state_payload["packet_id"]
+    )
+    assert successor.payload["source_candidate_packet_id"] == (
+        reader_state_payload["source_candidate_packet_id"]
+    )
+    assert successor.payload["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert successor.payload["source_chain_coherent"] is True
+    assert successor.payload["law_effect_summary"]
+    assert successor.payload["incomplete_evidence"]
+    assert successor.payload["comparison_summary"]
+    assert successor.payload["packet_0063_preserved_strengths"]
+    assert successor.payload["packet_0002_advantages"]
+    assert successor.payload["packet_0063_retained_advantages"]
+    assert successor.payload["ablation_reader_state_alignment"]
+    assert successor.payload["decision_summary"]
+    assert successor.payload["allowed_next_decisions"]
+    assert successor.payload["future_options"]
+    assert successor.payload["recommended_next_option"] == (
+        NONLOCAL_LAW_SYNTHESIS_NEXT_DECISION
+    )
+    assert successor.payload["ready_for_loop_review"] is True
+    assert successor.payload["current_best_updated"] is False
+    assert successor.payload["model_calls"] == 0
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["generation_authorized"] is False
+    assert successor.payload["no_final_claim"] is True
+    assert successor.payload["no_phase_shift_claim"] is True
+
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    law_effect = read_payload(successor_dir / "candidate_law_effect_synthesis.json")
+    assert law_effect["summary"]
+    assert law_effect["incomplete_evidence"]
+    comparison = read_payload(successor_dir / "packet_0063_comparison_synthesis.json")
+    assert comparison["packet_0002_advantages"]
+    alignment = read_payload(successor_dir / "ablation_reader_state_alignment_report.json")
+    assert alignment["alignment_summary"]
+    decision = read_payload(successor_dir / "current_best_decision_recommendation.json")
+    assert decision["allowed_next_decisions"]
+    future = read_payload(successor_dir / "future_repair_or_supersession_options.json")
+    assert future["recommended_next_option"] == NONLOCAL_LAW_SYNTHESIS_NEXT_DECISION
+    health = read_payload(successor_dir / "project_health_scope_guard_report.json")
+    assert health["source_chain_coherent"] is True
+
+    duplicate = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "corrected current-valid synthesis packet already exists" in duplicate.payload[
+        "message"
+    ]
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["generation_authorized"] is False
+    assert duplicate.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_evidence_synthesis_refuses_duplicate_current_valid(
+    tmp_path,
+):
+    config, reader_state_packet, _run_id, _reader_state_payload = (
+        build_nonlocal_law_candidate_evidence_synthesis_ready_chain(tmp_path)
+    )
+    first = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=True,
+    )
+    assert first.exit_code == 0
+
+    duplicate = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "corrected current-valid synthesis packet already exists" in duplicate.payload[
+        "message"
+    ]
+    assert duplicate.payload["synthesis_executed"] is False
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["generation_authorized"] is False
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_nonlocal_law_candidate_evidence_synthesis_cli_accepts(tmp_path, capsys):
