@@ -186,6 +186,11 @@ from abi.modules.nonlocal_law_candidate_reader_state_evaluation import (
     FakeNonlocalLawCandidateReaderStateModelClient,
     run_nonlocal_law_candidate_reader_state_evaluation,
 )
+from abi.modules.nonlocal_law_candidate_evidence_synthesis import (
+    CURRENT_BEST_RECOMMENDATION as NONLOCAL_LAW_SYNTHESIS_RECOMMENDATION,
+    NONLOCAL_LAW_CANDIDATE_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES,
+    run_nonlocal_law_candidate_evidence_synthesis,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -23426,6 +23431,373 @@ def test_nonlocal_law_candidate_reader_state_schema_is_strict():
         ]["enum"]
         == [False]
     )
+
+
+def build_nonlocal_law_candidate_evidence_synthesis_ready_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, str, dict[str, object]]:
+    config, ablation_packet, run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    fake = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+    )
+    assert fake.exit_code == 0
+    live = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-reader-state-model",
+        client_factory=nonlocal_law_reader_state_client_factory(),
+    )
+    assert live.exit_code == 0
+    assert live.payload["packet_id"] == "packet_0002"
+    assert live.payload["model_backed"] is True
+    assert live.payload["usable_for_synthesis"] is True
+    return config, Path(str(live.payload["packet_dir"])), run_id, live.payload
+
+
+def assert_nonlocal_law_candidate_evidence_synthesis_acceptance(
+    config: AbiConfig,
+    run_id: str,
+    result,
+    source_reader_state_payload: dict[str, object],
+) -> Path:
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["synthesis_executed"] is True
+    assert result.payload["source_reader_state_packet_id"] == (
+        source_reader_state_payload["packet_id"]
+    )
+    assert result.payload["source_ablation_packet_id"] == (
+        source_reader_state_payload["source_ablation_packet_id"]
+    )
+    assert result.payload["source_candidate_packet_id"] == (
+        source_reader_state_payload["source_candidate_packet_id"]
+    )
+    assert result.payload["base_candidate_packet_id"] == "packet_0063"
+    assert result.payload["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["prior_reader_state_packet_id"] == "packet_0013"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["candidate_text_sha256"] == (
+        source_reader_state_payload["candidate_text_sha256"]
+    )
+    assert result.payload["candidate_law_effect"] == "supported_but_incomplete"
+    assert result.payload["reader_state_support"] == "supportive_mixed"
+    assert result.payload["strongest_rival_status"] == "narrowed_but_blocking"
+    assert result.payload["current_best_decision"] == "do_not_finalize"
+    assert result.payload["current_best_update_recommendation"] == (
+        NONLOCAL_LAW_SYNTHESIS_RECOMMENDATION
+    )
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["ablation_executed"] is False
+    assert result.payload["reader_state_evaluation_executed"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["current_best_updated"] is False
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["next_recommended_action"] == (
+        "review_nonlocal_law_candidate_synthesis_before_current_best_decision"
+    )
+    assert set(result.payload["artifact_paths"]) == set(
+        NONLOCAL_LAW_CANDIDATE_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "nonlocal_law_candidate_evidence_synthesis"
+    for artifact_type in NONLOCAL_LAW_CANDIDATE_EVIDENCE_SYNTHESIS_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    law_effect = read_payload(packet_dir / "candidate_law_effect_synthesis.json")
+    assert law_effect["candidate_law_effect"] == "supported_but_incomplete"
+    assert "first-read pressure improved" in law_effect["supportive_evidence"]
+    assert law_effect["current_best_updated"] is False
+
+    risks = read_payload(packet_dir / "active_risk_synthesis_report.json")
+    assert {risk["risk_id"] for risk in risks["active_risks"]} == {
+        risk["risk_id"] for risk in NONLOCAL_LAW_CANDIDATE_ABLATION_REVIEW_RISKS
+    }
+    assert all(risk["blocks_finalization"] is True for risk in risks["active_risks"])
+
+    rival = read_payload(packet_dir / "strongest_rival_pressure_synthesis.json")
+    assert rival["strongest_rival_status"] == "narrowed_but_blocking"
+    assert rival["strongest_rival_remains_blocking"] is True
+    assert rival["strongest_rival_defeated_claimed"] is False
+
+    decision = read_payload(packet_dir / "current_best_decision_recommendation.json")
+    assert decision["current_best_update_recommendation"] == (
+        NONLOCAL_LAW_SYNTHESIS_RECOMMENDATION
+    )
+    assert decision["current_best_updated"] is False
+    assert decision["candidate_superiority_claimed"] is False
+
+    gate = read_payload(packet_dir / "synthesis_gate_report.json")
+    assert gate["passed"] is False
+    assert "current_best_updated" in gate["failed_gates"]
+    assert "strongest_rival_pressure_resolved" in gate["failed_gates"]
+    assert "finalization_eligible" in gate["failed_gates"]
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+    return packet_dir
+
+
+def test_nonlocal_law_candidate_evidence_synthesis_accepts_model_backed_reader_state(
+    tmp_path,
+):
+    config, reader_state_packet, run_id, reader_state_payload = (
+        build_nonlocal_law_candidate_evidence_synthesis_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=True,
+    )
+
+    assert_nonlocal_law_candidate_evidence_synthesis_acceptance(
+        config,
+        run_id,
+        result,
+        reader_state_payload,
+    )
+
+
+def test_nonlocal_law_candidate_evidence_synthesis_cli_accepts(tmp_path, capsys):
+    _config, reader_state_packet, _run_id, _reader_state_payload = (
+        build_nonlocal_law_candidate_evidence_synthesis_ready_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "synthesize-nonlocal-law-candidate-evidence",
+            "--reader-state-packet",
+            str(reader_state_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["synthesis_executed"] is True
+    assert payload["model_calls"] == 0
+    assert payload["candidate_generated"] is False
+    assert payload["current_best_updated"] is False
+
+
+def test_nonlocal_law_candidate_evidence_synthesis_requires_operator_review(
+    tmp_path,
+):
+    config, reader_state_packet, _run_id, _reader_state_payload = (
+        build_nonlocal_law_candidate_evidence_synthesis_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["synthesis_executed"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_evidence_synthesis_refuses_fake_reader_state(
+    tmp_path,
+):
+    config, ablation_packet, _run_id, _ablation_payload = (
+        build_nonlocal_law_candidate_reader_state_ready_chain(tmp_path)
+    )
+    fake = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+    )
+    assert fake.exit_code == 0
+
+    result = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=Path(str(fake.payload["packet_dir"])),
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "model_backed must be true" in result.payload["message"]
+    assert result.payload["synthesis_executed"] is False
+
+
+@pytest.mark.parametrize(
+    ("mutator", "expected_message"),
+    [
+        (
+            lambda payload: payload.update({"model_backed": False}),
+            "model_backed must be true",
+        ),
+        (
+            lambda payload: payload.update({"usable_for_synthesis": False}),
+            "usable_for_synthesis must be true",
+        ),
+        (
+            lambda payload: payload.update({"reader_state_evaluation_executed": False}),
+            "reader_state_evaluation_executed must be true",
+        ),
+        (
+            lambda payload: payload.update({"ready_for_synthesis": False}),
+            "ready_for_synthesis must be true",
+        ),
+        (
+            lambda payload: payload.update({"current_best_updated": True}),
+            "current_best_updated must be false",
+        ),
+        (
+            lambda payload: payload.update({"source_candidate_packet_id": "packet_bad"}),
+            "source chain mismatch for source_candidate_packet_id",
+        ),
+        (
+            lambda payload: payload.update(
+                {"current_best_candidate_packet_id": "packet_bad"}
+            ),
+            "current_best_candidate_packet_id must be packet_0063",
+        ),
+        (
+            lambda payload: payload.update({"proof_packet_id": "packet_bad"}),
+            "proof_packet_id must be packet_0034",
+        ),
+        (
+            lambda payload: payload.update({"prior_reader_state_packet_id": "packet_bad"}),
+            "prior_reader_state_packet_id must be packet_0013",
+        ),
+        (
+            lambda payload: payload.update({"law_id": "bad_law"}),
+            "law_id must be first_read_pressure_precedes_explanation_law",
+        ),
+        (
+            lambda payload: payload.update({"strongest_rival_defeated_claimed": True}),
+            "strongest_rival_defeated_claimed must be false",
+        ),
+    ],
+)
+def test_nonlocal_law_candidate_evidence_synthesis_refuses_invalid_packet(
+    tmp_path,
+    mutator,
+    expected_message,
+):
+    config, reader_state_packet, _run_id, _reader_state_payload = (
+        build_nonlocal_law_candidate_evidence_synthesis_ready_chain(tmp_path)
+    )
+    copied_packet = copy_packet_with_payload_mutation(
+        tmp_path,
+        reader_state_packet,
+        copy_name=f"mutated_nonlocal_law_synthesis_{expected_message}",
+        artifact_type="nonlocal_law_candidate_reader_state_evaluation_packet",
+        mutator=mutator,
+    )
+
+    result = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=copied_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["synthesis_executed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["model_calls"] == 0
+
+
+@pytest.mark.parametrize("result_key", [
+    "first_read_pressure_result",
+    "object_event_consequence_result",
+    "explanation_timing_result",
+    "reread_return_result",
+    "non_imitation_result",
+    "strongest_rival_pressure_result",
+    "overall_reader_state_result",
+])
+def test_nonlocal_law_candidate_evidence_synthesis_refuses_missing_result(
+    tmp_path,
+    result_key,
+):
+    config, reader_state_packet, _run_id, _reader_state_payload = (
+        build_nonlocal_law_candidate_evidence_synthesis_ready_chain(tmp_path)
+    )
+    copied_packet = copy_packet_with_payload_mutation(
+        tmp_path,
+        reader_state_packet,
+        copy_name=f"mutated_nonlocal_law_synthesis_missing_{result_key}",
+        artifact_type="nonlocal_law_candidate_reader_state_evaluation_packet",
+        mutator=lambda payload: payload.update({result_key: ""}),
+    )
+
+    result = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=copied_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert f"{result_key} missing" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_candidate_evidence_synthesis_refuses_claim_leakage(
+    tmp_path,
+):
+    config, reader_state_packet, _run_id, _reader_state_payload = (
+        build_nonlocal_law_candidate_evidence_synthesis_ready_chain(tmp_path)
+    )
+
+    def _claim(payload):
+        payload["reader_state_summary"]["candidate_superiority_claimed"] = True
+
+    copied_packet = copy_packet_with_payload_mutation(
+        tmp_path,
+        reader_state_packet,
+        copy_name="mutated_nonlocal_law_synthesis_claim_leakage",
+        artifact_type="nonlocal_law_candidate_reader_state_evaluation_packet",
+        mutator=_claim,
+    )
+
+    result = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=copied_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "source reader-state packet carries finality" in result.payload["message"]
+    assert result.payload["synthesis_executed"] is False
 
 
 def test_direction_review_residual_target_selection_accepts_proof_no_answer(

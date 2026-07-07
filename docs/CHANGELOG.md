@@ -10,8 +10,11 @@ preserved across the build.
 
 Current documented endpoint in Git history:
 
-- `d53213d Tighten nonlocal law generation safety metadata`
-- Active branch during latest changelog update: `main`
+- `aee502e Allow live reader-state evaluation after fake evaluation`
+- Active branch during latest changelog update:
+  `feature/nonlocal-law-candidate-evidence-synthesis`
+- Active working-tree addition during latest changelog update:
+  nonlocal law candidate evidence synthesis
 - The active runtime direction is the autonomous creative-engine path.
 
 ## Standing Invariants
@@ -2285,6 +2288,359 @@ Latest verification at this endpoint:
   ineligible.
 - `finalize --profile autonomous_creative_candidate` refused.
 
+## Updates Since Nonlocal Law-Guided Candidate Generation
+
+This section records the work after the first accepted live nonlocal
+law-guided candidate. The work extends that candidate from accepted generation
+evidence into ablation, model-backed reader-state evidence, and deterministic
+evidence synthesis. It reaches the first true loop-closure threshold: Abi used
+strongest-rival pressure to discover a law, generated under that law, evaluated
+what the generation caused, preserved active risks, refused finality, and
+synthesized the evidence without turning the result into an automatic current
+best or final artifact.
+
+### Nonlocal Law Candidate Ablation
+
+Commit:
+
+- `03f0178 Add nonlocal law candidate ablation`
+
+Implemented:
+
+- CLI:
+  `abi autonomous ablate-nonlocal-law-candidate`
+- Deterministic ablation packet for the accepted nonlocal law-guided candidate.
+- Runtime ablation packet:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_candidate_ablation\packet_0001`
+- Source candidate:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_guided_candidate\packet_0002`
+- Base/current best remained:
+  `bounded_macro_recomposition/packet_0063`
+- Proof reference remained:
+  `executed_ablation/packet_0034`
+- Prior reader-state reference remained:
+  `internal_reader_state_evaluation/packet_0013`
+- The ablation packet records:
+  - `accepted: true`
+  - `ablation_executed: true`
+  - `source_candidate_packet_id: packet_0002`
+  - `candidate_text_extracted_from: generated_candidate_text.payload.text`
+  - `candidate_text_sha256:
+    a760e5fee3cd3069232702d49d27b1518bdc52ca5116abd601684719fd00ca0f`
+  - `candidate_word_count: 1080`
+  - `ablation_control_count: 7`
+  - `law_bearing_choice_count: 9`
+  - `candidate_review_risk_count: 4`
+  - `ready_for_reader_state_evaluation: true`
+  - `reader_state_evaluation_authorized: false`
+  - `synthesis_authorized: false`
+  - `candidate_generated: false`
+  - `model_calls: 0`
+- Ablation controls created for:
+  - full nonlocal law-guided intervention
+  - revert to packet `0063`
+  - remove consequence-first sequence
+  - restore early explanation timing
+  - rival imitation control
+  - generic vividness control
+  - strongest-rival comparison
+- Law-bearing choices were mapped across the opening sequence, object-event
+  pressure, delayed explanation, later return, and no-reset/no-outside-answer
+  pressure.
+- Active risks preserved for later evidence:
+  - explanation may still arrive too explicitly after initial pressure
+  - event sequence may remain too static or retrospective
+  - `"Chemistry gives thought a place to search"` may be a register-risk span
+  - conclusion may still summarize law instead of fully enacting return
+- The ablation path does not generate text, authorize generation, run
+  reader-state evaluation, run synthesis, update current best, or finalize.
+
+### Nonlocal Law Candidate Reader-State Evaluation
+
+Commits:
+
+- `648f5a9 Add nonlocal law candidate reader-state evaluation`
+- `aee502e Allow live reader-state evaluation after fake evaluation`
+
+Implemented:
+
+- CLI:
+  `abi autonomous evaluate-nonlocal-law-candidate-reader-state`
+- Fake mode:
+  `--client fake`
+- Guarded OpenAI mode:
+  `--client openai --allow-live-model --max-model-calls 1`
+- Structured-output schema:
+  `NonlocalLawCandidateReaderStateEvaluationOutput@1`
+- Worker role:
+  `nonlocal_law_candidate_reader_state_evaluator`
+- Prompt contract:
+  `autonomous.nonlocal_law_candidate_reader_state_evaluation.v1`
+- Accepted packet directory:
+  `runs/<run_id>/nonlocal_law_candidate_reader_state_evaluation/<packet_id>/`
+- Failed validation packet directory:
+  `runs/<run_id>/nonlocal_law_candidate_reader_state_failed_evaluation/<packet_id>/`
+- Accepted packets create and register 16 artifacts:
+  - `nonlocal_law_candidate_reader_state_evaluation_packet`
+  - `source_ablation_intake_summary`
+  - `candidate_reader_state_subject`
+  - `base_candidate_reader_state_subject`
+  - `ablation_control_reader_state_matrix`
+  - `first_pass_pressure_before_explanation_report`
+  - `object_event_consequence_reader_state_report`
+  - `explanation_earned_not_abolished_report`
+  - `reread_return_preparation_report`
+  - `non_imitation_reader_signal_report`
+  - `candidate_review_risk_probe_report`
+  - `candidate_vs_packet_0063_reader_state_comparison`
+  - `strongest_rival_pressure_status_report`
+  - `synthesis_readiness_report`
+  - `nonlocal_law_reader_state_gate_report`
+  - `project_health_scope_guard_report`
+- Evaluation dimensions:
+  - first-read pressure before explanation
+  - object-event consequence before naming
+  - explanation earned rather than abolished
+  - reread return preparation
+  - non-imitation reader signal
+  - active risk probes
+  - strongest-rival pressure
+- The loader tolerates the known base-subject hash gap only when the source
+  chain is coherent and the base/current-best packet resolves to `packet_0063`.
+  It records:
+  - `base_subject_hash_missing: true`
+  - `base_subject_resolved_from_packet_id: packet_0063`
+  - `consumed_base_candidate_packet_successfully: true`
+- Fake reader-state evaluations are now explicitly provisional:
+  - `model_backed: false`
+  - `reader_state_evaluation_mode: deterministic_fake_verification`
+  - `provisional_reader_state_evaluation: true`
+  - `usable_for_command_verification: true`
+  - `usable_for_synthesis: false`
+  - `ready_for_live_reader_state_evaluation: true`
+  - `ready_for_synthesis: false`
+- Live/model-backed evaluations are synthesis-grade but still non-final:
+  - `model_backed: true`
+  - `reader_state_evaluation_mode: model_backed_live`
+  - `provisional_reader_state_evaluation: false`
+  - `usable_for_synthesis: true`
+  - `ready_for_synthesis: true`
+  - `synthesis_authorized: false`
+- Live-after-fake handling:
+  - an accepted fake/provisional evaluation no longer blocks the guarded OpenAI
+    path
+  - the model-backed packet records which fake packet it supersedes
+  - duplicate model-backed evaluations for the same ablation packet refuse
+  - fake evaluation after any accepted evaluation refuses
+- Guarded OpenAI without `--allow-live-model` still refuses before any model
+  call with `model_calls: 0`.
+- Validation failure creates failed diagnostic packets and no accepted
+  reader-state evidence.
+
+Runtime milestone:
+
+- Fake verification produced:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_candidate_reader_state_evaluation\packet_0001`
+- The live model-backed reader-state evaluation superseded that fake packet and
+  produced:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_candidate_reader_state_evaluation\packet_0002`
+- The live packet reports:
+  - `accepted: true`
+  - `client: openai`
+  - `model_backed: true`
+  - `reader_state_evaluation_mode: model_backed_live`
+  - `provisional_reader_state_evaluation: false`
+  - `usable_for_synthesis: true`
+  - `model_calls: 1`
+  - `source_ablation_packet_id: packet_0001`
+  - `source_candidate_packet_id: packet_0002`
+  - `base_candidate_packet_id: packet_0063`
+  - `current_best_candidate_packet_id: packet_0063`
+  - `proof_packet_id: packet_0034`
+  - `prior_reader_state_packet_id: packet_0013`
+  - `law_id: first_read_pressure_precedes_explanation_law`
+  - `superseded_reader_state_evaluation_packet_id: packet_0001`
+  - `supersession_reason:
+    model_backed_reader_state_evaluation_supersedes_fake_evaluation`
+- The live reader-state result was supportive but mixed:
+  - `first_read_pressure_result: improved`
+  - `object_event_consequence_result: improved`
+  - `explanation_timing_result: improved`
+  - `reread_return_result: improved`
+  - `non_imitation_result: passed`
+  - `strongest_rival_pressure_result: narrowed_but_blocking`
+  - `overall_reader_state_result: mixed_requires_synthesis`
+- The live packet did not claim:
+  - candidate superiority
+  - current-best supersession
+  - strongest-rival defeat
+  - finality
+  - phase shift
+
+### Nonlocal Law Candidate Evidence Synthesis
+
+Active working-tree implementation at this changelog update:
+
+- `src/abi/modules/nonlocal_law_candidate_evidence_synthesis.py`
+- `src/abi/cli.py`
+- `src/abi/controller/state.py`
+- `tests/test_autonomous_revision.py`
+
+Implemented:
+
+- CLI:
+  `abi autonomous synthesize-nonlocal-law-candidate-evidence`
+- Deterministic synthesis command consuming only a model-backed, synthesis-usable
+  nonlocal law candidate reader-state packet.
+- Source packet:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_candidate_reader_state_evaluation\packet_0002`
+- Runtime synthesis packet:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_candidate_evidence_synthesis\packet_0001`
+- Accepted synthesis packets create and register 12 artifacts:
+  - `nonlocal_law_candidate_evidence_synthesis_packet`
+  - `source_reader_state_intake_summary`
+  - `evidence_chain_integrity_report`
+  - `candidate_law_effect_synthesis`
+  - `packet_0063_comparison_synthesis`
+  - `ablation_reader_state_alignment_report`
+  - `active_risk_synthesis_report`
+  - `strongest_rival_pressure_synthesis`
+  - `current_best_decision_recommendation`
+  - `future_repair_or_supersession_options`
+  - `synthesis_gate_report`
+  - `project_health_scope_guard_report`
+- Intake validation refuses:
+  - missing `--operator-reviewed`
+  - fake/provisional reader-state packets
+  - non-model-backed reader-state packets
+  - reader-state packets not usable for synthesis
+  - packets where reader-state evaluation did not execute
+  - packets not ready for synthesis
+  - packets with `synthesis_authorized: true`
+  - packets with `current_best_updated: true`
+  - wrong source candidate/current best/proof/prior reader-state/law IDs
+  - missing required reader-state result fields
+  - finality, phase-shift, current-best supersession, candidate superiority,
+    or strongest-rival-defeat claim leakage
+- The accepted synthesis packet reports:
+  - `accepted: true`
+  - `synthesis_executed: true`
+  - `source_reader_state_packet_id: packet_0002`
+  - `source_ablation_packet_id: packet_0001`
+  - `source_candidate_packet_id: packet_0002`
+  - `base_candidate_packet_id: packet_0063`
+  - `prior_current_best_candidate_packet_id: packet_0063`
+  - `proof_packet_id: packet_0034`
+  - `prior_reader_state_packet_id: packet_0013`
+  - `law_id: first_read_pressure_precedes_explanation_law`
+  - `candidate_text_sha256:
+    a760e5fee3cd3069232702d49d27b1518bdc52ca5116abd601684719fd00ca0f`
+  - `candidate_law_effect: supported_but_incomplete`
+  - `reader_state_support: supportive_mixed`
+  - `strongest_rival_status: narrowed_but_blocking`
+  - `current_best_decision: do_not_finalize`
+  - `current_best_update_recommendation:
+    recommend_promote_to_new_current_best_pending_loop_review`
+  - `candidate_generated: false`
+  - `generation_authorized: false`
+  - `ablation_executed: false`
+  - `reader_state_evaluation_executed: false`
+  - `model_calls: 0`
+  - `current_best_updated: false`
+  - `finalization_eligible: false`
+  - `no_final_claim: true`
+  - `no_phase_shift_claim: true`
+  - `strongest_rival_defeated_claimed: false`
+- The synthesis records supportive evidence:
+  - first-read pressure improved
+  - object-event consequence improved
+  - explanation timing improved
+  - reread return improved
+  - non-imitation passed
+  - the reader-state evidence is model-backed
+  - the ablation packet identified coherent law-bearing choices
+- The synthesis preserves blocking evidence:
+  - strongest-rival pressure is narrowed but still blocking
+  - overall reader-state result remains mixed and requires synthesis/loop review
+  - active risks remain
+  - no external or human validation is claimed
+  - current best is not updated
+  - finalization remains refused
+- The synthesis gate report passes:
+  - operator reviewed
+  - source reader-state accepted
+  - source reader-state model-backed
+  - source reader-state usable for synthesis
+  - candidate evidence chain coherent
+  - reader-state results present
+  - no candidate generated
+  - no generation authorized
+  - no model calls
+  - no current-best update
+  - no final claim
+  - no phase-shift claim
+- The synthesis gate report blocks:
+  - `current_best_updated`
+  - `strongest_rival_pressure_resolved`
+  - `finalization_eligible`
+
+Latest verification after this work:
+
+- `ruff check .` passed.
+- `pytest` passed with 617 tests.
+- The real deterministic synthesis command accepted and created
+  `nonlocal_law_candidate_evidence_synthesis/packet_0001`.
+- `gate list` succeeded.
+- `finalization status --profile autonomous_creative_candidate` remained
+  ineligible.
+- `finalize --profile autonomous_creative_candidate` refused.
+
+### Strategic Summary At Loop-Closure Threshold
+
+Abi has now completed its first full law-guided creative repair cycle through
+evidence synthesis:
+
+1. strongest-rival pressure
+2. local law discovery
+3. direct rival materialization
+4. live model-backed law/rival diagnostic
+5. nonlocal strategy
+6. corrected work order
+7. explicit generation authorization
+8. accepted live candidate
+9. ablation packet
+10. live model-backed reader-state evaluation
+11. deterministic evidence synthesis
+
+The important result is not that the artifact is final or that the candidate is
+proven better in an absolute sense. The important result is architectural: Abi
+used evidence to discover a local law, generated under that law, evaluated the
+reader-state consequences of that generation, preserved residual risks, kept
+strongest-rival pressure active, refused finality, and synthesized the evidence
+without collapsing into free generation or premature celebration.
+
+The current tactical state is:
+
+- current best remains `bounded_macro_recomposition/packet_0063`
+- new candidate is `nonlocal_law_guided_candidate/packet_0002`
+- candidate status is accepted, validated, model-backed, and synthesis-supported
+  but incomplete
+- ablation is complete as a structured packet
+- live model-backed reader-state evaluation is complete
+- evidence synthesis is complete
+- current-best update has not happened
+- finalization remains refused
+- next required step is loop review / current-best decision
+
+The current strategic state is:
+
+- the evidence supports `packet_0002` as a possible new current best
+- the evidence does not support finalization
+- strongest-rival pressure remains active and blocking
+- active risks should guide the next loop if `packet_0002` is promoted
+- Abi has reached a real loop-closure threshold, but not a final-artifact
+  threshold
+
 ## Current Runtime Surface
 
 The current repo includes these active areas:
@@ -2339,6 +2695,9 @@ The current repo includes these active areas:
 - nonlocal law-guided work-order planning
 - nonlocal law-guided generation authorization
 - nonlocal law-guided candidate generation in fake and guarded live modes
+- nonlocal law candidate ablation
+- nonlocal law candidate reader-state evaluation in fake and guarded live modes
+- nonlocal law candidate evidence synthesis
 - target-aware executed ablation controls and comparator consistency checks
 - model-driver demos and model-call inspection
 - guarded live paths behind explicit opt-in

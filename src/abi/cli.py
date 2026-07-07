@@ -84,6 +84,9 @@ from abi.modules.nonlocal_law_candidate_reader_state_evaluation import (
     NONLOCAL_LAW_CANDIDATE_READER_STATE_MAX_MODEL_CALLS_DEFAULT,
     run_nonlocal_law_candidate_reader_state_evaluation,
 )
+from abi.modules.nonlocal_law_candidate_evidence_synthesis import (
+    run_nonlocal_law_candidate_evidence_synthesis,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -796,6 +799,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=NONLOCAL_LAW_CANDIDATE_READER_STATE_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model calls allowed for guarded live-model paths.",
     )
+    autonomous_nonlocal_law_candidate_synthesis_parser = (
+        autonomous_subparsers.add_parser(
+            "synthesize-nonlocal-law-candidate-evidence",
+            help="Synthesize model-backed nonlocal law candidate evidence",
+        )
+    )
+    autonomous_nonlocal_law_candidate_synthesis_parser.add_argument(
+        "--reader-state-packet",
+        type=Path,
+        required=True,
+        help="Model-backed nonlocal law candidate reader-state packet directory.",
+    )
+    autonomous_nonlocal_law_candidate_synthesis_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the reader-state packet before synthesis.",
+    )
     autonomous_loop_review_parser = autonomous_subparsers.add_parser(
         "loop-review",
         help="Review a completed autonomous evidence loop without generation",
@@ -1272,6 +1292,15 @@ def main(argv: list[str] | None = None) -> int:
             operator_reviewed=args.operator_reviewed,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "synthesize-nonlocal-law-candidate-evidence"
+    ):
+        return _cmd_autonomous_synthesize_nonlocal_law_candidate_evidence(
+            config,
+            reader_state_packet=args.reader_state_packet,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "loop-review":
         return _cmd_autonomous_loop_review(
@@ -1908,6 +1937,21 @@ def _cmd_autonomous_evaluate_nonlocal_law_candidate_reader_state(
         operator_reviewed=operator_reviewed,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_synthesize_nonlocal_law_candidate_evidence(
+    config: AbiConfig,
+    *,
+    reader_state_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
