@@ -24306,6 +24306,80 @@ def build_nonlocal_law_cycle_consolidation_ready_loop_review(tmp_path):
     return config, Path(str(corrected.payload["packet_dir"])), stale_packet_dir, run_id
 
 
+def degrade_nonlocal_law_cycle_consolidation_target_selection_surface(
+    packet_dir: Path,
+) -> None:
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    rewrite_payload(
+        packet_dir / "nonlocal_law_cycle_consolidation_packet.json",
+        remove_fields(
+            "current_best_transition_summary",
+            "global_state_mutation_performed",
+            "current_best_state_mutation_performed",
+            "current_best_decision_packet_is_source_of_truth",
+            "next_loop_constraints",
+            "target_selection_must_use_consolidated_risk_memory",
+            "do_not_generate_before_target_selection",
+            "do_not_create_work_order_before_target_selection",
+            "source_chain_coherent",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "current_best_transition_memory.json",
+        remove_fields(
+            "summary",
+            "current_best_transition_summary",
+            "current_best_state_mutation_performed",
+            "current_best_decision_packet_is_source_of_truth",
+            "global_state_mutation_performed",
+            "transition_scope",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "next_loop_constraint_memory.json",
+        remove_fields(
+            "next_loop_constraints",
+            "target_selection_must_use_consolidated_risk_memory",
+            "do_not_generate_before_target_selection",
+            "do_not_create_work_order_before_target_selection",
+            "target_selection_requires_separate_command",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "next_target_selection_readiness_report.json",
+        remove_fields(
+            "target_selection_source_packet_id",
+            "target_selection_must_use_consolidated_risk_memory",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "cycle_consolidation_gate_report.json",
+        remove_fields("target_selected", "work_order_created"),
+    )
+    rewrite_payload(
+        packet_dir / "project_health_scope_guard_report.json",
+        remove_fields(
+            "source_chain_coherent",
+            "source_loop_review_accepted",
+            "source_loop_review_current_best_packet_only",
+            "no_global_state_mutation",
+            "no_target_selection_introduced",
+            "no_work_order_introduced",
+            "no_generation_path_introduced",
+            "no_model_call_introduced",
+            "no_finality_claim",
+            "no_phase_shift_claim",
+            "no_strongest_rival_defeat_claim",
+        ),
+    )
+
+
 def test_nonlocal_law_cycle_consolidation_accepts_corrected_loop_review_packet(
     tmp_path,
 ):
@@ -24342,7 +24416,17 @@ def test_nonlocal_law_cycle_consolidation_accepts_corrected_loop_review_packet(
     assert result.payload["transferable_principle_status"] == (
         "provisional_context_bound"
     )
+    assert result.payload["superseded_consolidation_packet_id"] is None
+    assert result.payload["supersession_reason"] is None
     assert result.payload["universalized_rule_created"] is False
+    assert result.payload["current_best_transition_summary"]
+    assert result.payload["global_state_mutation_performed"] is False
+    assert result.payload["current_best_state_mutation_performed"] is False
+    assert result.payload["current_best_decision_packet_is_source_of_truth"] is True
+    assert result.payload["next_loop_constraints"]
+    assert result.payload["target_selection_must_use_consolidated_risk_memory"] is True
+    assert result.payload["do_not_generate_before_target_selection"] is True
+    assert result.payload["do_not_create_work_order_before_target_selection"] is True
     assert result.payload["target_selected"] is False
     assert result.payload["target_selection_authorized"] is False
     assert result.payload["work_order_created"] is False
@@ -24355,6 +24439,7 @@ def test_nonlocal_law_cycle_consolidation_accepts_corrected_loop_review_packet(
     assert result.payload["no_final_claim"] is True
     assert result.payload["no_phase_shift_claim"] is True
     assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["source_chain_coherent"] is True
     assert result.payload["next_recommended_action"] == (
         "review_cycle_consolidation_before_next_target_selection"
     )
@@ -24400,6 +24485,34 @@ def test_nonlocal_law_cycle_consolidation_accepts_corrected_loop_review_packet(
         for risk in risks["active_risks"]
     )
 
+    transition = read_payload(packet_dir / "current_best_transition_memory.json")
+    assert transition["summary"]
+    assert transition["current_best_transition_summary"]
+    assert transition["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert transition["current_best_for_next_loop_packet_id"] == "packet_0002"
+    assert transition["prior_current_best_preserved_as_history"] is True
+    assert transition["current_best_update_method"] == "loop_review_packet_only"
+    assert transition["current_best_state_mutation_performed"] is False
+    assert transition["current_best_decision_packet_is_source_of_truth"] is True
+    assert transition["global_state_mutation_performed"] is False
+    assert transition["transition_scope"] == "packet_only_current_best_for_next_loop"
+    assert transition["not_finalization_evidence"] is True
+
+    constraints = read_payload(packet_dir / "next_loop_constraint_memory.json")
+    assert constraints["next_loop_constraints"]
+    assert constraints["current_best_for_next_loop_packet_id"] == "packet_0002"
+    assert constraints["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert constraints["strongest_rival_remains_blocking"] is True
+    assert constraints["active_risks_remain"] is True
+    assert constraints["target_selection_must_use_consolidated_risk_memory"] is True
+    assert constraints["target_selection_authorized"] is False
+    assert constraints["work_order_authorized"] is False
+    assert constraints["generation_authorized"] is False
+    assert constraints["finalization_eligible"] is False
+    assert constraints["do_not_generate_before_target_selection"] is True
+    assert constraints["do_not_create_work_order_before_target_selection"] is True
+    assert constraints["target_selection_requires_separate_command"] is True
+
     readiness = read_payload(
         packet_dir / "next_target_selection_readiness_report.json"
     )
@@ -24411,6 +24524,10 @@ def test_nonlocal_law_cycle_consolidation_accepts_corrected_loop_review_packet(
     assert readiness["recommended_next_action"] == (
         "select_next_target_from_consolidated_cycle_memory"
     )
+    assert readiness["target_selection_source_packet_id"] == result.payload[
+        "packet_id"
+    ]
+    assert readiness["target_selection_must_use_consolidated_risk_memory"] is True
     assert set(readiness["allowed_target_seed_ids"]) == {
         "reduce_explanation_explicitness_after_initial_pressure",
         "convert_static_retrospective_trace_to_living_event_sequence",
@@ -24422,8 +24539,29 @@ def test_nonlocal_law_cycle_consolidation_accepts_corrected_loop_review_packet(
     assert gate["passed"] is False
     assert gate["eligible"] is False
     assert gate["consolidation_executed"] is True
+    assert gate["target_selected"] is False
+    assert gate["work_order_created"] is False
+    assert gate["candidate_generated"] is False
     assert gate["generation_authorized"] is False
+    assert gate["model_calls"] == 0
+    assert gate["finalization_eligible"] is False
+    assert gate["no_final_claim"] is True
+    assert gate["no_phase_shift_claim"] is True
     assert "strongest rival remains blocking" in gate["unresolved_blockers"]
+
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["project_health_scope_guard_passed"] is True
+    assert health["source_chain_coherent"] is True
+    assert health["source_loop_review_accepted"] is True
+    assert health["source_loop_review_current_best_packet_only"] is True
+    assert health["no_global_state_mutation"] is True
+    assert health["no_target_selection_introduced"] is True
+    assert health["no_work_order_introduced"] is True
+    assert health["no_generation_path_introduced"] is True
+    assert health["no_model_call_introduced"] is True
+    assert health["no_finality_claim"] is True
+    assert health["no_phase_shift_claim"] is True
+    assert health["no_strongest_rival_defeat_claim"] is True
 
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
@@ -24434,6 +24572,85 @@ def test_nonlocal_law_cycle_consolidation_accepts_corrected_loop_review_packet(
         )
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_nonlocal_law_cycle_consolidation_supersedes_stale_target_selection_surface(
+    tmp_path,
+):
+    config, loop_review_packet, _stale_packet, _run_id = (
+        build_nonlocal_law_cycle_consolidation_ready_loop_review(tmp_path)
+    )
+    stale = run_nonlocal_law_cycle_consolidation(
+        config,
+        loop_review_packet=loop_review_packet,
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_packet_dir = Path(str(stale.payload["packet_dir"]))
+    degrade_nonlocal_law_cycle_consolidation_target_selection_surface(
+        stale_packet_dir
+    )
+
+    successor = run_nonlocal_law_cycle_consolidation(
+        config,
+        loop_review_packet=loop_review_packet,
+        operator_reviewed=True,
+    )
+
+    assert successor.exit_code == 0
+    assert successor.payload["accepted"] is True
+    assert successor.payload["packet_id"] == "packet_0002"
+    assert successor.payload["superseded_consolidation_packet_id"] == "packet_0001"
+    assert successor.payload["supersession_reason"] == (
+        "nonlocal_law_cycle_consolidation_target_selection_surface_missing"
+    )
+    assert successor.payload["source_loop_review_packet_id"] == "packet_0002"
+    assert successor.payload["current_best_for_next_loop_packet_id"] == "packet_0002"
+    assert successor.payload["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert successor.payload["learned_cycle_lesson_id"] == (
+        "consequence_before_explanation_improves_first_read_pressure_in_this_work"
+    )
+    assert successor.payload["lesson_scope"] == "work_local"
+    assert successor.payload["universalized_rule_created"] is False
+    assert successor.payload["current_best_transition_summary"]
+    assert successor.payload["global_state_mutation_performed"] is False
+    assert successor.payload["current_best_state_mutation_performed"] is False
+    assert successor.payload["current_best_decision_packet_is_source_of_truth"] is True
+    assert successor.payload["next_loop_constraints"]
+    assert successor.payload["target_selection_must_use_consolidated_risk_memory"] is True
+    assert successor.payload["do_not_generate_before_target_selection"] is True
+    assert successor.payload["do_not_create_work_order_before_target_selection"] is True
+    assert successor.payload["target_selected"] is False
+    assert successor.payload["work_order_created"] is False
+    assert successor.payload["generation_authorized"] is False
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["model_calls"] == 0
+    assert successor.payload["finalization_eligible"] is False
+    assert successor.payload["no_final_claim"] is True
+    assert successor.payload["no_phase_shift_claim"] is True
+    assert successor.payload["strongest_rival_defeated_claimed"] is False
+    assert successor.payload["source_chain_coherent"] is True
+
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    readiness = read_payload(
+        successor_dir / "next_target_selection_readiness_report.json"
+    )
+    assert readiness["target_selection_source_packet_id"] == "packet_0002"
+    assert readiness["target_selection_must_use_consolidated_risk_memory"] is True
+    assert len(readiness["allowed_target_seed_ids"]) == 4
+    health = read_payload(successor_dir / "project_health_scope_guard_report.json")
+    assert health["source_chain_coherent"] is True
+
+    duplicate = run_nonlocal_law_cycle_consolidation(
+        config,
+        loop_review_packet=loop_review_packet,
+        operator_reviewed=True,
+    )
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "consolidation already exists" in duplicate.payload["message"]
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_nonlocal_law_cycle_consolidation_requires_operator_review(tmp_path):
@@ -24556,6 +24773,7 @@ def test_nonlocal_law_cycle_consolidation_refuses_missing_active_risks(tmp_path)
         "strongest_rival_defeated_claimed",
         "generation_authorized",
         "candidate_generated",
+        "target_selected",
         "work_order_created",
     ],
 )
