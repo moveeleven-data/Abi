@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -99,6 +99,28 @@ NONLOCAL_LOOP_REVIEW_DECISION = "promote_packet_0002_to_current_best_pending_loo
 NONLOCAL_NEXT_RECOMMENDED_ACTION = (
     "consolidate_nonlocal_law_cycle_learning_before_next_repair"
 )
+NONLOCAL_LOOP_REVIEW_SUPERSESSION_REASON = (
+    "nonlocal_loop_review_consolidation_surface_missing"
+)
+NONLOCAL_RECOMMENDED_NEXT_TARGET_SEED = (
+    "cycle_consolidation_before_target_selection"
+)
+NONLOCAL_PRIOR_PRESERVATION_SUMMARY = (
+    "Packet_0063 remains preserved as prior current-best history while packet_0002 "
+    "becomes the packet-owned working current best for the next loop."
+)
+NONLOCAL_EVIDENCE_SUMMARY = (
+    "Packet_0002 is promotable for the next loop because law-specific reader-state "
+    "signals improved, but the evidence is not finalization evidence."
+)
+NONLOCAL_RIVAL_BLOCKER_WHY = (
+    "The strongest rival pressure narrowed but remains unresolved; promotion to "
+    "working current best does not claim rival defeat."
+)
+NONLOCAL_RIVAL_NEXT_CYCLE_IMPLICATION = (
+    "Carry rival pressure forward as a blocker while consolidating the nonlocal law "
+    "cycle before selecting a new repair target."
+)
 NONLOCAL_ACTIVE_RISK_HANDLING = {
     "explanation_may_arrive_too_explicitly": (
         "target explanation timing only after cycle consolidation"
@@ -119,6 +141,16 @@ NONLOCAL_NEXT_CYCLE_TARGET_OPTIONS = (
     "repair_chemistry_register_intrusion",
     "enact_return_instead_of_summarizing_law",
 )
+NONLOCAL_TARGET_OPTION_RISK_MAP = {
+    "reduce_explanation_explicitness_after_initial_pressure": (
+        "explanation_may_arrive_too_explicitly"
+    ),
+    "convert_static_retrospective_trace_to_living_event_sequence": (
+        "event_sequence_may_remain_static"
+    ),
+    "repair_chemistry_register_intrusion": "chemistry_register_risk",
+    "enact_return_instead_of_summarizing_law": "conclusion_may_summarize_law",
+}
 
 
 @dataclass(frozen=True)
@@ -158,6 +190,17 @@ class NonlocalLawCandidateLoopReviewSubject:
     synthesis_artifact_ids: dict[str, str]
     active_risks: tuple[dict[str, Any], ...]
     source_parent_ids: tuple[str, ...]
+    superseded_loop_review_packet_id: str | None = None
+    supersession_reason: str | None = None
+    stale_surface_failures: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class NonlocalLoopReviewSupersessionContext:
+    corrected_current_valid_loop_review_exists: bool
+    superseded_loop_review_packet_id: str | None = None
+    supersession_reason: str | None = None
+    stale_surface_failures: tuple[str, ...] = ()
 
 
 def run_evidence_loop_review(
@@ -446,6 +489,24 @@ def _run_nonlocal_law_candidate_loop_review(
     try:
         subject = _load_nonlocal_subject(config, synthesis_packet_dir)
         _validate_nonlocal_subject(config, subject)
+        supersession = _nonlocal_loop_review_supersession_context(config, subject)
+        if supersession.corrected_current_valid_loop_review_exists:
+            return _refusal(
+                synthesis_packet=synthesis_packet_dir,
+                message=(
+                    "Evidence loop review refused; corrected current-valid "
+                    "loop-review decision already exists for synthesis packet "
+                    f"{subject.synthesis_packet_id}."
+                ),
+            )
+        subject = replace(
+            subject,
+            superseded_loop_review_packet_id=(
+                supersession.superseded_loop_review_packet_id
+            ),
+            supersession_reason=supersession.supersession_reason,
+            stale_surface_failures=supersession.stale_surface_failures,
+        )
     except ValueError as error:
         return _refusal(synthesis_packet=synthesis_packet_dir, message=str(error))
 
@@ -657,11 +718,6 @@ def _validate_nonlocal_subject(
         )
     if len(subject.active_risks) < 4:
         raise ValueError("Evidence loop review refused; active risks are missing.")
-    if _accepted_nonlocal_loop_review_exists(config, subject):
-        raise ValueError(
-            "Evidence loop review refused; current-valid loop-review decision already "
-            "exists for this synthesis packet."
-        )
 
 
 def _write_nonlocal_loop_review_artifacts(
@@ -707,7 +763,7 @@ def _write_nonlocal_loop_review_artifacts(
         parent_ids=[artifacts["current_best_transition_decision"].id],
     )
     payloads["active_risk_carry_forward_report"] = (
-        _build_nonlocal_active_risk_carry_forward(subject)
+        _build_nonlocal_active_risk_carry_forward(subject, packet_dir)
     )
     artifacts["active_risk_carry_forward_report"] = writer.write_artifact(
         "active_risk_carry_forward_report",
@@ -855,6 +911,7 @@ def _build_nonlocal_prior_best_preservation(
 ) -> dict[str, object]:
     return {
         **_nonlocal_source_fields(subject),
+        "summary": NONLOCAL_PRIOR_PRESERVATION_SUMMARY,
         "prior_current_best_candidate_packet_id": (
             NONLOCAL_EXPECTED_PRIOR_CURRENT_BEST_PACKET_ID
         ),
@@ -863,6 +920,11 @@ def _build_nonlocal_prior_best_preservation(
             "packet_0063 remains the prior current-best historical baseline while "
             "packet_0002 becomes the working current best by loop-review packet."
         ),
+        "retained_evidence_references": [
+            "proof packet_0034",
+            "prior reader-state packet_0013",
+            "prior strongest-rival pressure context",
+        ],
         "preserved_strengths": list(
             subject.payloads["packet_0063_comparison_synthesis"].get(
                 "packet_0063_preserved_strengths",
@@ -878,6 +940,7 @@ def _build_nonlocal_prior_best_preservation(
         "current_best_updated": True,
         "current_best_state_mutation_performed": False,
         "finalization_eligible": False,
+        "not_finalization_evidence": True,
         "candidate_generated": False,
         "model_calls": 0,
         "no_phase_shift_claim": True,
@@ -891,15 +954,20 @@ def _build_nonlocal_promoted_candidate_evidence(
     packet = _nonlocal_packet(subject)
     return {
         **_nonlocal_source_fields(subject),
+        "summary": NONLOCAL_EVIDENCE_SUMMARY,
         "new_current_best_candidate_packet_id": (
             NONLOCAL_EXPECTED_SOURCE_CANDIDATE_PACKET_ID
         ),
         "candidate_law_effect": packet["candidate_law_effect"],
         "reader_state_support": packet["reader_state_support"],
+        "strongest_rival_status": packet["strongest_rival_status"],
         "law_effect_summary": packet["law_effect_summary"],
         "supportive_evidence": list(packet["supportive_evidence"]),
         "packet_0002_advantages": list(packet["packet_0002_advantages"]),
         "ablation_reader_state_alignment": packet["ablation_reader_state_alignment"],
+        "promotion_basis": _nonlocal_promotion_basis(packet),
+        "promotion_limits": _nonlocal_promotion_limits(),
+        "evidence_strength": "loop_review_promotable_not_final",
         "promotion_classification": "working_current_best_for_next_loop_not_final",
         "not_finalization_evidence": True,
         "strongest_rival_defeated_claimed": False,
@@ -915,6 +983,7 @@ def _build_nonlocal_promoted_candidate_evidence(
 
 def _build_nonlocal_active_risk_carry_forward(
     subject: NonlocalLawCandidateLoopReviewSubject,
+    packet_dir: Path,
 ) -> dict[str, object]:
     risks = []
     for risk in subject.active_risks:
@@ -930,6 +999,9 @@ def _build_nonlocal_active_risk_carry_forward(
                     risk_id,
                     "carry forward as unresolved nonlocal-law candidate risk",
                 ),
+                "carried_forward_to_next_loop": True,
+                "source_synthesis_packet_id": subject.synthesis_packet_id,
+                "source_loop_review_packet_id": packet_dir.name,
             }
         )
     return {
@@ -957,6 +1029,9 @@ def _build_nonlocal_rival_blocker_status(
         "strongest_rival_remains_blocking": True,
         "strongest_rival_defeated_claimed": False,
         "strongest_rival_comparison_passed": False,
+        "why_blocking": NONLOCAL_RIVAL_BLOCKER_WHY,
+        "next_cycle_implication": NONLOCAL_RIVAL_NEXT_CYCLE_IMPLICATION,
+        "finalization_blocked_by_rival_pressure": True,
         "rival_pressure_summary": subject.payloads[
             "strongest_rival_pressure_synthesis"
         ].get("pressure_summary"),
@@ -976,8 +1051,13 @@ def _build_nonlocal_next_cycle_seed(
     return {
         **_nonlocal_source_fields(subject),
         "seed_target_options": list(NONLOCAL_NEXT_CYCLE_TARGET_OPTIONS),
+        "next_cycle_target_options": _nonlocal_next_cycle_target_options(subject),
+        "recommended_next_action": NONLOCAL_NEXT_RECOMMENDED_ACTION,
+        "recommended_next_target_seed": NONLOCAL_RECOMMENDED_NEXT_TARGET_SEED,
         "do_not_generate_yet": True,
         "do_not_create_work_order_yet": True,
+        "cycle_consolidation_required_before_next_repair": True,
+        "target_selection_requires_cycle_consolidation": True,
         "recommended_sequence": [
             "consolidate_nonlocal_law_cycle_learning_before_next_repair",
             "review_active_risks_before_target_selection",
@@ -1123,6 +1203,8 @@ def _build_nonlocal_loop_review_packet(
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
+        "superseded_loop_review_packet_id": subject.superseded_loop_review_packet_id,
+        "supersession_reason": subject.supersession_reason,
         "artifact_ids": {
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
         },
@@ -1140,12 +1222,32 @@ def _build_nonlocal_loop_review_packet(
         "current_best_state_mutation_performed": False,
         "current_best_decision_packet_is_source_of_truth": True,
         "prior_current_best_preserved_as_history": True,
+        "prior_preservation_summary": payloads[
+            "prior_current_best_preservation_report"
+        ]["summary"],
+        "evidence_summary": payloads["promoted_candidate_evidence_summary"]["summary"],
         "active_risks_carried_forward": True,
         "active_risk_count": payloads["active_risk_carry_forward_report"][
             "active_risk_count"
         ],
+        "active_risks_remain": True,
+        "strongest_rival_status": payloads["strongest_rival_blocker_status_report"][
+            "strongest_rival_status"
+        ],
         "strongest_rival_remains_blocking": True,
         "strongest_rival_defeated_claimed": False,
+        "next_cycle_target_options": payloads["next_cycle_target_seed_report"][
+            "next_cycle_target_options"
+        ],
+        "recommended_next_target_seed": payloads["next_cycle_target_seed_report"][
+            "recommended_next_target_seed"
+        ],
+        "cycle_consolidation_required_before_next_repair": True,
+        "target_selection_requires_cycle_consolidation": True,
+        "ready_for_cycle_consolidation": True,
+        "current_best_for_next_loop_packet_id": (
+            NONLOCAL_EXPECTED_SOURCE_CANDIDATE_PACKET_ID
+        ),
         "candidate_generated": False,
         "generation_authorized": False,
         "model_calls": 0,
@@ -1177,6 +1279,10 @@ def _nonlocal_source_fields(
         "proof_packet_id": packet.get("proof_packet_id"),
         "prior_reader_state_packet_id": packet.get("prior_reader_state_packet_id"),
         "law_id": packet.get("law_id"),
+        "superseded_loop_review_packet_id": (
+            subject.superseded_loop_review_packet_id
+        ),
+        "supersession_reason": subject.supersession_reason,
     }
 
 
@@ -1184,6 +1290,289 @@ def _nonlocal_packet(
     subject: NonlocalLawCandidateLoopReviewSubject,
 ) -> dict[str, Any]:
     return subject.payloads[NONLOCAL_SYNTHESIS_PACKET_ARTIFACT]
+
+
+def _nonlocal_promotion_basis(packet: dict[str, Any]) -> list[str]:
+    return [
+        f"candidate_law_effect {packet['candidate_law_effect']}",
+        f"reader_state_support {packet['reader_state_support']}",
+        "first-read pressure improved",
+        "object-event consequence improved",
+        "explanation timing improved",
+        "reread return improved",
+        "non-imitation passed",
+        "ablation identified coherent law-bearing choices",
+        "synthesis recommended promotion",
+    ]
+
+
+def _nonlocal_promotion_limits() -> list[str]:
+    return [
+        "strongest rival remains blocking",
+        "active risks remain",
+        "finalization refused",
+        "no strongest-rival defeat claim",
+        "no phase-shift claim",
+    ]
+
+
+def _nonlocal_next_cycle_target_options(
+    subject: NonlocalLawCandidateLoopReviewSubject,
+) -> list[dict[str, object]]:
+    risk_map = {str(risk.get("risk_id") or ""): risk for risk in subject.active_risks}
+    options: list[dict[str, object]] = []
+    for option_id in NONLOCAL_NEXT_CYCLE_TARGET_OPTIONS:
+        risk_id = NONLOCAL_TARGET_OPTION_RISK_MAP[option_id]
+        risk = risk_map.get(risk_id, {})
+        options.append(
+            {
+                "option_id": option_id,
+                "source_risk_id": risk_id,
+                "source_risk": risk.get("risk"),
+                "source_synthesis_packet_id": subject.synthesis_packet_id,
+                "requires_cycle_consolidation_before_selection": True,
+                "candidate_generation_authorized": False,
+            }
+        )
+    return options
+
+
+def _nonlocal_loop_review_supersession_context(
+    config: AbiConfig,
+    subject: NonlocalLawCandidateLoopReviewSubject,
+) -> NonlocalLoopReviewSupersessionContext:
+    root = config.run_dir(subject.run_id) / "nonlocal_law_candidate_loop_review"
+    if not root.exists():
+        return NonlocalLoopReviewSupersessionContext(
+            corrected_current_valid_loop_review_exists=False
+        )
+    stale_packet_id: str | None = None
+    stale_failures: tuple[str, ...] = ()
+    for packet_dir in sorted(root.glob("packet_*"), reverse=True):
+        path = packet_dir / "nonlocal_law_candidate_loop_review_packet.json"
+        if not path.exists():
+            continue
+        try:
+            payload = _read_payload_envelope(
+                path,
+                "nonlocal_law_candidate_loop_review_packet",
+            )["payload"]
+        except ValueError:
+            continue
+        if not _is_matching_nonlocal_loop_review(
+            payload,
+            synthesis_packet_id=subject.synthesis_packet_id,
+        ):
+            continue
+        failures = tuple(_nonlocal_loop_review_surface_failures(packet_dir, payload))
+        if not failures:
+            return NonlocalLoopReviewSupersessionContext(
+                corrected_current_valid_loop_review_exists=True,
+                superseded_loop_review_packet_id=str(
+                    payload.get("packet_id") or packet_dir.name
+                ),
+            )
+        if stale_packet_id is None:
+            stale_packet_id = str(payload.get("packet_id") or packet_dir.name)
+            stale_failures = failures
+    if stale_packet_id is not None:
+        return NonlocalLoopReviewSupersessionContext(
+            corrected_current_valid_loop_review_exists=False,
+            superseded_loop_review_packet_id=stale_packet_id,
+            supersession_reason=NONLOCAL_LOOP_REVIEW_SUPERSESSION_REASON,
+            stale_surface_failures=stale_failures,
+        )
+    return NonlocalLoopReviewSupersessionContext(
+        corrected_current_valid_loop_review_exists=False
+    )
+
+
+def _is_matching_nonlocal_loop_review(
+    payload: dict[str, Any],
+    *,
+    synthesis_packet_id: str,
+) -> bool:
+    return (
+        payload.get("accepted") is True
+        and payload.get("source_synthesis_packet_id") == synthesis_packet_id
+        and payload.get("decision") == NONLOCAL_LOOP_REVIEW_DECISION
+        and payload.get("prior_current_best_candidate_packet_id")
+        == NONLOCAL_EXPECTED_PRIOR_CURRENT_BEST_PACKET_ID
+        and payload.get("new_current_best_candidate_packet_id")
+        == NONLOCAL_EXPECTED_SOURCE_CANDIDATE_PACKET_ID
+        and payload.get("current_best_updated") is True
+        and payload.get("current_best_update_method") == "loop_review_packet_only"
+        and payload.get("current_best_state_mutation_performed") is False
+        and payload.get("current_best_decision_packet_is_source_of_truth") is True
+        and payload.get("candidate_generated") is False
+        and payload.get("generation_authorized") is False
+        and int(payload.get("model_calls") or 0) == 0
+        and payload.get("finalization_eligible") is False
+        and payload.get("no_final_claim") is True
+        and payload.get("no_phase_shift_claim") is True
+        and payload.get("strongest_rival_defeated_claimed") is False
+    )
+
+
+def _nonlocal_loop_review_surface_failures(
+    packet_dir: Path,
+    packet_payload: dict[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+
+    def require_string(payload: dict[str, Any], field_name: str, label: str) -> None:
+        if not _string_value(payload.get(field_name)):
+            failures.append(f"{label}.{field_name}")
+
+    def require_list(payload: dict[str, Any], field_name: str, label: str) -> None:
+        value = payload.get(field_name)
+        if not isinstance(value, list) or not value:
+            failures.append(f"{label}.{field_name}")
+
+    def require_bool(
+        payload: dict[str, Any],
+        field_name: str,
+        expected: bool,
+        label: str,
+    ) -> None:
+        if payload.get(field_name) is not expected:
+            failures.append(f"{label}.{field_name}")
+
+    def payload_for(artifact_type: str) -> dict[str, Any]:
+        try:
+            return _read_payload_envelope(packet_dir / f"{artifact_type}.json", artifact_type)[
+                "payload"
+            ]
+        except ValueError:
+            failures.append(f"{artifact_type}.missing_or_malformed")
+            return {}
+
+    require_string(packet_payload, "prior_preservation_summary", "packet")
+    require_string(packet_payload, "evidence_summary", "packet")
+    if packet_payload.get("strongest_rival_status") != "narrowed_but_blocking":
+        failures.append("packet.strongest_rival_status")
+    require_list(packet_payload, "next_cycle_target_options", "packet")
+    if (
+        packet_payload.get("recommended_next_target_seed")
+        != NONLOCAL_RECOMMENDED_NEXT_TARGET_SEED
+    ):
+        failures.append("packet.recommended_next_target_seed")
+    require_bool(
+        packet_payload,
+        "cycle_consolidation_required_before_next_repair",
+        True,
+        "packet",
+    )
+    require_bool(
+        packet_payload,
+        "target_selection_requires_cycle_consolidation",
+        True,
+        "packet",
+    )
+    require_bool(packet_payload, "ready_for_cycle_consolidation", True, "packet")
+    if (
+        packet_payload.get("current_best_for_next_loop_packet_id")
+        != NONLOCAL_EXPECTED_SOURCE_CANDIDATE_PACKET_ID
+    ):
+        failures.append("packet.current_best_for_next_loop_packet_id")
+    require_bool(
+        packet_payload,
+        "prior_current_best_preserved_as_history",
+        True,
+        "packet",
+    )
+    require_bool(
+        packet_payload,
+        "strongest_rival_remains_blocking",
+        True,
+        "packet",
+    )
+    require_bool(packet_payload, "active_risks_remain", True, "packet")
+
+    prior = payload_for("prior_current_best_preservation_report")
+    require_string(prior, "summary", "prior_current_best_preservation_report")
+    require_list(prior, "retained_evidence_references", "prior_current_best_preservation_report")
+    require_bool(prior, "not_finalization_evidence", True, "prior_current_best_preservation_report")
+
+    evidence = payload_for("promoted_candidate_evidence_summary")
+    require_string(evidence, "summary", "promoted_candidate_evidence_summary")
+    if evidence.get("strongest_rival_status") != "narrowed_but_blocking":
+        failures.append("promoted_candidate_evidence_summary.strongest_rival_status")
+    require_list(evidence, "promotion_basis", "promoted_candidate_evidence_summary")
+    require_list(evidence, "promotion_limits", "promoted_candidate_evidence_summary")
+    if evidence.get("evidence_strength") != "loop_review_promotable_not_final":
+        failures.append("promoted_candidate_evidence_summary.evidence_strength")
+    require_bool(evidence, "not_finalization_evidence", True, "promoted_candidate_evidence_summary")
+
+    risks = payload_for("active_risk_carry_forward_report")
+    active_risks = risks.get("active_risks")
+    if not isinstance(active_risks, list) or len(active_risks) < 4:
+        failures.append("active_risk_carry_forward_report.active_risks")
+    else:
+        for risk in active_risks:
+            if not isinstance(risk, dict):
+                failures.append("active_risk_carry_forward_report.active_risks.item")
+                continue
+            for field_name in (
+                "risk_id",
+                "risk",
+                "reader_state_probe",
+                "suggested_test_or_control",
+                "recommended_next_handling",
+            ):
+                if field_name not in risk:
+                    failures.append(
+                        f"active_risk_carry_forward_report.active_risks.{field_name}"
+                    )
+            if risk.get("blocks_finalization") is not True:
+                failures.append(
+                    "active_risk_carry_forward_report.active_risks.blocks_finalization"
+                )
+            if risk.get("carried_forward_to_next_loop") is not True:
+                failures.append(
+                    "active_risk_carry_forward_report.active_risks.carried_forward_to_next_loop"
+                )
+            if risk.get("source_synthesis_packet_id") != packet_payload.get(
+                "source_synthesis_packet_id"
+            ):
+                failures.append(
+                    "active_risk_carry_forward_report.active_risks.source_synthesis_packet_id"
+                )
+            if risk.get("source_loop_review_packet_id") != packet_dir.name:
+                failures.append(
+                    "active_risk_carry_forward_report.active_risks.source_loop_review_packet_id"
+                )
+
+    rival = payload_for("strongest_rival_blocker_status_report")
+    if rival.get("strongest_rival_status") != "narrowed_but_blocking":
+        failures.append("strongest_rival_blocker_status_report.strongest_rival_status")
+    require_bool(rival, "strongest_rival_remains_blocking", True, "rival")
+    require_bool(rival, "strongest_rival_defeated_claimed", False, "rival")
+    require_string(rival, "why_blocking", "strongest_rival_blocker_status_report")
+    require_string(rival, "next_cycle_implication", "strongest_rival_blocker_status_report")
+    require_bool(rival, "finalization_blocked_by_rival_pressure", True, "rival")
+
+    seed = payload_for("next_cycle_target_seed_report")
+    require_list(seed, "next_cycle_target_options", "next_cycle_target_seed_report")
+    if seed.get("recommended_next_action") != NONLOCAL_NEXT_RECOMMENDED_ACTION:
+        failures.append("next_cycle_target_seed_report.recommended_next_action")
+    if seed.get("recommended_next_target_seed") != NONLOCAL_RECOMMENDED_NEXT_TARGET_SEED:
+        failures.append("next_cycle_target_seed_report.recommended_next_target_seed")
+    require_bool(seed, "do_not_generate_yet", True, "next_cycle_target_seed_report")
+    require_bool(seed, "do_not_create_work_order_yet", True, "next_cycle_target_seed_report")
+    require_bool(
+        seed,
+        "cycle_consolidation_required_before_next_repair",
+        True,
+        "next_cycle_target_seed_report",
+    )
+    require_bool(
+        seed,
+        "target_selection_requires_cycle_consolidation",
+        True,
+        "next_cycle_target_seed_report",
+    )
+    return failures
 
 
 def _nonlocal_synthesis_is_superseded(

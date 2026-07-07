@@ -23955,10 +23955,22 @@ def test_loop_review_accepts_nonlocal_law_candidate_evidence_synthesis_packet(
     assert result.payload["current_best_state_mutation_performed"] is False
     assert result.payload["current_best_decision_packet_is_source_of_truth"] is True
     assert result.payload["prior_current_best_preserved_as_history"] is True
+    assert result.payload["prior_preservation_summary"]
+    assert result.payload["evidence_summary"]
+    assert result.payload["strongest_rival_status"] == "narrowed_but_blocking"
     assert result.payload["active_risks_carried_forward"] is True
     assert result.payload["active_risk_count"] == 4
+    assert result.payload["active_risks_remain"] is True
     assert result.payload["strongest_rival_remains_blocking"] is True
     assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["next_cycle_target_options"]
+    assert result.payload["recommended_next_target_seed"] == (
+        "cycle_consolidation_before_target_selection"
+    )
+    assert result.payload["cycle_consolidation_required_before_next_repair"] is True
+    assert result.payload["target_selection_requires_cycle_consolidation"] is True
+    assert result.payload["ready_for_cycle_consolidation"] is True
+    assert result.payload["current_best_for_next_loop_packet_id"] == "packet_0002"
     assert result.payload["finalization_eligible"] is False
     assert result.payload["candidate_generated"] is False
     assert result.payload["generation_authorized"] is False
@@ -23971,6 +23983,21 @@ def test_loop_review_accepts_nonlocal_law_candidate_evidence_synthesis_packet(
     )
 
     packet_dir = Path(str(result.payload["packet_dir"]))
+    preservation = read_payload(
+        packet_dir / "prior_current_best_preservation_report.json"
+    )
+    assert preservation["summary"]
+    assert "proof packet_0034" in preservation["retained_evidence_references"]
+    assert preservation["not_finalization_evidence"] is True
+
+    evidence = read_payload(packet_dir / "promoted_candidate_evidence_summary.json")
+    assert evidence["summary"]
+    assert evidence["strongest_rival_status"] == "narrowed_but_blocking"
+    assert evidence["promotion_basis"]
+    assert evidence["promotion_limits"]
+    assert evidence["evidence_strength"] == "loop_review_promotable_not_final"
+    assert evidence["not_finalization_evidence"] is True
+
     transition = read_payload(packet_dir / "current_best_transition_decision.json")
     assert transition["new_current_best_candidate_packet_id"] == "packet_0002"
     assert "synthesis recommended promotion" in transition["promotion_basis"]
@@ -23986,11 +24013,44 @@ def test_loop_review_accepts_nonlocal_law_candidate_evidence_synthesis_packet(
         "conclusion_may_summarize_law",
     }
     assert all(risk["blocks_finalization"] is True for risk in risks["active_risks"])
+    assert all(
+        risk["carried_forward_to_next_loop"] is True
+        for risk in risks["active_risks"]
+    )
+    assert all(
+        risk["source_synthesis_packet_id"] == "packet_0002"
+        for risk in risks["active_risks"]
+    )
+    assert all(
+        risk["source_loop_review_packet_id"] == result.payload["packet_id"]
+        for risk in risks["active_risks"]
+    )
 
     seed = read_payload(packet_dir / "next_cycle_target_seed_report.json")
     assert seed["do_not_generate_yet"] is True
     assert seed["do_not_create_work_order_yet"] is True
     assert "repair_chemistry_register_intrusion" in seed["seed_target_options"]
+    option_ids = {option["option_id"] for option in seed["next_cycle_target_options"]}
+    assert option_ids == {
+        "reduce_explanation_explicitness_after_initial_pressure",
+        "convert_static_retrospective_trace_to_living_event_sequence",
+        "repair_chemistry_register_intrusion",
+        "enact_return_instead_of_summarizing_law",
+    }
+    assert seed["recommended_next_target_seed"] == (
+        "cycle_consolidation_before_target_selection"
+    )
+    assert seed["recommended_next_action"] == (
+        "consolidate_nonlocal_law_cycle_learning_before_next_repair"
+    )
+    assert seed["cycle_consolidation_required_before_next_repair"] is True
+    assert seed["target_selection_requires_cycle_consolidation"] is True
+
+    rival = read_payload(packet_dir / "strongest_rival_blocker_status_report.json")
+    assert rival["strongest_rival_status"] == "narrowed_but_blocking"
+    assert rival["why_blocking"]
+    assert rival["next_cycle_implication"]
+    assert rival["finalization_blocked_by_rival_pressure"] is True
 
     lock = read_payload(packet_dir / "finalization_lock_report.json")
     assert lock["do_not_finalize"] is True
@@ -24007,6 +24067,114 @@ def test_loop_review_accepts_nonlocal_law_candidate_evidence_synthesis_packet(
         )
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_loop_review_supersedes_stale_nonlocal_consolidation_surface(tmp_path):
+    config, synthesis_packet, _stale_packet, _run_id, _synthesis_payload = (
+        build_nonlocal_law_candidate_loop_review_ready_chain(tmp_path)
+    )
+    stale = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_packet_dir = Path(str(stale.payload["packet_dir"]))
+
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    rewrite_payload(
+        stale_packet_dir / "nonlocal_law_candidate_loop_review_packet.json",
+        remove_fields(
+            "prior_preservation_summary",
+            "evidence_summary",
+            "strongest_rival_status",
+            "next_cycle_target_options",
+            "recommended_next_target_seed",
+            "cycle_consolidation_required_before_next_repair",
+            "target_selection_requires_cycle_consolidation",
+            "ready_for_cycle_consolidation",
+            "current_best_for_next_loop_packet_id",
+            "active_risks_remain",
+        ),
+    )
+    rewrite_payload(
+        stale_packet_dir / "prior_current_best_preservation_report.json",
+        remove_fields("summary", "retained_evidence_references"),
+    )
+    rewrite_payload(
+        stale_packet_dir / "promoted_candidate_evidence_summary.json",
+        remove_fields("summary", "strongest_rival_status", "promotion_basis"),
+    )
+    rewrite_payload(
+        stale_packet_dir / "next_cycle_target_seed_report.json",
+        remove_fields(
+            "next_cycle_target_options",
+            "recommended_next_action",
+            "recommended_next_target_seed",
+        ),
+    )
+
+    successor = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+
+    assert successor.exit_code == 0
+    assert successor.payload["accepted"] is True
+    assert successor.payload["packet_id"] == "packet_0002"
+    assert successor.payload["superseded_loop_review_packet_id"] == "packet_0001"
+    assert successor.payload["supersession_reason"] == (
+        "nonlocal_loop_review_consolidation_surface_missing"
+    )
+    assert successor.payload["source_synthesis_packet_id"] == "packet_0002"
+    assert successor.payload["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert successor.payload["new_current_best_candidate_packet_id"] == "packet_0002"
+    assert successor.payload["decision"] == (
+        "promote_packet_0002_to_current_best_pending_loop_review"
+    )
+    assert successor.payload["current_best_updated"] is True
+    assert successor.payload["current_best_update_method"] == "loop_review_packet_only"
+    assert successor.payload["current_best_state_mutation_performed"] is False
+    assert successor.payload["current_best_decision_packet_is_source_of_truth"] is True
+    assert successor.payload["prior_preservation_summary"]
+    assert successor.payload["evidence_summary"]
+    assert successor.payload["strongest_rival_status"] == "narrowed_but_blocking"
+    assert successor.payload["next_cycle_target_options"]
+    assert successor.payload["recommended_next_target_seed"] == (
+        "cycle_consolidation_before_target_selection"
+    )
+    assert successor.payload["ready_for_cycle_consolidation"] is True
+    assert successor.payload["current_best_for_next_loop_packet_id"] == "packet_0002"
+    assert successor.payload["prior_current_best_preserved_as_history"] is True
+    assert successor.payload["strongest_rival_remains_blocking"] is True
+    assert successor.payload["active_risks_remain"] is True
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["generation_authorized"] is False
+    assert successor.payload["model_calls"] == 0
+    assert successor.payload["finalization_eligible"] is False
+    assert successor.payload["no_final_claim"] is True
+    assert successor.payload["no_phase_shift_claim"] is True
+
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    risks = read_payload(successor_dir / "active_risk_carry_forward_report.json")
+    assert len(risks["active_risks"]) == 4
+    assert all(
+        risk["carried_forward_to_next_loop"] is True
+        for risk in risks["active_risks"]
+    )
+    assert all(
+        risk["source_loop_review_packet_id"] == "packet_0002"
+        for risk in risks["active_risks"]
+    )
+
+    duplicate = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "corrected current-valid loop-review decision already exists" in (
+        duplicate.payload["message"]
+    )
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_loop_review_refuses_when_no_recognized_synthesis_packet_exists(tmp_path):
