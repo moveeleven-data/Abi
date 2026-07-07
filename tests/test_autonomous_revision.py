@@ -205,6 +205,7 @@ from abi.modules.executed_ablation import (
 )
 from abi.modules.evidence_loop_review import (
     EVIDENCE_LOOP_REVIEW_ARTIFACT_TYPES,
+    NONLOCAL_LAW_CANDIDATE_LOOP_REVIEW_ARTIFACT_TYPES,
     run_evidence_loop_review,
 )
 from abi.modules.loop_integrity_cleanup import (
@@ -23466,6 +23467,102 @@ def build_nonlocal_law_candidate_evidence_synthesis_ready_chain(
     return config, Path(str(live.payload["packet_dir"])), run_id, live.payload
 
 
+def build_nonlocal_law_candidate_loop_review_ready_chain(
+    tmp_path: Path,
+) -> tuple[AbiConfig, Path, Path, str, dict[str, object]]:
+    config, authorization_packet, run_id, _authorization_payload = (
+        build_nonlocal_law_candidate_generation_ready_chain(tmp_path)
+    )
+    (config.run_dir(run_id) / "nonlocal_law_guided_candidate" / "packet_0001").mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    candidate = run_nonlocal_law_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-model",
+        client_factory=nonlocal_law_candidate_client_factory(),
+    )
+    assert candidate.exit_code == 0
+    assert candidate.payload["packet_id"] == "packet_0002"
+    ablation = run_nonlocal_law_candidate_ablation(
+        config,
+        candidate_packet=Path(str(candidate.payload["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert ablation.exit_code == 0
+    fake = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="fake",
+        ablation_packet=Path(str(ablation.payload["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert fake.exit_code == 0
+    live = run_nonlocal_law_candidate_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=Path(str(ablation.payload["packet_dir"])),
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-nonlocal-law-reader-state-model",
+        client_factory=nonlocal_law_reader_state_client_factory(),
+    )
+    assert live.exit_code == 0
+    assert live.payload["packet_id"] == "packet_0002"
+
+    stale = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=Path(str(live.payload["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_packet_dir = Path(str(stale.payload["packet_dir"]))
+
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    rewrite_payload(
+        stale_packet_dir / "nonlocal_law_candidate_evidence_synthesis_packet.json",
+        remove_fields(
+            "source_chain_coherent",
+            "law_effect_summary",
+            "incomplete_evidence",
+            "ready_for_loop_review",
+            "recommended_next_decision",
+        ),
+    )
+    rewrite_payload(
+        stale_packet_dir / "candidate_law_effect_synthesis.json",
+        remove_fields("summary", "incomplete_evidence"),
+    )
+
+    corrected = run_nonlocal_law_candidate_evidence_synthesis(
+        config,
+        reader_state_packet=Path(str(live.payload["packet_dir"])),
+        operator_reviewed=True,
+    )
+    assert corrected.exit_code == 0
+    assert corrected.payload["packet_id"] == "packet_0002"
+    return (
+        config,
+        Path(str(corrected.payload["packet_dir"])),
+        stale_packet_dir,
+        run_id,
+        corrected.payload,
+    )
+
+
 def assert_nonlocal_law_candidate_evidence_synthesis_acceptance(
     config: AbiConfig,
     run_id: str,
@@ -23822,6 +23919,161 @@ def test_nonlocal_law_candidate_evidence_synthesis_refuses_duplicate_current_val
     assert duplicate.payload["synthesis_executed"] is False
     assert duplicate.payload["candidate_generated"] is False
     assert duplicate.payload["generation_authorized"] is False
+    assert duplicate.payload["model_calls"] == 0
+
+
+def test_loop_review_accepts_nonlocal_law_candidate_evidence_synthesis_packet(
+    tmp_path,
+):
+    config, synthesis_packet, _stale_packet, run_id, synthesis_payload = (
+        build_nonlocal_law_candidate_loop_review_ready_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert set(result.payload["artifact_ids"]) == set(
+        NONLOCAL_LAW_CANDIDATE_LOOP_REVIEW_ARTIFACT_TYPES
+    )
+    assert result.payload["source_synthesis_packet_id"] == "packet_0002"
+    assert result.payload["source_reader_state_packet_id"] == "packet_0002"
+    assert result.payload["source_ablation_packet_id"] == "packet_0001"
+    assert result.payload["source_candidate_packet_id"] == "packet_0002"
+    assert result.payload["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["new_current_best_candidate_packet_id"] == "packet_0002"
+    assert result.payload["proof_packet_id"] == "packet_0034"
+    assert result.payload["prior_reader_state_packet_id"] == "packet_0013"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["decision"] == (
+        "promote_packet_0002_to_current_best_pending_loop_review"
+    )
+    assert result.payload["current_best_updated"] is True
+    assert result.payload["current_best_update_method"] == "loop_review_packet_only"
+    assert result.payload["current_best_state_mutation_performed"] is False
+    assert result.payload["current_best_decision_packet_is_source_of_truth"] is True
+    assert result.payload["prior_current_best_preserved_as_history"] is True
+    assert result.payload["active_risks_carried_forward"] is True
+    assert result.payload["active_risk_count"] == 4
+    assert result.payload["strongest_rival_remains_blocking"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["next_recommended_action"] == (
+        "consolidate_nonlocal_law_cycle_learning_before_next_repair"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    transition = read_payload(packet_dir / "current_best_transition_decision.json")
+    assert transition["new_current_best_candidate_packet_id"] == "packet_0002"
+    assert "synthesis recommended promotion" in transition["promotion_basis"]
+    assert "strongest rival remains blocking" in transition["promotion_limits"]
+    assert transition["finalization_allowed"] is False
+
+    risks = read_payload(packet_dir / "active_risk_carry_forward_report.json")
+    risk_ids = {risk["risk_id"] for risk in risks["active_risks"]}
+    assert risk_ids == {
+        "explanation_may_arrive_too_explicitly",
+        "event_sequence_may_remain_static",
+        "chemistry_register_risk",
+        "conclusion_may_summarize_law",
+    }
+    assert all(risk["blocks_finalization"] is True for risk in risks["active_risks"])
+
+    seed = read_payload(packet_dir / "next_cycle_target_seed_report.json")
+    assert seed["do_not_generate_yet"] is True
+    assert seed["do_not_create_work_order_yet"] is True
+    assert "repair_chemistry_register_intrusion" in seed["seed_target_options"]
+
+    lock = read_payload(packet_dir / "finalization_lock_report.json")
+    assert lock["do_not_finalize"] is True
+    assert lock["active_risks_remain"] is True
+    assert lock["strongest_rival_remains_blocking"] is True
+
+    assert synthesis_payload["current_best_updated"] is False
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_loop_review_refuses_when_no_recognized_synthesis_packet_exists(tmp_path):
+    config = config_for(tmp_path)
+    packet_dir = tmp_path / "missing_recognized_synthesis"
+    packet_dir.mkdir()
+
+    result = run_evidence_loop_review(config, synthesis_packet=packet_dir)
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "missing autonomous_evidence_synthesis_packet.json" in result.payload[
+        "message"
+    ]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["counts"]["model_calls"] == 0
+
+
+def test_loop_review_requires_corrected_nonlocal_surface_fields(tmp_path):
+    config, synthesis_packet, _stale_packet, _run_id, _synthesis_payload = (
+        build_nonlocal_law_candidate_loop_review_ready_chain(tmp_path)
+    )
+    copied_packet = tmp_path / "nonlocal_missing_loop_surface"
+    shutil.copytree(synthesis_packet, copied_packet)
+    rewrite_payload(
+        copied_packet / "nonlocal_law_candidate_evidence_synthesis_packet.json",
+        lambda payload: payload.pop("ready_for_loop_review", None),
+    )
+
+    result = run_evidence_loop_review(config, synthesis_packet=copied_packet)
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "ready_for_loop_review must be true" in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_loop_review_refuses_stale_nonlocal_synthesis_packet(tmp_path):
+    config, _synthesis_packet, stale_packet, _run_id, _synthesis_payload = (
+        build_nonlocal_law_candidate_loop_review_ready_chain(tmp_path)
+    )
+
+    result = run_evidence_loop_review(config, synthesis_packet=stale_packet)
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "corrected synthesis packet was superseded" in result.payload["message"]
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_loop_review_refuses_duplicate_nonlocal_current_best_decision(tmp_path):
+    config, synthesis_packet, _stale_packet, _run_id, _synthesis_payload = (
+        build_nonlocal_law_candidate_loop_review_ready_chain(tmp_path)
+    )
+    first = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+    assert first.exit_code == 0
+
+    duplicate = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "current-valid loop-review decision already exists" in duplicate.payload[
+        "message"
+    ]
+    assert duplicate.payload["candidate_generated"] is False
     assert duplicate.payload["model_calls"] == 0
 
 
