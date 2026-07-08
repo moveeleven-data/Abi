@@ -25,6 +25,7 @@ from abi.model_schemas import (
     PILOT_MODEL_SCHEMAS,
     PILOT_RAW_MODEL_BASELINE_SCHEMA,
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
+    SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA,
     json_schema_for_worker_schema,
 )
 
@@ -163,6 +164,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_residual_intervention_generation_prompt
     if schema == NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA:
         return _build_nonlocal_law_guided_generation_prompt
+    if schema == SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA:
+        return _build_selected_nonlocal_law_target_generation_prompt
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return _build_nonlocal_law_candidate_reader_state_prompt
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
@@ -383,6 +386,33 @@ def _build_nonlocal_law_guided_generation_prompt(input_text: str) -> str:
         "generation_allowed: false; finality_claimed: false; "
         "phase_shift_claimed: false; strongest_rival_defeated_claimed: false. "
         "Output structured schema only. Prompt packet:\n"
+        f"{input_text}"
+    )
+
+
+def _build_selected_nonlocal_law_target_generation_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema for "
+        "autonomous.selected_nonlocal_law_target_generation.v1. Produce one "
+        "bounded candidate from the supplied packet_0002 current candidate and "
+        "selected target only. Address the selected target "
+        "convert_static_retrospective_trace_to_living_event_sequence: object "
+        "traces must become active conditions that alter later perception before "
+        "conceptual naming stabilizes them. Preserve packet_0002's table, dust, "
+        "spoon, saucer, ring, and light field, preserve earned explanation "
+        "timing, and carry forward unresolved risks. Do not copy or import the "
+        "strongest rival's cup, windowsill, bill, shoes, drag-mark, scar, sink, "
+        "payment, shade, scene structure, diction, cadence, causal plot, or "
+        "domestic sequence. Do not perform a free rewrite, add generic vividness, "
+        "treat object inventory itself as living causality, delete explanation, "
+        "or claim current-best supersession. Do not claim success, finality, "
+        "phase shift, human validation, synthesis, ablation proof, or rival "
+        "defeat. generation_allowed is a downstream safety/escalation field, "
+        "not an answer to whether this current call was authorized to generate; "
+        "set generation_allowed, finality_claimed, phase_shift_claimed, "
+        "strongest_rival_defeated_claimed, and "
+        "current_best_supersession_claimed to false at top level and inside "
+        "safety_claims. Output structured schema only. Prompt packet:\n"
         f"{input_text}"
     )
 

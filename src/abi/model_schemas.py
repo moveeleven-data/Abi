@@ -69,6 +69,7 @@ class WorkerRole(str, Enum):
     OBJECT_MOTION_CAUSALITY_GENERATOR = "object_motion_causality_generator"
     RESIDUAL_INTERVENTION_GENERATOR = "residual_intervention_generator"
     NONLOCAL_LAW_GUIDED_GENERATOR = "nonlocal_law_guided_generator"
+    SELECTED_NONLOCAL_LAW_TARGET_GENERATOR = "selected_nonlocal_law_target_generator"
     NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATOR = (
         "nonlocal_law_candidate_reader_state_evaluator"
     )
@@ -495,6 +496,12 @@ NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA = WorkerSchema(
     artifact_type="model_nonlocal_law_guided_generation",
 )
 
+SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA = WorkerSchema(
+    name="SelectedNonlocalLawTargetGenerationOutput",
+    version="1",
+    artifact_type="model_selected_nonlocal_law_target_generation",
+)
+
 NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA = WorkerSchema(
     name="NonlocalLawCandidateReaderStateEvaluationOutput",
     version="1",
@@ -512,6 +519,7 @@ BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS = (
     OBJECT_MOTION_CAUSALITY_GENERATION_SCHEMA,
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
     NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA,
+    SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA,
 )
 
 LOCAL_LAW_RIVAL_DIAGNOSTIC_MODEL_SCHEMAS = (
@@ -2544,6 +2552,126 @@ def nonlocal_law_guided_generation_json_schema() -> dict[str, Any]:
     )
 
 
+def selected_nonlocal_law_target_generation_json_schema() -> dict[str, Any]:
+    safety_false = {
+        "type": "boolean",
+        "enum": [False],
+        "description": (
+            "Must be false. This is a downstream safety/escalation assertion, "
+            "not current-call generation permission."
+        ),
+    }
+    target_unit_item = _object_schema(
+        {
+            "target_unit_id": {"type": "string"},
+            "change_summary": {"type": "string"},
+            "materiality_satisfied": {"type": "boolean"},
+            "semantic_satisfied": {"type": "boolean"},
+        },
+        [
+            "target_unit_id",
+            "change_summary",
+            "materiality_satisfied",
+            "semantic_satisfied",
+        ],
+    )
+    requirement_item = _object_schema(
+        {
+            "requirement": {"type": "string"},
+            "satisfied": {"type": "boolean"},
+            "evidence": {"type": "string"},
+        },
+        ["requirement", "satisfied", "evidence"],
+    )
+    non_imitation = _object_schema(
+        {
+            "passed": {"type": "boolean"},
+            "evidence": {"type": "string"},
+            "forbidden_material_absent": _string_array_schema(),
+        },
+        ["passed", "evidence", "forbidden_material_absent"],
+    )
+    protected = _object_schema(
+        {
+            "preserved": {"type": "boolean"},
+            "evidence": {"type": "string"},
+            "protected_strengths": _string_array_schema(),
+        },
+        ["preserved", "evidence", "protected_strengths"],
+    )
+    forbidden = _object_schema(
+        {
+            "passed": {"type": "boolean"},
+            "evidence": {"type": "string"},
+            "avoided_regressions": _string_array_schema(),
+        },
+        ["passed", "evidence", "avoided_regressions"],
+    )
+    safety_claims = _object_schema(
+        {
+            "finality_claimed": safety_false,
+            "phase_shift_claimed": safety_false,
+            "strongest_rival_defeated_claimed": safety_false,
+            "current_best_supersession_claimed": safety_false,
+            "generation_allowed": safety_false,
+        },
+        [
+            "finality_claimed",
+            "phase_shift_claimed",
+            "strongest_rival_defeated_claimed",
+            "current_best_supersession_claimed",
+            "generation_allowed",
+        ],
+    )
+    return _schema_with_properties(
+        {
+            "text": {"type": "string"},
+            "revision_summary": {"type": "string"},
+            "selected_target_application_summary": {"type": "string"},
+            "living_event_sequence_repair_summary": {"type": "string"},
+            "target_unit_change_report": {
+                "type": "array",
+                "items": target_unit_item,
+            },
+            "materiality_self_report": {
+                "type": "array",
+                "items": requirement_item,
+            },
+            "semantic_self_report": {
+                "type": "array",
+                "items": requirement_item,
+            },
+            "non_imitation_acknowledgement": non_imitation,
+            "protected_strengths_preservation_acknowledgement": protected,
+            "forbidden_regression_acknowledgement": forbidden,
+            "safety_claims": safety_claims,
+            "finality_claimed": safety_false,
+            "phase_shift_claimed": safety_false,
+            "strongest_rival_defeated_claimed": safety_false,
+            "current_best_supersession_claimed": safety_false,
+            "generation_allowed": safety_false,
+        },
+        [
+            "text",
+            "revision_summary",
+            "selected_target_application_summary",
+            "living_event_sequence_repair_summary",
+            "target_unit_change_report",
+            "materiality_self_report",
+            "semantic_self_report",
+            "non_imitation_acknowledgement",
+            "protected_strengths_preservation_acknowledgement",
+            "forbidden_regression_acknowledgement",
+            "safety_claims",
+            "finality_claimed",
+            "phase_shift_claimed",
+            "strongest_rival_defeated_claimed",
+            "current_best_supersession_claimed",
+            "generation_allowed",
+        ],
+    )
+
+
 def nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dict[str, Any]:
     safety_false = {
         "type": "boolean",
@@ -2874,6 +3002,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return residual_intervention_generation_json_schema()
     if schema == NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA:
         return nonlocal_law_guided_generation_json_schema()
+    if schema == SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA:
+        return selected_nonlocal_law_target_generation_json_schema()
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return nonlocal_law_candidate_reader_state_evaluation_json_schema()
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
@@ -2989,6 +3119,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_residual_intervention_generation(payload)
     if schema == NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA:
         return _validate_nonlocal_law_guided_generation(payload)
+    if schema == SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA:
+        return _validate_selected_nonlocal_law_target_generation(payload)
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return _validate_nonlocal_law_candidate_reader_state_evaluation(payload)
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
@@ -4687,6 +4819,130 @@ def _validate_nonlocal_law_guided_generation(
         "finality_claimed": False,
         "phase_shift_claimed": False,
         "strongest_rival_defeated_claimed": False,
+    }
+
+
+def _validate_selected_nonlocal_law_target_generation(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_fields = {
+        "text",
+        "revision_summary",
+        "selected_target_application_summary",
+        "living_event_sequence_repair_summary",
+        "target_unit_change_report",
+        "materiality_self_report",
+        "semantic_self_report",
+        "non_imitation_acknowledgement",
+        "protected_strengths_preservation_acknowledgement",
+        "forbidden_regression_acknowledgement",
+        "safety_claims",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+        "current_best_supersession_claimed",
+        "generation_allowed",
+    }
+    extra_fields = sorted(set(payload) - allowed_fields)
+    if extra_fields:
+        raise ModelValidationError(
+            "unexpected fields in selected nonlocal law target generation output: "
+            + ", ".join(extra_fields)
+        )
+    for key in (
+        "text",
+        "revision_summary",
+        "selected_target_application_summary",
+        "living_event_sequence_repair_summary",
+    ):
+        _require_type(payload, key, str)
+        if not payload[key].strip():
+            raise ModelValidationError(f"{key} must not be empty")
+
+    _require_object_list(payload, "target_unit_change_report")
+    target_report = []
+    for index, item in enumerate(payload["target_unit_change_report"]):
+        validated = _validate_object(
+            item,
+            f"target_unit_change_report[{index}]",
+            ("target_unit_id", "change_summary"),
+        )
+        _require_type(
+            item,
+            "materiality_satisfied",
+            bool,
+            field_prefix=f"target_unit_change_report[{index}].",
+        )
+        _require_type(
+            item,
+            "semantic_satisfied",
+            bool,
+            field_prefix=f"target_unit_change_report[{index}].",
+        )
+        validated["materiality_satisfied"] = item["materiality_satisfied"]
+        validated["semantic_satisfied"] = item["semantic_satisfied"]
+        target_report.append(validated)
+    if not target_report:
+        raise ModelValidationError("target_unit_change_report must not be empty")
+
+    materiality_report = _validate_requirement_self_report(
+        payload,
+        "materiality_self_report",
+    )
+    semantic_report = _validate_requirement_self_report(
+        payload,
+        "semantic_self_report",
+    )
+    non_imitation = _validate_nonlocal_boolean_report(
+        payload,
+        "non_imitation_acknowledgement",
+        bool_key="passed",
+        array_key="forbidden_material_absent",
+    )
+    protected = _validate_nonlocal_boolean_report(
+        payload,
+        "protected_strengths_preservation_acknowledgement",
+        bool_key="preserved",
+        array_key="protected_strengths",
+    )
+    forbidden = _validate_nonlocal_boolean_report(
+        payload,
+        "forbidden_regression_acknowledgement",
+        bool_key="passed",
+        array_key="avoided_regressions",
+    )
+    safety_claims = _validate_object(payload.get("safety_claims"), "safety_claims", ())
+    for key in (
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+        "current_best_supersession_claimed",
+        "generation_allowed",
+    ):
+        _require_false(payload, key)
+        _require_false(payload["safety_claims"], key, field_prefix="safety_claims.")
+        safety_claims[key] = False
+    return {
+        "text": payload["text"],
+        "revision_summary": payload["revision_summary"],
+        "selected_target_application_summary": payload[
+            "selected_target_application_summary"
+        ],
+        "living_event_sequence_repair_summary": payload[
+            "living_event_sequence_repair_summary"
+        ],
+        "target_unit_change_report": target_report,
+        "materiality_self_report": materiality_report,
+        "semantic_self_report": semantic_report,
+        "non_imitation_acknowledgement": non_imitation,
+        "protected_strengths_preservation_acknowledgement": protected,
+        "forbidden_regression_acknowledgement": forbidden,
+        "safety_claims": safety_claims,
+        "finality_claimed": False,
+        "phase_shift_claimed": False,
+        "strongest_rival_defeated_claimed": False,
+        "current_best_supersession_claimed": False,
+        "generation_allowed": False,
     }
 
 
