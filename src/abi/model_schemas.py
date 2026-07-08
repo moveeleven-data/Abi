@@ -2852,6 +2852,24 @@ def nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dict[str, An
     )
 
 
+SELECTED_READER_STATE_REQUIRED_RISK_PROBES = {
+    "causal_mechanism_overexplained": "causal mechanism may be overexplained",
+    "room_begins_to_instruct_too_declarative": (
+        '"room begins to instruct" may be too declarative'
+    ),
+    "later_seeing_must_be_changed_names_law_too_directly": (
+        '"later seeing must be changed" may name the law too directly'
+    ),
+    "chemistry_register_unresolved": "chemistry register remains unresolved",
+    "conclusion_summarizes_instead_of_enacts_return": (
+        "conclusion may still summarize law instead of enacting return"
+    ),
+    "object_field_delicacy_overloaded_by_causal_explanation": (
+        "object-field delicacy may be overloaded by causal explanation"
+    ),
+}
+
+
 def selected_nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dict[str, Any]:
     safety_false = {
         "type": "boolean",
@@ -2898,14 +2916,19 @@ def selected_nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dic
             "hum_order_of_seeing",
         ],
     )
-    risk_item = _object_schema(
+    risk_probe_item = _object_schema(
         {
-            "risk_id": {"type": "string"},
             "result": result,
             "summary": {"type": "string"},
             "evidence": {"type": "string"},
+            "risk_status": result,
+            "next_target_implication": {"type": "string"},
         },
-        ["risk_id", "result", "summary", "evidence"],
+        ["result", "summary", "evidence", "risk_status", "next_target_implication"],
+    )
+    risk_probe_results_by_id = _object_schema(
+        {risk_id: risk_probe_item for risk_id in SELECTED_READER_STATE_REQUIRED_RISK_PROBES},
+        list(SELECTED_READER_STATE_REQUIRED_RISK_PROBES),
     )
     return _schema_with_properties(
         {
@@ -2952,7 +2975,7 @@ def selected_nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dic
             "pressure_summary": {"type": "string"},
             "overall_selected_target_reader_state_result": result,
             "reader_state_summary": {"type": "string"},
-            "risk_probe_results": {"type": "array", "items": risk_item},
+            "risk_probe_results_by_id": risk_probe_results_by_id,
             "synthesis_recommendation": {"type": "string"},
             "finality_claimed": safety_false,
             "phase_shift_claimed": safety_false,
@@ -3006,7 +3029,7 @@ def selected_nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dic
             "pressure_summary",
             "overall_selected_target_reader_state_result",
             "reader_state_summary",
-            "risk_probe_results",
+            "risk_probe_results_by_id",
             "synthesis_recommendation",
             "finality_claimed",
             "phase_shift_claimed",
@@ -5265,6 +5288,7 @@ def _validate_selected_nonlocal_law_candidate_reader_state_evaluation(
         "overall_selected_target_reader_state_result",
         "reader_state_summary",
         "risk_probe_results",
+        "risk_probe_results_by_id",
         "synthesis_recommendation",
         "finality_claimed",
         "phase_shift_claimed",
@@ -5370,15 +5394,23 @@ def _validate_selected_nonlocal_law_candidate_reader_state_evaluation(
         "current_best_updated",
     ):
         _require_false(payload, field)
-    risks = _validate_selected_reader_state_risk_probes(payload)
+    risks, risks_by_id = _validate_selected_reader_state_risk_probes(payload)
+    normalized = {
+        field: payload[field]
+        for field in allowed_fields
+        if field
+        not in {
+            "bridge_examples",
+            "risk_probe_results",
+            "risk_probe_results_by_id",
+        }
+        and field in payload
+    }
     return {
-        **{
-            field: payload[field]
-            for field in allowed_fields
-            if field not in {"bridge_examples", "risk_probe_results"}
-        },
+        **normalized,
         "bridge_examples": bridge,
         "risk_probe_results": risks,
+        "risk_probe_results_by_id": risks_by_id,
     }
 
 
@@ -5411,48 +5443,102 @@ _SELECTED_READER_STATE_RESULTS = (
     "requires_synthesis",
 )
 
-_SELECTED_READER_STATE_REQUIRED_RISK_IDS = (
-    "causal mechanism may be overexplained",
-    '"room begins to instruct" may be too declarative',
-    '"later seeing must be changed" may name the law too directly',
-    "chemistry register remains unresolved",
-    "conclusion may still summarize law instead of enacting return",
-    "object-field delicacy may be overloaded by causal explanation",
-)
-
-
 def _validate_selected_reader_state_risk_probes(
     payload: dict[str, Any],
-) -> list[dict[str, str]]:
-    key = "risk_probe_results"
-    _require_object_list(payload, key)
-    risks = []
-    for index, item in enumerate(payload[key]):
-        risk = _validate_object(
-            item,
-            f"{key}[{index}]",
-            ("risk_id", "result", "summary", "evidence"),
+) -> tuple[list[dict[str, str]], dict[str, dict[str, str]]]:
+    if isinstance(payload.get("risk_probe_results_by_id"), dict):
+        by_id = _validate_selected_reader_state_risk_probe_map(
+            payload["risk_probe_results_by_id"]
         )
-        _require_enum_value(
-            risk["result"],
-            f"{key}[{index}].result",
-            _SELECTED_READER_STATE_RESULTS,
+    elif isinstance(payload.get("risk_probe_results"), list):
+        by_id = _validate_selected_reader_state_risk_probe_list(
+            payload["risk_probe_results"]
         )
-        _require_nonempty_strings(risk, f"{key}[{index}]")
-        risks.append(risk)
-    if not risks:
-        raise ModelValidationError("risk_probe_results must not be empty")
-    seen_risk_ids = {risk["risk_id"] for risk in risks}
-    missing_risks = [
-        risk_id
-        for risk_id in _SELECTED_READER_STATE_REQUIRED_RISK_IDS
-        if risk_id not in seen_risk_ids
+    else:
+        raise ModelValidationError("risk_probe_results_by_id is required")
+    risks = [
+        {
+            "risk_id": risk_id,
+            "risk_label": SELECTED_READER_STATE_REQUIRED_RISK_PROBES[risk_id],
+            **by_id[risk_id],
+        }
+        for risk_id in SELECTED_READER_STATE_REQUIRED_RISK_PROBES
     ]
-    if missing_risks:
+    return risks, by_id
+
+
+def _validate_selected_reader_state_risk_probe_map(
+    value: dict[str, Any],
+) -> dict[str, dict[str, str]]:
+    required_ids = tuple(SELECTED_READER_STATE_REQUIRED_RISK_PROBES)
+    missing_ids = [risk_id for risk_id in required_ids if risk_id not in value]
+    if missing_ids:
+        raise ModelValidationError("missing risk probes: " + ", ".join(missing_ids))
+    unknown_ids = sorted(set(value) - set(required_ids))
+    if unknown_ids:
         raise ModelValidationError(
-            "missing risk probes: " + ", ".join(missing_risks)
+            "unknown risk_probe_results_by_id ids: " + ", ".join(unknown_ids)
         )
-    return risks
+    return {
+        risk_id: _validate_selected_reader_state_risk_probe_item(
+            value[risk_id],
+            f"risk_probe_results_by_id.{risk_id}",
+        )
+        for risk_id in required_ids
+    }
+
+
+def _validate_selected_reader_state_risk_probe_list(
+    value: list[object],
+) -> dict[str, dict[str, str]]:
+    by_id: dict[str, dict[str, str]] = {}
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ModelValidationError(f"risk_probe_results[{index}] must be an object")
+        risk_id = item.get("risk_id")
+        if not isinstance(risk_id, str):
+            raise ModelValidationError(
+                f"risk_probe_results[{index}].risk_id must be a canonical risk id"
+            )
+        if risk_id not in SELECTED_READER_STATE_REQUIRED_RISK_PROBES:
+            raise ModelValidationError(
+                f"unknown risk_probe_results[{index}].risk_id: {risk_id}"
+            )
+        if risk_id in by_id:
+            raise ModelValidationError(f"duplicate risk probe id: {risk_id}")
+        by_id[risk_id] = _validate_selected_reader_state_risk_probe_item(
+            item,
+            f"risk_probe_results[{index}]",
+        )
+    missing_ids = [
+        risk_id
+        for risk_id in SELECTED_READER_STATE_REQUIRED_RISK_PROBES
+        if risk_id not in by_id
+    ]
+    if missing_ids:
+        raise ModelValidationError("missing risk probes: " + ", ".join(missing_ids))
+    return by_id
+
+
+def _validate_selected_reader_state_risk_probe_item(
+    value: object,
+    label: str,
+) -> dict[str, str]:
+    risk = _validate_object(
+        value,
+        label,
+        ("result", "summary", "evidence", "risk_status", "next_target_implication"),
+    )
+    for field in ("result", "risk_status"):
+        _require_enum_value(risk[field], f"{label}.{field}", _SELECTED_READER_STATE_RESULTS)
+    _require_nonempty_strings(risk, label)
+    return {
+        "result": risk["result"],
+        "summary": risk["summary"],
+        "evidence": risk["evidence"],
+        "risk_status": risk["risk_status"],
+        "next_target_implication": risk["next_target_implication"],
+    }
 
 
 def _validate_nonlocal_reader_state_comparison(value: object) -> dict[str, str]:

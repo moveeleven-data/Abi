@@ -21,11 +21,12 @@ from abi.controller.state import (
 from abi.db import connect, initialize_database
 from abi.hashing import sha256_text
 from abi.live_model import ABI_OPENAI_MODEL_ENV, LIVE_MODEL_DEFAULT, OPENAI_API_KEY_ENV
-from abi.model_calls import link_model_call_parsed_artifact
+from abi.model_calls import MODEL_CALL_VALIDATION_FAILED, link_model_call_parsed_artifact
 from abi.model_driver import ModelClient, ModelDriver, ModelDriverResult, WorkerRequest
 from abi.model_schemas import (
     ModelValidationError,
     SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
+    SELECTED_READER_STATE_REQUIRED_RISK_PROBES,
     WorkerRole,
 )
 from abi.modules.local_law_discovery import DISCOVERED_LOCAL_LAW_ID
@@ -63,6 +64,13 @@ PROMPT_CONTRACT_ID = (
     "autonomous.selected_nonlocal_law_candidate_reader_state_evaluation.v1"
 )
 NEXT_RECOMMENDED_ACTION = "synthesize_selected_nonlocal_law_candidate_evidence"
+FAILED_NEXT_RECOMMENDED_ACTION = (
+    "fix_selected_target_reader_state_risk_probe_contract_before_live_retry"
+)
+RISK_PROBE_CONTRACT_FAILURE_CLASS = (
+    "selected_target_reader_state_risk_probe_contract_failure"
+)
+RISK_PROBE_CONTRACT_FAILURE_REASON = "missing_required_risk_probes"
 
 QUALITATIVE_RESULTS = (
     "improved",
@@ -107,6 +115,14 @@ NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_ARTIFACT_TYPES = (
     "project_health_scope_guard_report",
     "nonlocal_law_selected_target_reader_state_evaluation_packet",
 )
+
+FAILED_NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_ARTIFACT_TYPES = (
+    "failed_reader_state_evaluation_diagnostic",
+    "failed_reader_state_evaluation_gate_report",
+    "nonlocal_law_selected_target_reader_state_failed_evaluation_packet",
+)
+
+REQUIRED_RISK_PROBE_IDS = tuple(SELECTED_READER_STATE_REQUIRED_RISK_PROBES)
 
 
 @dataclass(frozen=True)
@@ -179,7 +195,13 @@ class FakeSelectedNonlocalLawCandidateReaderStateModelClient:
         elif self.mode == "synthesis_authorized":
             payload["synthesis_authorized"] = True
         elif self.mode == "missing_risk":
-            payload["risk_probe_results"] = payload["risk_probe_results"][:-1]
+            missing_id = REQUIRED_RISK_PROBE_IDS[-1]
+            payload["risk_probe_results_by_id"].pop(missing_id, None)
+            payload["risk_probe_results"] = [
+                risk
+                for risk in payload["risk_probe_results"]
+                if risk["risk_id"] != missing_id
+            ]
         elif self.mode == "invalid_json":
             return "{not valid json"
         return _canonical_json(payload)
@@ -333,10 +355,11 @@ def run_nonlocal_law_selected_target_reader_state_evaluation(
         )
         model_results.append(model_result)
         if not model_result.accepted or model_result.parsed_payload is None:
-            return _model_failure_result(
+            return _failed_evaluation_result(
+                config=config,
+                subject=subject,
                 client_name=client_name,
                 model=configured_model,
-                ablation_packet=resolved_packet,
                 model_results=model_results,
                 message=_model_failure_message(model_result),
             )
@@ -348,6 +371,18 @@ def run_nonlocal_law_selected_target_reader_state_evaluation(
     try:
         _validate_model_payload_for_subject(subject, model_payload)
     except ModelValidationError as error:
+        if client_name == "openai":
+            return _failed_evaluation_result(
+                config=config,
+                subject=subject,
+                client_name=client_name,
+                model=configured_model,
+                model_results=model_results,
+                message=(
+                    "Selected nonlocal law candidate reader-state evaluation refused; "
+                    f"{error}"
+                ),
+            )
         return _model_failure_result(
             client_name=client_name,
             model=configured_model if client_name == "openai" else None,
@@ -650,6 +685,17 @@ def _prompt_packet(subject: NonlocalLawSelectedTargetReaderStateSubject) -> dict
         "ablation_controls": list(ABLATION_CONTROL_IDS),
         "law_bearing_choices": list(_law_bearing_choices(subject)),
         "risks_to_test": list(_risks_to_test(subject)),
+        "required_risk_probe_ids": list(REQUIRED_RISK_PROBE_IDS),
+        "required_risk_probe_labels_by_id": dict(
+            SELECTED_READER_STATE_REQUIRED_RISK_PROBES
+        ),
+        "risk_probe_output_contract": {
+            "field": "risk_probe_results_by_id",
+            "required_ids": list(REQUIRED_RISK_PROBE_IDS),
+            "missing_any_required_probe_invalidates_model_call": True,
+            "do_not_omit_inactive_probes": True,
+            "do_not_paraphrase_or_merge_probe_ids": True,
+        },
         "reader_state_focus": [
             "do object traces become active conditions?",
             "does sequence feel live rather than retrospective?",
@@ -694,14 +740,15 @@ def _validate_model_payload_for_subject(
         raise ModelValidationError("rival_imitation_detected must be false")
     if payload.get("forbidden_rival_hits") not in ([], None):
         raise ModelValidationError("forbidden_rival_hits must be empty")
-    risks = {
-        str(item.get("risk_id"))
-        for item in _object_items(payload.get("risk_probe_results"))
-    }
-    missing_risks = [risk for risk in RISKS_TO_TEST if risk not in risks]
-    if missing_risks:
+    risk_probe_results_by_id = payload.get("risk_probe_results_by_id")
+    if not isinstance(risk_probe_results_by_id, dict):
+        raise ModelValidationError("risk_probe_results_by_id is required")
+    missing_risk_ids = [
+        risk_id for risk_id in REQUIRED_RISK_PROBE_IDS if risk_id not in risk_probe_results_by_id
+    ]
+    if missing_risk_ids:
         raise ModelValidationError(
-            "model output missing risk probes: " + ", ".join(missing_risks)
+            "model output missing risk probes: " + ", ".join(missing_risk_ids)
         )
     _ = subject
 
@@ -1100,10 +1147,16 @@ def _build_risk_probe_report(
     subject: NonlocalLawSelectedTargetReaderStateSubject,
     model_payload: dict[str, object],
 ) -> dict[str, object]:
+    risk_probe_results = _risk_probe_results(model_payload)
+    risk_probe_results_by_id = _risk_probe_results_by_id(model_payload)
     return {
         **_source_fields(subject),
-        "risk_probe_count": len(model_payload["risk_probe_results"]),
-        "risk_probe_results": list(model_payload["risk_probe_results"]),
+        "risk_probe_count": len(risk_probe_results),
+        "risk_probe_results": risk_probe_results,
+        "risk_probe_results_by_id": risk_probe_results_by_id,
+        "all_required_risk_probes_present": True,
+        "missing_risk_probe_ids": [],
+        "missing_risk_probe_labels": [],
         **_evaluation_safety_fields(model_calls=_model_call_count(model_payload)),
         "worker": "selected_target_risk_probe_report_v1_controller",
     }
@@ -1275,6 +1328,12 @@ def _build_packet_summary(
             "overall_selected_target_reader_state_result"
         ],
         "reader_state_summary": model_payload["reader_state_summary"],
+        "risk_probe_count": len(_risk_probe_results(model_payload)),
+        "risk_probe_results": _risk_probe_results(model_payload),
+        "risk_probe_results_by_id": _risk_probe_results_by_id(model_payload),
+        "all_required_risk_probes_present": True,
+        "missing_risk_probe_ids": [],
+        "missing_risk_probe_labels": [],
         "ready_for_synthesis": model_backed,
         "synthesis_authorized": False,
         "current_best_updated": False,
@@ -1342,15 +1401,66 @@ def _result_payload(
     }
 
 
+def _risk_probe_results(model_payload: dict[str, object]) -> list[dict[str, object]]:
+    results = model_payload.get("risk_probe_results")
+    if isinstance(results, list):
+        return [dict(result) for result in results if isinstance(result, dict)]
+    by_id = _risk_probe_results_by_id(model_payload)
+    return [
+        {
+            "risk_id": risk_id,
+            "risk_label": SELECTED_READER_STATE_REQUIRED_RISK_PROBES[risk_id],
+            **by_id[risk_id],
+        }
+        for risk_id in REQUIRED_RISK_PROBE_IDS
+    ]
+
+
+def _risk_probe_results_by_id(
+    model_payload: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    results = model_payload.get("risk_probe_results_by_id")
+    if not isinstance(results, dict):
+        return {}
+    return {
+        risk_id: dict(results[risk_id])
+        for risk_id in REQUIRED_RISK_PROBE_IDS
+        if isinstance(results.get(risk_id), dict)
+    }
+
+
 def _valid_model_payload(prompt: dict[str, object]) -> dict[str, object]:
+    risk_probe_results_by_id = {
+        risk_id: {
+            "result": (
+                "active_risk"
+                if risk_id == "causal_mechanism_overexplained"
+                else "requires_synthesis"
+            ),
+            "summary": (
+                f"{risk_label} remains an evaluation risk, not a final result."
+            ),
+            "evidence": (
+                "The selected-target candidate is reviewable but requires synthesis."
+            ),
+            "risk_status": (
+                "active_risk"
+                if risk_id == "causal_mechanism_overexplained"
+                else "requires_synthesis"
+            ),
+            "next_target_implication": (
+                "Carry this probe into synthesis before changing current-best state."
+            ),
+        }
+        for risk_id, risk_label in SELECTED_READER_STATE_REQUIRED_RISK_PROBES.items()
+    }
     risk_probe_results = [
         {
-            "risk_id": risk,
-            "result": "active_risk" if "overexplained" in risk else "requires_synthesis",
-            "summary": f"{risk} remains an evaluation risk, not a final result.",
-            "evidence": "The selected-target candidate is reviewable but requires synthesis.",
+            "risk_id": risk_id,
+            "risk_label": SELECTED_READER_STATE_REQUIRED_RISK_PROBES[risk_id],
+            **risk_probe_results_by_id[risk_id],
         }
-        for risk in prompt["risks_to_test"]
+        for risk_id in REQUIRED_RISK_PROBE_IDS
     ]
     return {
         "living_event_sequence_result": "improved",
@@ -1428,6 +1538,7 @@ def _valid_model_payload(prompt: dict[str, object]) -> dict[str, object]:
             "The selected-target candidate is promising reader-state evidence, not a proof."
         ),
         "risk_probe_results": risk_probe_results,
+        "risk_probe_results_by_id": risk_probe_results_by_id,
         "synthesis_recommendation": (
             "Run selected nonlocal law candidate evidence synthesis after live evaluation."
         ),
@@ -1497,9 +1608,17 @@ def _accepted_reader_state_for_ablation(
         if (
             payload.get("accepted") is True
             and payload.get("reader_state_evaluation_executed") is True
+            and _accepted_evaluation_has_canonical_risk_surface(payload)
         ):
             evaluations.append(_classify_existing_reader_state_evaluation(artifact, payload))
     return evaluations
+
+
+def _accepted_evaluation_has_canonical_risk_surface(payload: dict[str, Any]) -> bool:
+    if payload.get("all_required_risk_probes_present") is not True:
+        return False
+    by_id = payload.get("risk_probe_results_by_id")
+    return isinstance(by_id, dict) and set(by_id) == set(REQUIRED_RISK_PROBE_IDS)
 
 
 def _classify_existing_reader_state_evaluation(
@@ -1661,6 +1780,222 @@ def _model_failure_message(result: ModelDriverResult) -> str:
         f"call {result.model_call.status}: "
         f"{result.model_call.error_message or 'no parsed output'}"
     )
+
+
+def _failed_evaluation_result(
+    *,
+    config: AbiConfig,
+    subject: NonlocalLawSelectedTargetReaderStateSubject,
+    client_name: str,
+    model: str | None,
+    model_results: list[ModelDriverResult],
+    message: str,
+) -> NonlocalLawSelectedTargetReaderStateEvaluationResult:
+    validation_report = _failed_validation_report(model_results, message)
+    with connect(config.db_path) as connection:
+        packet_dir = create_packet_dir(
+            config.run_dir(subject.run_id)
+            / "nonlocal_law_selected_target_reader_state_failed_evaluation"
+        )
+        writer = PacketWriter(
+            connection=connection,
+            run_id=subject.run_id,
+            packet_dir=packet_dir,
+            lineage_id=NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_LINEAGE_ID,
+            created_by=NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_CREATED_BY,
+            fixture_only=False,
+            model_call_id=None,
+        )
+        payloads: dict[str, dict[str, object]] = {}
+        artifacts: dict[str, ArtifactRecord] = {}
+        common = {
+            "accepted": False,
+            "refused": True,
+            "message": message,
+            "client": client_name,
+            "model": model,
+            **_source_fields(subject),
+            **validation_report,
+            "model_call_ids": [result.model_call.id for result in model_results],
+            "reader_state_evaluation_executed": False,
+            "usable_for_synthesis": False,
+            "synthesis_authorized": False,
+            "current_best_updated": False,
+            "candidate_generated": False,
+            "generation_authorized": False,
+            "model_calls": len(model_results),
+            "finalization_eligible": False,
+            "no_final_claim": True,
+            "no_phase_shift_claim": True,
+            "strongest_rival_defeated_claimed": False,
+            "current_best_supersession_claimed": False,
+            "next_recommended_action": FAILED_NEXT_RECOMMENDED_ACTION,
+        }
+        payloads["failed_reader_state_evaluation_diagnostic"] = {
+            **common,
+            "worker": "failed_reader_state_evaluation_diagnostic_v1_controller",
+        }
+        artifacts["failed_reader_state_evaluation_diagnostic"] = writer.write_artifact(
+            "failed_reader_state_evaluation_diagnostic",
+            payloads["failed_reader_state_evaluation_diagnostic"],
+            parent_ids=list(subject.source_parent_ids),
+        )
+        payloads["failed_reader_state_evaluation_gate_report"] = {
+            **_source_fields(subject),
+            **validation_report,
+            "passed": False,
+            "eligible": False,
+            "reader_state_evaluation_executed": False,
+            "usable_for_synthesis": False,
+            "synthesis_authorized": False,
+            "current_best_updated": False,
+            "candidate_generated": False,
+            "generation_authorized": False,
+            "model_calls": len(model_results),
+            "unresolved_blockers": [message],
+            "finalization_eligible": False,
+            "no_final_claim": True,
+            "no_phase_shift_claim": True,
+            "strongest_rival_defeated_claimed": False,
+            "worker": "failed_reader_state_evaluation_gate_report_v1_controller",
+        }
+        artifacts["failed_reader_state_evaluation_gate_report"] = writer.write_artifact(
+            "failed_reader_state_evaluation_gate_report",
+            payloads["failed_reader_state_evaluation_gate_report"],
+            parent_ids=[artifacts["failed_reader_state_evaluation_diagnostic"].id],
+        )
+        counts = packet_artifact_count_summary(
+            required_artifact_types=(
+                FAILED_NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_ARTIFACT_TYPES
+            ),
+            produced_artifact_types=list(artifacts),
+            packet_artifact_type=(
+                "nonlocal_law_selected_target_reader_state_failed_evaluation_packet"
+            ),
+        )
+        payloads[
+            "nonlocal_law_selected_target_reader_state_failed_evaluation_packet"
+        ] = {
+            **common,
+            "packet_id": packet_dir.name,
+            "packet_dir": str(packet_dir),
+            "counts": {**counts, "model_calls": len(model_results)},
+            "artifact_ids": {
+                artifact_type: artifact.id
+                for artifact_type, artifact in artifacts.items()
+            },
+            "worker": (
+                "nonlocal_law_selected_target_reader_state_failed_evaluation_packet"
+                "_v1_controller"
+            ),
+        }
+        artifacts[
+            "nonlocal_law_selected_target_reader_state_failed_evaluation_packet"
+        ] = writer.write_artifact(
+            "nonlocal_law_selected_target_reader_state_failed_evaluation_packet",
+            payloads[
+                "nonlocal_law_selected_target_reader_state_failed_evaluation_packet"
+            ],
+            parent_ids=[
+                artifacts["failed_reader_state_evaluation_diagnostic"].id,
+                artifacts["failed_reader_state_evaluation_gate_report"].id,
+            ],
+        )
+    return NonlocalLawSelectedTargetReaderStateEvaluationResult(
+        exit_code=1,
+        payload={
+            **payloads[
+                "nonlocal_law_selected_target_reader_state_failed_evaluation_packet"
+            ],
+            "artifact_paths": {
+                artifact_type: str(packet_dir / f"{artifact_type}.json")
+                for artifact_type in artifacts
+            },
+            "validation_report": validation_report,
+        },
+        artifacts=tuple(artifacts.values()),
+        model_results=tuple(model_results),
+    )
+
+
+def _failed_validation_report(
+    model_results: list[ModelDriverResult],
+    message: str,
+) -> dict[str, object]:
+    latest_result = model_results[-1] if model_results else None
+    output_payload = (
+        _model_output_payload_for_result(latest_result)
+        if latest_result is not None
+        else {}
+    )
+    missing_ids = _missing_risk_probe_ids(output_payload)
+    validation_failures = [
+        latest_result.model_call.error_message
+        if latest_result is not None and latest_result.model_call.error_message
+        else message
+    ]
+    model_call_status = latest_result.model_call.status if latest_result else None
+    failure_class = (
+        RISK_PROBE_CONTRACT_FAILURE_CLASS
+        if missing_ids
+        else "selected_target_reader_state_live_validation_failure"
+    )
+    failure_reason = (
+        RISK_PROBE_CONTRACT_FAILURE_REASON
+        if missing_ids
+        else (
+            "structured_output_validation_failed"
+            if model_call_status == MODEL_CALL_VALIDATION_FAILED
+            else "controller_validation_failed"
+        )
+    )
+    return {
+        "model_call_status": model_call_status,
+        "failure_class": failure_class,
+        "failure_reason": failure_reason,
+        "validation_failures": validation_failures,
+        "missing_risk_probe_ids": missing_ids,
+        "missing_risk_probe_labels": [
+            SELECTED_READER_STATE_REQUIRED_RISK_PROBES[risk_id]
+            for risk_id in missing_ids
+        ],
+        "model_output_keys": sorted(output_payload),
+        "raw_output_path": (
+            latest_result.model_call.raw_output_path if latest_result is not None else None
+        ),
+    }
+
+
+def _missing_risk_probe_ids(output_payload: dict[str, object]) -> list[str]:
+    if not output_payload:
+        return []
+    by_id = output_payload.get("risk_probe_results_by_id")
+    if isinstance(by_id, dict):
+        present_ids = {str(risk_id) for risk_id in by_id}
+    elif isinstance(output_payload.get("risk_probe_results"), list):
+        present_ids = {
+            str(item.get("risk_id"))
+            for item in _object_items(output_payload.get("risk_probe_results"))
+            if item.get("risk_id") in REQUIRED_RISK_PROBE_IDS
+        }
+    else:
+        present_ids = set()
+    return [risk_id for risk_id in REQUIRED_RISK_PROBE_IDS if risk_id not in present_ids]
+
+
+def _model_output_payload_for_result(
+    model_result: ModelDriverResult | None,
+) -> dict[str, object]:
+    if model_result is None or model_result.model_call.raw_output_path is None:
+        return {}
+    try:
+        raw_output = Path(model_result.model_call.raw_output_path).read_text(
+            encoding="utf-8"
+        )
+        payload = json.loads(raw_output)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _write_payload_artifact(

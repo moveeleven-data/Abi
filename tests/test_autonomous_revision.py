@@ -231,7 +231,10 @@ from abi.modules.nonlocal_law_selected_target_candidate_ablation import (
     run_nonlocal_law_selected_target_candidate_ablation,
 )
 from abi.modules.nonlocal_law_selected_target_reader_state_evaluation import (
+    FAILED_NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_ARTIFACT_TYPES,
     NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_ARTIFACT_TYPES,
+    REQUIRED_RISK_PROBE_IDS as SELECTED_READER_STATE_REQUIRED_RISK_PROBE_IDS,
+    RISK_PROBE_CONTRACT_FAILURE_CLASS,
     FakeSelectedNonlocalLawCandidateReaderStateModelClient,
     run_nonlocal_law_selected_target_reader_state_evaluation,
 )
@@ -27909,6 +27912,15 @@ def assert_selected_nonlocal_law_reader_state_acceptance(
     assert result.payload["next_recommended_action"] == (
         "synthesize_selected_nonlocal_law_candidate_evidence"
     )
+    assert result.payload["risk_probe_count"] == 6
+    assert set(result.payload["risk_probe_results_by_id"]) == set(
+        SELECTED_READER_STATE_REQUIRED_RISK_PROBE_IDS
+    )
+    assert [row["risk_id"] for row in result.payload["risk_probe_results"]] == list(
+        SELECTED_READER_STATE_REQUIRED_RISK_PROBE_IDS
+    )
+    assert result.payload["all_required_risk_probes_present"] is True
+    assert result.payload["missing_risk_probe_ids"] == []
     assert set(result.payload["artifact_paths"]) == set(
         NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_ARTIFACT_TYPES
     )
@@ -27982,7 +27994,15 @@ def assert_selected_nonlocal_law_reader_state_acceptance(
 
     risks = read_payload(packet_dir / "selected_target_risk_probe_report.json")
     assert risks["risk_probe_count"] == 6
-    assert {row["risk_id"] for row in risks["risk_probe_results"]} == set(
+    assert [row["risk_id"] for row in risks["risk_probe_results"]] == list(
+        SELECTED_READER_STATE_REQUIRED_RISK_PROBE_IDS
+    )
+    assert set(risks["risk_probe_results_by_id"]) == set(
+        SELECTED_READER_STATE_REQUIRED_RISK_PROBE_IDS
+    )
+    assert risks["all_required_risk_probes_present"] is True
+    assert risks["missing_risk_probe_ids"] == []
+    assert {row["risk_label"] for row in risks["risk_probe_results"]} == set(
         SELECTED_NONLOCAL_LAW_ABLATION_RISKS
     )
 
@@ -28051,9 +28071,22 @@ def test_selected_nonlocal_law_reader_state_schema_and_prompt_contract():
     )
     assert_schema_objects_are_strict(schema)
     assert schema["properties"]["bridge_examples"]["additionalProperties"] is False
-    assert schema["properties"]["risk_probe_results"]["items"][
-        "additionalProperties"
-    ] is False
+    assert "risk_probe_results_by_id" in schema["required"]
+    risk_schema = schema["properties"]["risk_probe_results_by_id"]
+    assert risk_schema["additionalProperties"] is False
+    assert set(risk_schema["required"]) == set(SELECTED_READER_STATE_REQUIRED_RISK_PROBE_IDS)
+    assert set(risk_schema["properties"]) == set(
+        SELECTED_READER_STATE_REQUIRED_RISK_PROBE_IDS
+    )
+    for probe_schema in risk_schema["properties"].values():
+        assert probe_schema["additionalProperties"] is False
+        assert set(probe_schema["required"]) == {
+            "result",
+            "summary",
+            "evidence",
+            "risk_status",
+            "next_target_implication",
+        }
     for field_name in (
         "finality_claimed",
         "phase_shift_claimed",
@@ -28082,6 +28115,9 @@ def test_selected_nonlocal_law_reader_state_schema_and_prompt_contract():
     )("{}")
     assert "Evaluate reader-state effects only" in prompt
     assert "Do not generate" in prompt
+    assert "risk_probe_results_by_id" in prompt
+    assert "causal_mechanism_overexplained" in prompt
+    assert "object_field_delicacy_overloaded_by_causal_explanation" in prompt
 
 
 def test_selected_nonlocal_law_reader_state_fake_accepts_provisionally(tmp_path):
@@ -28478,7 +28514,7 @@ def test_selected_nonlocal_law_reader_state_refuses_invalid_ablation_surfaces(
         ("invalid_json", "invalid JSON"),
     ],
 )
-def test_selected_nonlocal_law_reader_state_validation_failures_register_no_artifacts(
+def test_selected_nonlocal_law_reader_state_validation_failures_write_failed_packet(
     tmp_path,
     mode,
     expected_failure,
@@ -28505,7 +28541,47 @@ def test_selected_nonlocal_law_reader_state_validation_failures_register_no_arti
     assert expected_failure in result.payload["message"]
     assert result.payload["model_calls"] == 1
     assert result.payload["reader_state_evaluation_executed"] is False
-    assert result.payload["artifact_paths"] == {}
+    assert result.payload["usable_for_synthesis"] is False
+    assert result.payload["synthesis_authorized"] is False
+    assert result.payload["current_best_updated"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert set(result.payload["artifact_paths"]) == set(
+        FAILED_NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_ARTIFACT_TYPES
+    )
+    failed_packet_dir = Path(str(result.payload["packet_dir"]))
+    assert failed_packet_dir.parent.name == (
+        "nonlocal_law_selected_target_reader_state_failed_evaluation"
+    )
+    diagnostic = read_payload(
+        failed_packet_dir / "failed_reader_state_evaluation_diagnostic.json"
+    )
+    failed_packet = read_payload(
+        failed_packet_dir
+        / "nonlocal_law_selected_target_reader_state_failed_evaluation_packet.json"
+    )
+    assert diagnostic["model_calls"] == 1
+    assert diagnostic["model_call_status"] == MODEL_CALL_VALIDATION_FAILED
+    assert diagnostic["reader_state_evaluation_executed"] is False
+    assert diagnostic["usable_for_synthesis"] is False
+    assert diagnostic["synthesis_authorized"] is False
+    assert diagnostic["current_best_updated"] is False
+    assert diagnostic["candidate_generated"] is False
+    assert diagnostic["generation_authorized"] is False
+    assert diagnostic["no_final_claim"] is True
+    assert diagnostic["no_phase_shift_claim"] is True
+    assert diagnostic["strongest_rival_defeated_claimed"] is False
+    assert failed_packet["next_recommended_action"] == (
+        "fix_selected_target_reader_state_risk_probe_contract_before_live_retry"
+    )
+    if mode == "missing_risk":
+        assert diagnostic["failure_class"] == RISK_PROBE_CONTRACT_FAILURE_CLASS
+        assert diagnostic["failure_reason"] == "missing_required_risk_probes"
+        assert diagnostic["missing_risk_probe_ids"] == [
+            "object_field_delicacy_overloaded_by_causal_explanation"
+        ]
+    else:
+        assert diagnostic["validation_failures"]
     with connect(config.db_path) as connection:
         calls = [
             call
@@ -28517,6 +28593,13 @@ def test_selected_nonlocal_law_reader_state_validation_failures_register_no_arti
     assert len(calls) == 1
     assert calls[0].status == MODEL_CALL_VALIDATION_FAILED
     assert calls[0].parsed_output_artifact_id is None
+    assert {
+        artifact.type
+        for artifact in artifacts
+        if Path(artifact.path).parent.name.startswith("packet_")
+        and Path(artifact.path).parent.parent.name
+        == "nonlocal_law_selected_target_reader_state_failed_evaluation"
+    } == set(FAILED_NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_ARTIFACT_TYPES)
     assert not [
         artifact
         for artifact in artifacts
@@ -28524,6 +28607,48 @@ def test_selected_nonlocal_law_reader_state_validation_failures_register_no_arti
         and Path(artifact.path).parent.parent.name
         == "nonlocal_law_selected_target_reader_state_evaluation"
     ]
+
+
+def test_selected_nonlocal_law_reader_state_failed_packet_does_not_block_retry(
+    tmp_path,
+):
+    config, ablation_packet, run_id, ablation_payload = (
+        build_selected_nonlocal_law_reader_state_ready_chain(tmp_path)
+    )
+    failed = run_nonlocal_law_selected_target_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-selected-reader-state-model",
+        client_factory=selected_nonlocal_law_reader_state_client_factory("missing_risk"),
+    )
+    assert failed.exit_code == 1
+    assert failed.payload["failure_class"] == RISK_PROBE_CONTRACT_FAILURE_CLASS
+
+    retry = run_nonlocal_law_selected_target_reader_state_evaluation(
+        config,
+        client_name="openai",
+        ablation_packet=ablation_packet,
+        operator_reviewed=True,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-selected-reader-state-model",
+        client_factory=selected_nonlocal_law_reader_state_client_factory(),
+    )
+
+    assert_selected_nonlocal_law_reader_state_acceptance(
+        config,
+        run_id,
+        retry,
+        ablation_payload,
+        expected_model_calls=1,
+    )
+    assert retry.payload["accepted"] is True
 
 
 def test_nonlocal_law_candidate_evidence_synthesis_cli_accepts(tmp_path, capsys):
