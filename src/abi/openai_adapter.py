@@ -26,6 +26,7 @@ from abi.model_schemas import (
     PILOT_RAW_MODEL_BASELINE_SCHEMA,
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
     SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA,
+    SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
     json_schema_for_worker_schema,
 )
 
@@ -168,6 +169,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_selected_nonlocal_law_target_generation_prompt
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return _build_nonlocal_law_candidate_reader_state_prompt
+    if schema == SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
+        return _build_selected_nonlocal_law_candidate_reader_state_prompt
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
         return _build_model_backed_local_law_rival_diagnostic_prompt
     return _build_live_packet_prompt
@@ -434,6 +437,29 @@ def _build_nonlocal_law_candidate_reader_state_prompt(input_text: str) -> str:
         "strongest_rival_defeated_claimed, candidate_superiority_claimed, and "
         "current_best_supersession_claimed to false. Output structured schema "
         "only. Prompt packet:\n"
+        f"{input_text}"
+    )
+
+
+def _build_selected_nonlocal_law_candidate_reader_state_prompt(input_text: str) -> str:
+    return (
+        "Return strict JSON matching the schema for "
+        "autonomous.selected_nonlocal_law_candidate_reader_state_evaluation.v1. "
+        "Evaluate reader-state effects only. Do not generate, rewrite, patch, "
+        "authorize generation, authorize synthesis, update current best, claim "
+        "candidate superiority as final proof, claim finality, claim phase shift, "
+        "or claim strongest-rival defeat. Central question: does packet_0001 "
+        "make object traces feel like active conditions for later perception, or "
+        "does it merely explain that object traces are active conditions? Compare "
+        "against packet_0002 controls and selected-target ablation controls. "
+        "Assess living event sequence, static trace reduction, causal bridges, "
+        "consequence before naming, overexplained mechanism risk, earned "
+        "explanation, packet_0002 gains preservation, non-imitation, strongest "
+        "rival pressure, and all risk probes. Keep synthesis_authorized, "
+        "current_best_updated, generation_recommended, finality_claimed, "
+        "phase_shift_claimed, strongest_rival_defeated_claimed, "
+        "current_best_supersession_claimed, and immediate_finalization_recommended "
+        "false. Output structured schema only. Prompt packet:\n"
         f"{input_text}"
     )
 

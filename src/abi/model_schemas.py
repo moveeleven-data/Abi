@@ -73,6 +73,9 @@ class WorkerRole(str, Enum):
     NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATOR = (
         "nonlocal_law_candidate_reader_state_evaluator"
     )
+    SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATOR = (
+        "selected_nonlocal_law_candidate_reader_state_evaluator"
+    )
     MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC = (
         "model_backed_local_law_rival_diagnostic"
     )
@@ -508,6 +511,12 @@ NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA = WorkerSchema(
     artifact_type="model_nonlocal_law_candidate_reader_state_evaluation",
 )
 
+SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA = WorkerSchema(
+    name="SelectedNonlocalLawCandidateReaderStateEvaluationOutput",
+    version="1",
+    artifact_type="model_selected_nonlocal_law_candidate_reader_state_evaluation",
+)
+
 MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA = WorkerSchema(
     name="ModelBackedLocalLawRivalDiagnosticOutput",
     version="1",
@@ -528,6 +537,7 @@ LOCAL_LAW_RIVAL_DIAGNOSTIC_MODEL_SCHEMAS = (
 
 NONLOCAL_LAW_CANDIDATE_READER_STATE_MODEL_SCHEMAS = (
     NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
+    SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
 )
 
 LIVE_MODEL_WORKER_SCHEMAS = (
@@ -2842,6 +2852,173 @@ def nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dict[str, An
     )
 
 
+def selected_nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dict[str, Any]:
+    safety_false = {
+        "type": "boolean",
+        "enum": [False],
+        "description": "Must be false; this worker evaluates only.",
+    }
+    result = {
+        "type": "string",
+        "enum": [
+            "improved",
+            "preserved",
+            "worsened",
+            "mixed",
+            "active_risk",
+            "narrowed_but_blocking",
+            "unsupported",
+            "requires_synthesis",
+        ],
+    }
+    rival_result = {
+        "type": "string",
+        "enum": [
+            "narrowed_but_blocking",
+            "unchanged_blocking",
+            "worsened",
+            "requires_synthesis",
+        ],
+    }
+    explanation_result = {
+        "type": "string",
+        "enum": ["true", "false", "mixed"],
+    }
+    bridge_examples = _object_schema(
+        {
+            "ring_grain": {"type": "string"},
+            "dust_bare_strip": {"type": "string"},
+            "spoon_saucer_crack": {"type": "string"},
+            "hum_order_of_seeing": {"type": "string"},
+        },
+        [
+            "ring_grain",
+            "dust_bare_strip",
+            "spoon_saucer_crack",
+            "hum_order_of_seeing",
+        ],
+    )
+    risk_item = _object_schema(
+        {
+            "risk_id": {"type": "string"},
+            "result": result,
+            "summary": {"type": "string"},
+            "evidence": {"type": "string"},
+        },
+        ["risk_id", "result", "summary", "evidence"],
+    )
+    return _schema_with_properties(
+        {
+            "living_event_sequence_result": result,
+            "living_event_sequence_summary": {"type": "string"},
+            "living_event_sequence_evidence": {"type": "string"},
+            "static_trace_reduction_result": result,
+            "static_trace_reduction_summary": {"type": "string"},
+            "static_trace_reduction_evidence": {"type": "string"},
+            "static_trace_comparison_to_packet_0002": {"type": "string"},
+            "remaining_static_trace_risk": {"type": "string"},
+            "causal_bridge_result": result,
+            "causal_bridge_summary": {"type": "string"},
+            "bridge_examples": bridge_examples,
+            "consequence_before_naming_result": result,
+            "consequence_before_naming_summary": {"type": "string"},
+            "before_naming_evidence": {"type": "string"},
+            "explanation_entry_point": {"type": "string"},
+            "risk_if_overstated": {"type": "string"},
+            "causal_mechanism_overexplained_result": result,
+            "causal_mechanism_overexplained_summary": {"type": "string"},
+            "overexplained_phrases": _string_array_schema(),
+            "risk_status": {"type": "string"},
+            "next_target_implication": {"type": "string"},
+            "explanation_earned_result": result,
+            "explanation_earned": explanation_result,
+            "explanation_earned_summary": {"type": "string"},
+            "explanation_abolished": safety_false,
+            "remaining_explicitness_risk": {"type": "string"},
+            "packet_0002_gains_preserved_result": result,
+            "preserved_strengths": _string_array_schema(),
+            "weakened_strengths": _string_array_schema(),
+            "object_field_preserved": {"type": "boolean"},
+            "proof_no_answer_pressure_preserved": {"type": "boolean"},
+            "return_structure_preserved": {"type": "boolean"},
+            "non_imitation_result": result,
+            "rival_imitation_detected": safety_false,
+            "forbidden_rival_hits": _string_array_schema(),
+            "forbidden_rival_mode_hits": _string_array_schema(),
+            "non_imitation_evidence": {"type": "string"},
+            "strongest_rival_pressure_result": rival_result,
+            "strongest_rival_remains_blocking": {"type": "boolean"},
+            "strongest_rival_defeated_claimed": safety_false,
+            "pressure_summary": {"type": "string"},
+            "overall_selected_target_reader_state_result": result,
+            "reader_state_summary": {"type": "string"},
+            "risk_probe_results": {"type": "array", "items": risk_item},
+            "synthesis_recommendation": {"type": "string"},
+            "finality_claimed": safety_false,
+            "phase_shift_claimed": safety_false,
+            "current_best_supersession_claimed": safety_false,
+            "generation_recommended": safety_false,
+            "immediate_finalization_recommended": safety_false,
+            "synthesis_authorized": safety_false,
+            "current_best_updated": safety_false,
+        },
+        [
+            "living_event_sequence_result",
+            "living_event_sequence_summary",
+            "living_event_sequence_evidence",
+            "static_trace_reduction_result",
+            "static_trace_reduction_summary",
+            "static_trace_reduction_evidence",
+            "static_trace_comparison_to_packet_0002",
+            "remaining_static_trace_risk",
+            "causal_bridge_result",
+            "causal_bridge_summary",
+            "bridge_examples",
+            "consequence_before_naming_result",
+            "consequence_before_naming_summary",
+            "before_naming_evidence",
+            "explanation_entry_point",
+            "risk_if_overstated",
+            "causal_mechanism_overexplained_result",
+            "causal_mechanism_overexplained_summary",
+            "overexplained_phrases",
+            "risk_status",
+            "next_target_implication",
+            "explanation_earned_result",
+            "explanation_earned",
+            "explanation_earned_summary",
+            "explanation_abolished",
+            "remaining_explicitness_risk",
+            "packet_0002_gains_preserved_result",
+            "preserved_strengths",
+            "weakened_strengths",
+            "object_field_preserved",
+            "proof_no_answer_pressure_preserved",
+            "return_structure_preserved",
+            "non_imitation_result",
+            "rival_imitation_detected",
+            "forbidden_rival_hits",
+            "forbidden_rival_mode_hits",
+            "non_imitation_evidence",
+            "strongest_rival_pressure_result",
+            "strongest_rival_remains_blocking",
+            "strongest_rival_defeated_claimed",
+            "pressure_summary",
+            "overall_selected_target_reader_state_result",
+            "reader_state_summary",
+            "risk_probe_results",
+            "synthesis_recommendation",
+            "finality_claimed",
+            "phase_shift_claimed",
+            "current_best_supersession_claimed",
+            "generation_recommended",
+            "immediate_finalization_recommended",
+            "synthesis_authorized",
+            "current_best_updated",
+        ],
+    )
+
+
 def model_backed_local_law_rival_diagnostic_json_schema() -> dict[str, Any]:
     finding_schema = _local_law_diagnostic_finding_schema()
     return _schema_with_properties(
@@ -3006,6 +3183,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return selected_nonlocal_law_target_generation_json_schema()
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return nonlocal_law_candidate_reader_state_evaluation_json_schema()
+    if schema == SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
+        return selected_nonlocal_law_candidate_reader_state_evaluation_json_schema()
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
         return model_backed_local_law_rival_diagnostic_json_schema()
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
@@ -3123,6 +3302,10 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_selected_nonlocal_law_target_generation(payload)
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return _validate_nonlocal_law_candidate_reader_state_evaluation(payload)
+    if schema == SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
+        return _validate_selected_nonlocal_law_candidate_reader_state_evaluation(
+            payload
+        )
     if schema == MODEL_BACKED_LOCAL_LAW_RIVAL_DIAGNOSTIC_SCHEMA:
         return _validate_model_backed_local_law_rival_diagnostic(payload)
     raise ModelValidationError(f"unknown worker schema: {schema.name} v{schema.version}")
@@ -5034,6 +5217,171 @@ def _validate_nonlocal_law_candidate_reader_state_evaluation(
     }
 
 
+def _validate_selected_nonlocal_law_candidate_reader_state_evaluation(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_fields = {
+        "living_event_sequence_result",
+        "living_event_sequence_summary",
+        "living_event_sequence_evidence",
+        "static_trace_reduction_result",
+        "static_trace_reduction_summary",
+        "static_trace_reduction_evidence",
+        "static_trace_comparison_to_packet_0002",
+        "remaining_static_trace_risk",
+        "causal_bridge_result",
+        "causal_bridge_summary",
+        "bridge_examples",
+        "consequence_before_naming_result",
+        "consequence_before_naming_summary",
+        "before_naming_evidence",
+        "explanation_entry_point",
+        "risk_if_overstated",
+        "causal_mechanism_overexplained_result",
+        "causal_mechanism_overexplained_summary",
+        "overexplained_phrases",
+        "risk_status",
+        "next_target_implication",
+        "explanation_earned_result",
+        "explanation_earned",
+        "explanation_earned_summary",
+        "explanation_abolished",
+        "remaining_explicitness_risk",
+        "packet_0002_gains_preserved_result",
+        "preserved_strengths",
+        "weakened_strengths",
+        "object_field_preserved",
+        "proof_no_answer_pressure_preserved",
+        "return_structure_preserved",
+        "non_imitation_result",
+        "rival_imitation_detected",
+        "forbidden_rival_hits",
+        "forbidden_rival_mode_hits",
+        "non_imitation_evidence",
+        "strongest_rival_pressure_result",
+        "strongest_rival_remains_blocking",
+        "strongest_rival_defeated_claimed",
+        "pressure_summary",
+        "overall_selected_target_reader_state_result",
+        "reader_state_summary",
+        "risk_probe_results",
+        "synthesis_recommendation",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "current_best_supersession_claimed",
+        "generation_recommended",
+        "immediate_finalization_recommended",
+        "synthesis_authorized",
+        "current_best_updated",
+    }
+    extra_fields = sorted(set(payload) - allowed_fields)
+    if extra_fields:
+        raise ModelValidationError(
+            "selected nonlocal law candidate reader-state evaluation contains "
+            f"unsupported fields: {extra_fields}"
+        )
+    result_fields = (
+        "living_event_sequence_result",
+        "static_trace_reduction_result",
+        "causal_bridge_result",
+        "consequence_before_naming_result",
+        "causal_mechanism_overexplained_result",
+        "explanation_earned_result",
+        "packet_0002_gains_preserved_result",
+        "non_imitation_result",
+        "overall_selected_target_reader_state_result",
+    )
+    for field in result_fields:
+        _require_type(payload, field, str)
+        _require_enum_value(payload[field], field, _SELECTED_READER_STATE_RESULTS)
+    _require_type(payload, "strongest_rival_pressure_result", str)
+    _require_enum_value(
+        payload["strongest_rival_pressure_result"],
+        "strongest_rival_pressure_result",
+        (
+            "narrowed_but_blocking",
+            "unchanged_blocking",
+            "worsened",
+            "requires_synthesis",
+        ),
+    )
+    _require_type(payload, "explanation_earned", str)
+    _require_enum_value(
+        payload["explanation_earned"],
+        "explanation_earned",
+        ("true", "false", "mixed"),
+    )
+    string_fields = (
+        "living_event_sequence_summary",
+        "living_event_sequence_evidence",
+        "static_trace_reduction_summary",
+        "static_trace_reduction_evidence",
+        "static_trace_comparison_to_packet_0002",
+        "remaining_static_trace_risk",
+        "causal_bridge_summary",
+        "consequence_before_naming_summary",
+        "before_naming_evidence",
+        "explanation_entry_point",
+        "risk_if_overstated",
+        "causal_mechanism_overexplained_summary",
+        "risk_status",
+        "next_target_implication",
+        "explanation_earned_summary",
+        "remaining_explicitness_risk",
+        "non_imitation_evidence",
+        "pressure_summary",
+        "reader_state_summary",
+        "synthesis_recommendation",
+    )
+    for field in string_fields:
+        _require_type(payload, field, str)
+        if not payload[field].strip():
+            raise ModelValidationError(f"{field} must not be empty")
+    bridge = _validate_object(
+        payload.get("bridge_examples"),
+        "bridge_examples",
+        ("ring_grain", "dust_bare_strip", "spoon_saucer_crack", "hum_order_of_seeing"),
+    )
+    _require_nonempty_strings(bridge, "bridge_examples")
+    for field in ("overexplained_phrases", "preserved_strengths", "weakened_strengths"):
+        _require_string_list(payload, field)
+    _require_type(payload, "object_field_preserved", bool)
+    _require_type(payload, "proof_no_answer_pressure_preserved", bool)
+    _require_type(payload, "return_structure_preserved", bool)
+    _require_false(payload, "explanation_abolished")
+    _require_false(payload, "rival_imitation_detected")
+    _require_string_list(payload, "forbidden_rival_hits")
+    _require_string_list(payload, "forbidden_rival_mode_hits")
+    if payload["forbidden_rival_hits"]:
+        raise ModelValidationError("forbidden_rival_hits must be empty")
+    if payload["forbidden_rival_mode_hits"]:
+        raise ModelValidationError("forbidden_rival_mode_hits must be empty")
+    _require_type(payload, "strongest_rival_remains_blocking", bool)
+    if payload["strongest_rival_remains_blocking"] is not True:
+        raise ModelValidationError("strongest_rival_remains_blocking must be true")
+    for field in (
+        "strongest_rival_defeated_claimed",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "current_best_supersession_claimed",
+        "generation_recommended",
+        "immediate_finalization_recommended",
+        "synthesis_authorized",
+        "current_best_updated",
+    ):
+        _require_false(payload, field)
+    risks = _validate_selected_reader_state_risk_probes(payload)
+    return {
+        **{
+            field: payload[field]
+            for field in allowed_fields
+            if field not in {"bridge_examples", "risk_probe_results"}
+        },
+        "bridge_examples": bridge,
+        "risk_probe_results": risks,
+    }
+
+
 def _validate_reader_state_observation(
     value: object,
     label: str,
@@ -5050,6 +5398,61 @@ def _validate_reader_state_observation(
     )
     _require_nonempty_strings(observation, label)
     return observation
+
+
+_SELECTED_READER_STATE_RESULTS = (
+    "improved",
+    "preserved",
+    "worsened",
+    "mixed",
+    "active_risk",
+    "narrowed_but_blocking",
+    "unsupported",
+    "requires_synthesis",
+)
+
+_SELECTED_READER_STATE_REQUIRED_RISK_IDS = (
+    "causal mechanism may be overexplained",
+    '"room begins to instruct" may be too declarative',
+    '"later seeing must be changed" may name the law too directly',
+    "chemistry register remains unresolved",
+    "conclusion may still summarize law instead of enacting return",
+    "object-field delicacy may be overloaded by causal explanation",
+)
+
+
+def _validate_selected_reader_state_risk_probes(
+    payload: dict[str, Any],
+) -> list[dict[str, str]]:
+    key = "risk_probe_results"
+    _require_object_list(payload, key)
+    risks = []
+    for index, item in enumerate(payload[key]):
+        risk = _validate_object(
+            item,
+            f"{key}[{index}]",
+            ("risk_id", "result", "summary", "evidence"),
+        )
+        _require_enum_value(
+            risk["result"],
+            f"{key}[{index}].result",
+            _SELECTED_READER_STATE_RESULTS,
+        )
+        _require_nonempty_strings(risk, f"{key}[{index}]")
+        risks.append(risk)
+    if not risks:
+        raise ModelValidationError("risk_probe_results must not be empty")
+    seen_risk_ids = {risk["risk_id"] for risk in risks}
+    missing_risks = [
+        risk_id
+        for risk_id in _SELECTED_READER_STATE_REQUIRED_RISK_IDS
+        if risk_id not in seen_risk_ids
+    ]
+    if missing_risks:
+        raise ModelValidationError(
+            "missing risk probes: " + ", ".join(missing_risks)
+        )
+    return risks
 
 
 def _validate_nonlocal_reader_state_comparison(value: object) -> dict[str, str]:

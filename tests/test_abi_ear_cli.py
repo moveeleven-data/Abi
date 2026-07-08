@@ -59,6 +59,7 @@ def test_source_uses_no_model_or_api_client_imports():
             Path("src/abi/modules/nonlocal_law_candidate_reader_state_evaluation.py"),
             Path("src/abi/modules/nonlocal_law_guided_candidate_generation.py"),
             Path("src/abi/modules/nonlocal_law_selected_target_candidate_generation.py"),
+            Path("src/abi/modules/nonlocal_law_selected_target_reader_state_evaluation.py"),
             Path("src/abi/modules/object_event_recomposition.py"),
         Path("src/abi/modules/residual_candidate_generation.py"),
         Path("src/abi/modules/live_abi_ear.py"),

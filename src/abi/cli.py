@@ -108,6 +108,11 @@ from abi.modules.nonlocal_law_selected_target_candidate_generation import (
 from abi.modules.nonlocal_law_selected_target_candidate_ablation import (
     run_nonlocal_law_selected_target_candidate_ablation,
 )
+from abi.modules.nonlocal_law_selected_target_reader_state_evaluation import (
+    NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_CLIENTS,
+    NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_MAX_MODEL_CALLS_DEFAULT,
+    run_nonlocal_law_selected_target_reader_state_evaluation,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -808,6 +813,40 @@ def build_parser() -> argparse.ArgumentParser:
         "--operator-reviewed",
         action="store_true",
         help="Confirm the operator reviewed the accepted selected-target candidate.",
+    )
+    autonomous_selected_nonlocal_law_reader_state_parser = (
+        autonomous_subparsers.add_parser(
+            "evaluate-selected-nonlocal-law-candidate-reader-state",
+            help="Evaluate selected-target candidate reader-state effects",
+        )
+    )
+    autonomous_selected_nonlocal_law_reader_state_parser.add_argument(
+        "--client",
+        choices=NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_CLIENTS,
+        required=True,
+        help="Selected-target reader-state evaluation client path.",
+    )
+    autonomous_selected_nonlocal_law_reader_state_parser.add_argument(
+        "--ablation-packet",
+        type=Path,
+        required=True,
+        help="Selected-target candidate ablation packet directory.",
+    )
+    autonomous_selected_nonlocal_law_reader_state_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the selected-target ablation packet.",
+    )
+    autonomous_selected_nonlocal_law_reader_state_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_selected_nonlocal_law_reader_state_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model calls allowed for guarded live-model paths.",
     )
     autonomous_nonlocal_law_authorization_parser = autonomous_subparsers.add_parser(
         "authorize-nonlocal-law-generation",
@@ -1513,6 +1552,19 @@ def main(argv: list[str] | None = None) -> int:
             config,
             candidate_packet=args.candidate_packet,
             operator_reviewed=args.operator_reviewed,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command
+        == "evaluate-selected-nonlocal-law-candidate-reader-state"
+    ):
+        return _cmd_autonomous_evaluate_selected_nonlocal_law_candidate_reader_state(
+            config,
+            client_name=args.client,
+            ablation_packet=args.ablation_packet,
+            operator_reviewed=args.operator_reviewed,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
         )
     if args.command == "autonomous" and args.autonomous_command == "authorize-next-cycle":
         return _cmd_autonomous_authorize_next_cycle(
@@ -2271,6 +2323,27 @@ def _cmd_autonomous_ablate_selected_nonlocal_law_candidate(
         config,
         candidate_packet=candidate_packet,
         operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_evaluate_selected_nonlocal_law_candidate_reader_state(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    ablation_packet: Path,
+    operator_reviewed: bool,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_nonlocal_law_selected_target_reader_state_evaluation(
+        config,
+        client_name=client_name,
+        ablation_packet=ablation_packet,
+        operator_reviewed=operator_reviewed,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
