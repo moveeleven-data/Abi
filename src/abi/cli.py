@@ -116,6 +116,9 @@ from abi.modules.nonlocal_law_selected_target_reader_state_evaluation import (
 from abi.modules.nonlocal_law_selected_target_evidence_synthesis import (
     run_nonlocal_law_selected_target_evidence_synthesis,
 )
+from abi.modules.nonlocal_law_selected_target_cycle_consolidation import (
+    run_selected_target_cycle_consolidation,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -1024,6 +1027,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm the operator reviewed the loop-review packet.",
     )
+    autonomous_consolidate_selected_target_loop_parser = (
+        autonomous_subparsers.add_parser(
+            "consolidate-selected-target-loop",
+            help="Consolidate selected-target loop learning without generation",
+        )
+    )
+    autonomous_consolidate_selected_target_loop_parser.add_argument(
+        "--loop-review-packet",
+        type=Path,
+        required=True,
+        help="Corrected selected-target loop-review packet directory.",
+    )
+    autonomous_consolidate_selected_target_loop_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the selected-target loop-review packet.",
+    )
     autonomous_select_nonlocal_law_target_parser = (
         autonomous_subparsers.add_parser(
             "select-nonlocal-law-target",
@@ -1521,6 +1541,15 @@ def main(argv: list[str] | None = None) -> int:
         and args.autonomous_command == "consolidate-nonlocal-law-cycle"
     ):
         return _cmd_autonomous_consolidate_nonlocal_law_cycle(
+            config,
+            loop_review_packet=args.loop_review_packet,
+            operator_reviewed=args.operator_reviewed,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "consolidate-selected-target-loop"
+    ):
+        return _cmd_autonomous_consolidate_selected_target_loop(
             config,
             loop_review_packet=args.loop_review_packet,
             operator_reviewed=args.operator_reviewed,
@@ -2269,6 +2298,21 @@ def _cmd_autonomous_consolidate_nonlocal_law_cycle(
     operator_reviewed: bool,
 ) -> int:
     result = run_nonlocal_law_cycle_consolidation(
+        config,
+        loop_review_packet=loop_review_packet,
+        operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_consolidate_selected_target_loop(
+    config: AbiConfig,
+    *,
+    loop_review_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_selected_target_cycle_consolidation(
         config,
         loop_review_packet=loop_review_packet,
         operator_reviewed=operator_reviewed,
