@@ -93,6 +93,9 @@ from abi.modules.nonlocal_law_cycle_consolidation import (
 from abi.modules.nonlocal_law_consolidated_target_selection import (
     run_nonlocal_law_consolidated_target_selection,
 )
+from abi.modules.nonlocal_law_selected_target_work_order import (
+    run_nonlocal_law_selected_target_work_order_planning,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -707,6 +710,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--operator-reviewed",
         action="store_true",
         help="Confirm the operator reviewed the nonlocal strategy packet.",
+    )
+    autonomous_selected_nonlocal_law_work_order_parser = (
+        autonomous_subparsers.add_parser(
+            "plan-selected-nonlocal-law-work-order",
+            help="Plan a work order from a selected nonlocal law target",
+        )
+    )
+    autonomous_selected_nonlocal_law_work_order_parser.add_argument(
+        "--target-selection-packet",
+        type=Path,
+        required=True,
+        help="Corrected nonlocal law target-selection packet directory to consume.",
+    )
+    autonomous_selected_nonlocal_law_work_order_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the selected target packet.",
     )
     autonomous_nonlocal_law_authorization_parser = autonomous_subparsers.add_parser(
         "authorize-nonlocal-law-generation",
@@ -1372,6 +1392,15 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autonomous_select_nonlocal_law_target(
             config,
             consolidation_packet=args.consolidation_packet,
+            operator_reviewed=args.operator_reviewed,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "plan-selected-nonlocal-law-work-order"
+    ):
+        return _cmd_autonomous_plan_selected_nonlocal_law_work_order(
+            config,
+            target_selection_packet=args.target_selection_packet,
             operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "authorize-next-cycle":
@@ -2064,6 +2093,21 @@ def _cmd_autonomous_select_nonlocal_law_target(
     result = run_nonlocal_law_consolidated_target_selection(
         config,
         consolidation_packet=consolidation_packet,
+        operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_plan_selected_nonlocal_law_work_order(
+    config: AbiConfig,
+    *,
+    target_selection_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
         operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))

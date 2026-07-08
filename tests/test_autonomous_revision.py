@@ -203,6 +203,11 @@ from abi.modules.nonlocal_law_consolidated_target_selection import (
     SELECTED_TARGET_SEED_ID as NONLOCAL_LAW_SELECTED_TARGET_SEED_ID,
     run_nonlocal_law_consolidated_target_selection,
 )
+from abi.modules.nonlocal_law_selected_target_work_order import (
+    NONLOCAL_LAW_SELECTED_TARGET_WORK_ORDER_ARTIFACT_TYPES,
+    TARGET_UNIT_IDS as NONLOCAL_LAW_SELECTED_TARGET_UNIT_IDS,
+    run_nonlocal_law_selected_target_work_order_planning,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -25505,6 +25510,719 @@ def test_nonlocal_law_consolidated_target_selection_cli_accepts(tmp_path, capsys
     assert payload["selected_target_count"] == 1
     assert payload["work_order_created"] is False
     assert payload["generation_authorized"] is False
+    assert payload["model_calls"] == 0
+
+
+def build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path):
+    config, consolidation_packet, _stale_packet, run_id = (
+        build_nonlocal_law_consolidated_target_selection_ready_packet(tmp_path)
+    )
+    stale_selection = run_nonlocal_law_consolidated_target_selection(
+        config,
+        consolidation_packet=consolidation_packet,
+        operator_reviewed=True,
+    )
+    assert stale_selection.exit_code == 0
+    assert stale_selection.payload["packet_id"] == "packet_0001"
+    stale_selection_packet = Path(str(stale_selection.payload["packet_dir"]))
+    degrade_nonlocal_law_consolidated_target_selection_work_order_surface(
+        stale_selection_packet
+    )
+    corrected_selection = run_nonlocal_law_consolidated_target_selection(
+        config,
+        consolidation_packet=consolidation_packet,
+        operator_reviewed=True,
+    )
+    assert corrected_selection.exit_code == 0
+    assert corrected_selection.payload["packet_id"] == "packet_0002"
+    return (
+        config,
+        Path(str(corrected_selection.payload["packet_dir"])),
+        stale_selection_packet,
+        run_id,
+    )
+
+
+def degrade_nonlocal_law_selected_target_work_order_authorization_surface(
+    packet_dir: Path,
+) -> None:
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    packet_fields = (
+        "work_order_summary",
+        "free_rewrite_allowed",
+        "generation_allowed",
+        "repair_steps",
+        "do_not_solve_by",
+        "living_event_sequence_definition",
+        "prior_packet_0063_preserved",
+        "forbidden_rival_sequence",
+        "forbidden_rival_modes",
+        "rival_imitation_forbidden",
+        "materiality_requirements",
+        "semantic_validation_requirements",
+        "source_chain_coherent",
+        "no_generation_path_introduced",
+        "no_model_call_introduced",
+        "no_candidate_introduced",
+        "no_finality_claim",
+        "ready_for_selected_target_generation_authorization",
+        "generation_authorization_allowed_decisions",
+    )
+    rewrite_payload(
+        packet_dir / "nonlocal_law_selected_target_work_order_packet.json",
+        remove_fields(*packet_fields),
+    )
+    rewrite_payload(
+        packet_dir / "selected_target_work_order_scope.json",
+        remove_fields(
+            "summary",
+            "work_order_summary",
+            "free_rewrite_allowed",
+            "generation_allowed",
+            "work_order_bounded",
+            "work_order_authorizes_generation",
+            "generation_requires_separate_authorization",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "living_event_sequence_repair_map.json",
+        remove_fields(
+            "repair_steps",
+            "do_not_solve_by",
+            "living_event_sequence_definition",
+            "causal_sequence_not_object_inventory",
+            "object_events_must_condition_later_perception",
+            "explanation_must_remain_earned",
+            "rival_imitation_forbidden",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "prior_current_best_packet_0063_preservation_report.json",
+        remove_fields(
+            "packet_0063_preserved_as_history",
+            "preservation_summary",
+            "packet_0063_not_restored_as_current_best",
+            "packet_0063_proof_and_reader_state_preserved",
+            "packet_0063_object_tactile_gains_preserved_as_reference",
+            "prior_packet_0063_preserved",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "forbidden_rival_imitation_inventory.json",
+        remove_fields(
+            "rival_imitation_forbidden",
+            "forbidden_rival_objects_or_sequence",
+            "forbidden_rival_imitation_modes",
+            "forbidden_regressions",
+            "selected_target_must_not_copy_rival_causal_sequence",
+            "non_imitation_constraints_passed",
+            "forbidden_rival_sequence",
+            "forbidden_rival_modes",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "materiality_and_semantic_validation_plan.json",
+        remove_fields(
+            "materiality_requirements",
+            "semantic_validation_requirements",
+            "validation_required_before_candidate_evidence",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "project_health_scope_guard_report.json",
+        remove_fields(
+            "source_chain_coherent",
+            "source_target_selection_accepted",
+            "source_target_selection_current_valid",
+            "selected_target_exact",
+            "selected_risk_exact",
+            "no_generation_path_introduced",
+            "no_model_call_introduced",
+            "no_candidate_introduced",
+            "no_finality_claim",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "future_generation_contract.json",
+        remove_fields(
+            "ready_for_selected_target_generation_authorization",
+            "generation_authorization_requires_operator_review",
+            "generation_authorization_allowed_decisions",
+            "selected_target_seed_id",
+            "selected_risk_id",
+        ),
+    )
+
+
+def test_nonlocal_law_selected_target_work_order_accepts_corrected_selection(
+    tmp_path,
+):
+    config, target_selection_packet, _stale_selection, run_id = (
+        build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert set(result.payload["artifact_ids"]) == set(
+        NONLOCAL_LAW_SELECTED_TARGET_WORK_ORDER_ARTIFACT_TYPES
+    )
+    assert result.payload["packet_id"] == "packet_0001"
+    assert result.payload["source_target_selection_packet_id"] == "packet_0002"
+    assert result.payload["source_consolidation_packet_id"] == "packet_0002"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0002"
+    assert result.payload["source_synthesis_packet_id"] == "packet_0002"
+    assert result.payload["source_reader_state_packet_id"] == "packet_0002"
+    assert result.payload["source_candidate_packet_id"] == "packet_0002"
+    assert result.payload["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["current_best_for_next_loop_packet_id"] == "packet_0002"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["selected_target_seed_id"] == (
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    )
+    assert result.payload["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert result.payload["work_order_kind"] == (
+        "selected_nonlocal_law_target_work_order"
+    )
+    assert result.payload["work_order_scope"] == "living_event_sequence_repair"
+    assert result.payload["work_order_created"] is True
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["superseded_work_order_packet_id"] is None
+    assert result.payload["supersession_reason"] is None
+    assert result.payload["work_order_summary"]
+    assert result.payload["free_rewrite_allowed"] is False
+    assert result.payload["generation_allowed"] is False
+    assert result.payload["repair_steps"]
+    assert result.payload["do_not_solve_by"]
+    assert result.payload["living_event_sequence_definition"]
+    assert result.payload["prior_packet_0063_preserved"] is True
+    assert result.payload["forbidden_rival_sequence"]
+    assert result.payload["forbidden_rival_modes"]
+    assert result.payload["rival_imitation_forbidden"] is True
+    assert result.payload["materiality_requirements"]
+    assert result.payload["semantic_validation_requirements"]
+    assert result.payload["source_chain_coherent"] is True
+    assert result.payload["no_generation_path_introduced"] is True
+    assert result.payload["no_model_call_introduced"] is True
+    assert result.payload["no_candidate_introduced"] is True
+    assert result.payload["no_finality_claim"] is True
+    assert result.payload["ready_for_selected_target_generation_authorization"] is True
+    assert result.payload["generation_authorization_allowed_decisions"] == [
+        "authorize_one_bounded_selected_target_generation",
+        "refuse_generation_authorization",
+    ]
+    assert result.payload["next_recommended_action"] == (
+        "review_selected_target_work_order_before_generation_authorization"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    scope = read_payload(packet_dir / "selected_target_work_order_scope.json")
+    assert scope["summary"]
+    assert scope["work_order_summary"] == scope["summary"]
+    assert scope["target_statement"].startswith("Convert packet_0002")
+    assert "Object traces should not merely report finished events" in scope[
+        "core_repair_principle"
+    ]
+    assert scope["free_rewrite_allowed"] is False
+    assert scope["generation_allowed"] is False
+    assert scope["work_order_bounded"] is True
+    assert scope["work_order_authorizes_generation"] is False
+    assert scope["generation_requires_separate_authorization"] is True
+    assert "simply adding more incidents" in scope["do_not_solve_by"]
+    assert "copying rival causal sequence" in scope["do_not_solve_by"]
+
+    repair = read_payload(packet_dir / "living_event_sequence_repair_map.json")
+    assert repair["living_event_sequence_definition"].startswith(
+        "A living event sequence"
+    )
+    assert repair["repair_steps"]
+    assert "treating object inventory as living causality" in repair[
+        "do_not_solve_by"
+    ]
+    assert repair["selected_target_seed_id"] == NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    assert repair["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert repair["causal_sequence_not_object_inventory"] is True
+    assert repair["object_events_must_condition_later_perception"] is True
+    assert repair["explanation_must_remain_earned"] is True
+    assert repair["rival_imitation_forbidden"] is True
+
+    units = read_payload(packet_dir / "selected_target_unit_map.json")
+    assert units["target_unit_ids"] == list(NONLOCAL_LAW_SELECTED_TARGET_UNIT_IDS)
+    assert len(units["target_units"]) == 7
+    assert {unit["unit_id"] for unit in units["target_units"]} == set(
+        NONLOCAL_LAW_SELECTED_TARGET_UNIT_IDS
+    )
+    assert all(unit["material_change_required"] for unit in units["target_units"])
+    assert all(
+        unit["semantic_validation_requirement"] for unit in units["target_units"]
+    )
+    assert all(unit["protected_strengths"] for unit in units["target_units"])
+    assert all(unit["forbidden_regressions"] for unit in units["target_units"])
+
+    protected = read_payload(
+        packet_dir / "protected_current_best_packet_0002_strengths.json"
+    )
+    assert "first-read pressure improved" in protected["protected_strengths"]
+    assert "object-event consequence improved" in protected["protected_strengths"]
+    assert "explanation timing improved" in protected["protected_strengths"]
+    assert "reread return improved" in protected["protected_strengths"]
+    assert "non-imitation passed" in protected["protected_strengths"]
+    assert "table/ring/dust/spoon/saucer/light field" in protected[
+        "protected_strengths"
+    ]
+    assert protected["proof_packet_id"] == "packet_0034"
+    assert protected["prior_reader_state_packet_id"] == "packet_0013"
+
+    prior = read_payload(
+        packet_dir / "prior_current_best_packet_0063_preservation_report.json"
+    )
+    assert prior["packet_0063_preserved_as_history"] is True
+    assert prior["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert prior["current_best_for_next_loop_packet_id"] == "packet_0002"
+    assert prior["proof_packet_id"] == "packet_0034"
+    assert prior["prior_reader_state_packet_id"] == "packet_0013"
+    assert prior["preservation_summary"]
+    assert prior["packet_0063_remains_prior_current_best_history"] is True
+    assert prior["packet_0063_restored_as_current_best"] is False
+    assert prior["packet_0063_not_restored_as_current_best"] is True
+    assert prior["packet_0063_proof_and_reader_state_chain_preserved"] is True
+    assert prior["packet_0063_proof_and_reader_state_preserved"] is True
+    assert prior["packet_0063_object_tactile_gains_protected_reference"] is True
+    assert prior["packet_0063_object_tactile_gains_preserved_as_reference"] is True
+    assert prior["prior_packet_0063_preserved"] is True
+
+    rival = read_payload(packet_dir / "forbidden_rival_imitation_inventory.json")
+    assert rival["strongest_rival_remains_blocking"] is True
+    assert rival["strongest_rival_defeated_claimed"] is False
+    assert "rival causal sequence" in rival["forbidden_rival_inventory"]
+    assert rival["rival_imitation_forbidden"] is True
+    assert "cup" in rival["forbidden_rival_objects_or_sequence"]
+    assert "cup-return sequence" in rival["forbidden_rival_objects_or_sequence"]
+    assert "rival diction" in rival["forbidden_rival_imitation_modes"]
+    assert rival["forbidden_regressions"]
+    assert rival["selected_target_must_not_copy_rival_causal_sequence"] is True
+    assert rival["non_imitation_constraints_passed"] is True
+    assert rival["forbidden_rival_sequence"] == rival[
+        "forbidden_rival_objects_or_sequence"
+    ]
+    assert rival["forbidden_rival_modes"] == rival["forbidden_rival_imitation_modes"]
+
+    carry = read_payload(packet_dir / "non_selected_risk_carry_forward_report.json")
+    carried_ids = {risk["risk_id"] for risk in carry["non_selected_risks"]}
+    assert carried_ids == {
+        "explanation_may_arrive_too_explicitly",
+        "chemistry_register_risk",
+        "conclusion_may_summarize_law",
+    }
+    assert carry["carried_forward_not_resolved"] is True
+
+    contract = read_payload(packet_dir / "future_generation_contract.json")
+    assert contract["generation_contract_version"] == 1
+    assert contract["prompt_contract_id"] == (
+        "autonomous.selected_nonlocal_law_target_generation.v1"
+    )
+    assert contract["materiality_policy_id"] == (
+        "selected_nonlocal_law_target_materiality_v1"
+    )
+    assert contract["semantic_validator_id"] == (
+        "selected_nonlocal_law_target_semantic_validator_v1"
+    )
+    assert contract["schema"] == "SelectedNonlocalLawTargetGenerationOutput@1"
+    assert contract["future_generation_requires_separate_authorization"] is True
+    assert contract["future_generation_authorized"] is False
+    assert contract["generation_attempt_budget"] == 0
+    assert contract["ready_for_generation_authorization_review"] is True
+    assert contract["ready_for_selected_target_generation_authorization"] is True
+    assert contract["generation_authorization_requires_operator_review"] is True
+    assert contract["generation_authorization_allowed_decisions"] == [
+        "authorize_one_bounded_selected_target_generation",
+        "refuse_generation_authorization",
+    ]
+    assert contract["selected_target_seed_id"] == NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    assert contract["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert contract["generation_authorization_decision_required"] is True
+
+    validation = read_payload(
+        packet_dir / "materiality_and_semantic_validation_plan.json"
+    )
+    assert "materially convert static trace into active condition" in validation[
+        "materiality_requirements"
+    ]
+    assert "living_event_sequence_present" in validation[
+        "semantic_validation_requirements"
+    ]
+    assert validation["validation_required_before_candidate_evidence"] is True
+    assert validation["selected_target_seed_id"] == NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    assert validation["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert "living_event_sequence_present" in validation[
+        "required_validation_checks"
+    ]
+    assert "static_retrospective_trace_reduced" in validation[
+        "required_validation_checks"
+    ]
+    assert "non_imitation_passed" in validation["required_validation_checks"]
+    assert "no_finality_or_phase_shift_claim" in validation[
+        "required_validation_checks"
+    ]
+
+    evidence = read_payload(packet_dir / "ablation_and_reader_eval_plan.json")
+    assert "full_selected_target_intervention" in evidence["ablation_controls"]
+    assert "revert_to_packet_0002" in evidence["ablation_controls"]
+    assert "strongest_rival_comparison" in evidence["ablation_controls"]
+    assert "do object traces become active conditions?" in evidence[
+        "reader_state_focus"
+    ]
+
+    gate = read_payload(packet_dir / "selected_target_work_order_gate_report.json")
+    assert gate["passed"] is False
+    assert gate["work_order_created"] is True
+    assert gate["generation_authorized"] is False
+    assert gate["candidate_generated"] is False
+    assert gate["model_calls"] == 0
+    assert "strongest rival remains blocking" in gate["unresolved_blockers"]
+
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["project_health_scope_guard_passed"] is True
+    assert health["source_chain_coherent"] is True
+    assert health["source_target_selection_accepted"] is True
+    assert health["source_target_selection_current_valid"] is True
+    assert health["selected_target_exact"] is True
+    assert health["selected_risk_exact"] is True
+    assert health["work_order_created"] is True
+    assert health["no_generation_path_introduced"] is True
+    assert health["no_model_call_introduced"] is True
+    assert health["no_candidate_introduced"] is True
+    assert health["no_finality_claim"] is True
+    assert health["no_phase_shift_claim"] is True
+    assert health["no_strongest_rival_defeat_claim"] is True
+    assert health["generation_authorized"] is False
+    assert health["candidate_generated"] is False
+    assert health["model_calls"] == 0
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+        final_report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert final_report.refused is True
+
+
+def test_nonlocal_law_selected_target_work_order_supersedes_stale_authorization_surface(
+    tmp_path,
+):
+    config, target_selection_packet, _stale_selection, _run_id = (
+        build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path)
+    )
+    stale = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_packet_dir = Path(str(stale.payload["packet_dir"]))
+    degrade_nonlocal_law_selected_target_work_order_authorization_surface(
+        stale_packet_dir
+    )
+
+    successor = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+
+    assert successor.exit_code == 0
+    assert successor.payload["accepted"] is True
+    assert successor.payload["packet_id"] == "packet_0002"
+    assert successor.payload["superseded_work_order_packet_id"] == "packet_0001"
+    assert (
+        successor.payload["supersession_reason"]
+        == "nonlocal_law_selected_target_work_order_authorization_surface_missing"
+    )
+    assert "packet.work_order_summary" in successor.payload[
+        "stale_work_order_surface_failures"
+    ]
+    assert successor.payload["selected_target_seed_id"] == (
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    )
+    assert successor.payload["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert successor.payload["work_order_created"] is True
+    assert successor.payload["work_order_summary"]
+    assert successor.payload["free_rewrite_allowed"] is False
+    assert successor.payload["generation_allowed"] is False
+    assert successor.payload["repair_steps"]
+    assert successor.payload["do_not_solve_by"]
+    assert successor.payload["living_event_sequence_definition"]
+    assert successor.payload["prior_packet_0063_preserved"] is True
+    assert successor.payload["forbidden_rival_sequence"]
+    assert successor.payload["forbidden_rival_modes"]
+    assert successor.payload["rival_imitation_forbidden"] is True
+    assert successor.payload["materiality_requirements"]
+    assert successor.payload["semantic_validation_requirements"]
+    assert successor.payload["source_chain_coherent"] is True
+    assert successor.payload["no_generation_path_introduced"] is True
+    assert successor.payload["no_model_call_introduced"] is True
+    assert successor.payload["no_candidate_introduced"] is True
+    assert successor.payload["no_finality_claim"] is True
+    assert successor.payload["ready_for_selected_target_generation_authorization"] is True
+    assert successor.payload["generation_authorization_allowed_decisions"] == [
+        "authorize_one_bounded_selected_target_generation",
+        "refuse_generation_authorization",
+    ]
+    assert successor.payload["generation_authorized"] is False
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["model_calls"] == 0
+
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    scope = read_payload(successor_dir / "selected_target_work_order_scope.json")
+    assert scope["work_order_summary"]
+    assert scope["free_rewrite_allowed"] is False
+    assert scope["generation_allowed"] is False
+    repair = read_payload(successor_dir / "living_event_sequence_repair_map.json")
+    assert repair["repair_steps"]
+    assert repair["living_event_sequence_definition"]
+    health = read_payload(successor_dir / "project_health_scope_guard_report.json")
+    assert health["source_chain_coherent"] is True
+    assert health["no_generation_path_introduced"] is True
+    assert health["no_model_call_introduced"] is True
+    assert health["no_candidate_introduced"] is True
+    assert health["no_finality_claim"] is True
+
+    duplicate = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "work order already exists" in duplicate.payload["message"]
+    assert duplicate.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_work_order_requires_operator_review(
+    tmp_path,
+):
+    config, target_selection_packet, _stale_selection, _run_id = (
+        build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path)
+    )
+
+    result = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--operator-reviewed is required" in result.payload["message"]
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_work_order_refuses_stale_selection_packet(
+    tmp_path,
+):
+    config, _target_selection_packet, stale_selection, _run_id = (
+        build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path)
+    )
+
+    result = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=stale_selection,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "target-selection packet is stale or superseded" in result.payload[
+        "message"
+    ]
+    assert result.payload["work_order_created"] is False
+    assert result.payload["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("artifact_name", "field_name", "value", "message_fragment"),
+    [
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "selected_target_seed_id",
+            "wrong_target",
+            "selected_target_seed_id must be",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "selected_risk_id",
+            "wrong_risk",
+            "selected_risk_id must be",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "current_best_for_next_loop_packet_id",
+            "packet_0063",
+            "current_best_for_next_loop_packet_id must be packet_0002",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "prior_current_best_candidate_packet_id",
+            "packet_bad",
+            "prior_current_best_candidate_packet_id must be packet_0063",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "selected_target_does_not_universalize_law",
+            False,
+            "selected_target_does_not_universalize_law must be true",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "source_chain_coherent",
+            False,
+            "source_chain_coherent must be true",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "ready_for_selected_target_work_order_planning",
+            False,
+            "ready_for_selected_target_work_order_planning must be true",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "work_order_created",
+            True,
+            "claim appears",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "generation_authorized",
+            True,
+            "claim appears",
+        ),
+        (
+            "strongest_rival_blocker_carry_forward_report",
+            "strongest_rival_remains_blocking",
+            False,
+            "strongest_rival_remains_blocking must be true",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "strongest_rival_defeated_claimed",
+            True,
+            "claim appears",
+        ),
+        (
+            "nonlocal_law_consolidated_target_selection_packet",
+            "phase_shift_claimed",
+            True,
+            "claim appears",
+        ),
+    ],
+)
+def test_nonlocal_law_selected_target_work_order_refuses_invalid_source_fields(
+    tmp_path,
+    artifact_name,
+    field_name,
+    value,
+    message_fragment,
+):
+    config, target_selection_packet, _stale_selection, _run_id = (
+        build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path)
+    )
+    copied = tmp_path / f"bad_selected_target_work_order_{field_name}"
+    shutil.copytree(target_selection_packet, copied)
+    rewrite_payload(
+        copied / f"{artifact_name}.json",
+        lambda payload: payload.__setitem__(field_name, value),
+    )
+
+    result = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=copied,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert message_fragment in result.payload["message"]
+    assert result.payload["work_order_created"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_work_order_refuses_duplicate(tmp_path):
+    config, target_selection_packet, _stale_selection, _run_id = (
+        build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path)
+    )
+    first = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert first.exit_code == 0
+
+    duplicate = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "work order already exists" in duplicate.payload["message"]
+    assert duplicate.payload["work_order_created"] is False
+    assert duplicate.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_work_order_cli_accepts(tmp_path, capsys):
+    _config, target_selection_packet, _stale_selection, _run_id = (
+        build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "plan-selected-nonlocal-law-work-order",
+            "--target-selection-packet",
+            str(target_selection_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["source_target_selection_packet_id"] == "packet_0002"
+    assert payload["selected_target_seed_id"] == NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    assert payload["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert payload["work_order_created"] is True
+    assert payload["generation_authorized"] is False
+    assert payload["candidate_generated"] is False
     assert payload["model_calls"] == 0
 
 
