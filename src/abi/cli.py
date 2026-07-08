@@ -105,6 +105,9 @@ from abi.modules.nonlocal_law_selected_target_candidate_generation import (
     NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
     run_nonlocal_law_selected_target_candidate_generation,
 )
+from abi.modules.nonlocal_law_selected_target_candidate_ablation import (
+    run_nonlocal_law_selected_target_candidate_ablation,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -788,6 +791,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model calls allowed for guarded live-model paths.",
+    )
+    autonomous_selected_nonlocal_law_candidate_ablation_parser = (
+        autonomous_subparsers.add_parser(
+            "ablate-selected-nonlocal-law-candidate",
+            help="Create deterministic ablation controls for a selected-target candidate",
+        )
+    )
+    autonomous_selected_nonlocal_law_candidate_ablation_parser.add_argument(
+        "--candidate-packet",
+        type=Path,
+        required=True,
+        help="Accepted selected nonlocal-law candidate packet directory.",
+    )
+    autonomous_selected_nonlocal_law_candidate_ablation_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the accepted selected-target candidate.",
     )
     autonomous_nonlocal_law_authorization_parser = autonomous_subparsers.add_parser(
         "authorize-nonlocal-law-generation",
@@ -1484,6 +1504,15 @@ def main(argv: list[str] | None = None) -> int:
             authorization_packet=args.authorization_packet,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "ablate-selected-nonlocal-law-candidate"
+    ):
+        return _cmd_autonomous_ablate_selected_nonlocal_law_candidate(
+            config,
+            candidate_packet=args.candidate_packet,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "authorize-next-cycle":
         return _cmd_autonomous_authorize_next_cycle(
@@ -2227,6 +2256,21 @@ def _cmd_autonomous_generate_selected_nonlocal_law_candidate(
         authorization_packet=authorization_packet,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_ablate_selected_nonlocal_law_candidate(
+    config: AbiConfig,
+    *,
+    candidate_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_nonlocal_law_selected_target_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code

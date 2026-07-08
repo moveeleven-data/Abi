@@ -221,6 +221,14 @@ from abi.modules.nonlocal_law_selected_target_candidate_generation import (
     FakeSelectedNonlocalLawTargetGenerationModelClient,
     run_nonlocal_law_selected_target_candidate_generation,
 )
+from abi.modules.nonlocal_law_selected_target_candidate_ablation import (
+    ABLATION_CONTROL_IDS as SELECTED_NONLOCAL_LAW_CANDIDATE_ABLATION_CONTROLS,
+    LAW_BEARING_CHOICES as SELECTED_NONLOCAL_LAW_ABLATION_CHOICES,
+    NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_ABLATION_ARTIFACT_TYPES,
+    NEXT_RECOMMENDED_ACTION as SELECTED_NONLOCAL_LAW_ABLATION_NEXT_ACTION,
+    RISKS_TO_TEST as SELECTED_NONLOCAL_LAW_ABLATION_RISKS,
+    run_nonlocal_law_selected_target_candidate_ablation,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -27487,6 +27495,325 @@ def test_selected_nonlocal_law_candidate_generation_duplicate_refuses(tmp_path):
     assert duplicate.payload["authorization_consumed"] is False
     assert duplicate.payload["candidate_generated"] is False
     assert duplicate.payload["model_calls"] == 0
+
+
+def build_selected_nonlocal_law_candidate_ablation_ready_chain(tmp_path):
+    config, authorization_packet, _stale_authorization_packet, run_id = (
+        build_selected_nonlocal_law_candidate_generation_ready_chain(tmp_path)
+    )
+    generation = run_nonlocal_law_selected_target_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="stub-key",
+        model="stub-selected-target-model",
+        client_factory=selected_nonlocal_law_candidate_client_factory(),
+    )
+    candidate_packet = assert_selected_nonlocal_law_candidate_acceptance(
+        config,
+        run_id,
+        generation,
+        expected_model_calls=1,
+    )
+    return config, candidate_packet, run_id
+
+
+def assert_selected_nonlocal_law_candidate_ablation_acceptance(
+    config: AbiConfig,
+    run_id: str,
+    result,
+) -> Path:
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["ablation_executed"] is True
+    assert result.payload["source_candidate_packet_id"] == "packet_0001"
+    assert result.payload["source_authorization_packet_id"] == "packet_0002"
+    assert result.payload["source_work_order_packet_id"] == "packet_0002"
+    assert result.payload["source_target_selection_packet_id"] == "packet_0002"
+    assert result.payload["source_consolidation_packet_id"] == "packet_0002"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0002"
+    assert result.payload["source_base_candidate_packet_id"] == "packet_0002"
+    assert result.payload["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["selected_target_seed_id"] == (
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    )
+    assert result.payload["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert result.payload["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["reader_state_evaluation_authorized"] is False
+    assert result.payload["synthesis_authorized"] is False
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["next_recommended_action"] == (
+        SELECTED_NONLOCAL_LAW_ABLATION_NEXT_ACTION
+    )
+    assert set(result.payload["artifact_paths"]) == set(
+        NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_ABLATION_ARTIFACT_TYPES
+    )
+    assert result.payload["counts"]["model_calls"] == 0
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "nonlocal_law_selected_target_candidate_ablation"
+    for artifact_type in NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_ABLATION_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    intake = read_payload(packet_dir / "source_candidate_intake_summary.json")
+    assert intake["accepted_candidate"] is True
+    assert intake["model_backed"] is True
+    assert intake["model_calls"] == 1
+    assert intake["authorization_consumed"] is True
+    assert intake["candidate_generated"] is True
+    assert intake["text_extracted_from"] == "generated_candidate_text.payload.text"
+    assert intake["selected_target_diff_surface_missing"] is True
+    assert intake["non_imitation_pass_alias_missing"] is True
+    assert intake["normalized_from_validation_report"] is True
+    assert intake["normalized_non_imitation_passed"] is True
+    assert intake["ablation_warranted"] is True
+
+    normalization = read_payload(
+        packet_dir / "selected_target_diff_normalization_report.json"
+    )
+    assert normalization["normalization_needed"] is True
+    assert normalization["safe_for_ablation"] is True
+    assert normalization["normalized_changed_regions"] == [
+        "opening perceptual ordering",
+        "ring/grain relation",
+        "dust ridge/bare strip relation",
+        "spoon tick/saucer crack relation",
+        "refrigerator hum as causal trigger",
+        "light crossing fracture/table field",
+        "explanation after object-event sequence",
+    ]
+    assert "earned explanation timing" in normalization["normalized_preserved_regions"]
+    assert normalization["source_target_unit_change_report"]
+
+    matrix = read_payload(packet_dir / "selected_target_ablation_control_matrix.json")
+    assert matrix["control_ids"] == list(
+        SELECTED_NONLOCAL_LAW_CANDIDATE_ABLATION_CONTROLS
+    )
+    assert matrix["control_count"] == 7
+    assert matrix["deterministic_text_transformations_created"] is False
+
+    law_map = read_payload(packet_dir / "law_bearing_choice_map.json")
+    assert law_map["law_bearing_choices"] == list(
+        SELECTED_NONLOCAL_LAW_ABLATION_CHOICES
+    )
+    assert law_map["risks_to_test"] == list(SELECTED_NONLOCAL_LAW_ABLATION_RISKS)
+    assert "causal mechanism may be overexplained" in law_map["risks_to_test"]
+    assert "chemistry register remains unresolved" in law_map["risks_to_test"]
+
+    readiness = read_payload(packet_dir / "reader_state_eval_readiness_report.json")
+    assert readiness["ready_for_reader_state_evaluation"] is True
+    assert readiness["reader_state_evaluation_authorized"] is False
+    assert readiness["reader_state_evaluation_requires_separate_command"] is True
+    assert readiness["recommended_next_action"] == (
+        "evaluate_selected_nonlocal_law_candidate_reader_state"
+    )
+
+    gate = read_payload(packet_dir / "selected_target_candidate_ablation_gate_report.json")
+    passed = {row["gate_name"] for row in gate["gate_results"] if row["passed"]}
+    failed = {row["gate_name"] for row in gate["gate_results"] if not row["passed"]}
+    assert "normalized_handoff_surfaces_present" in passed
+    assert "no_model_calls_by_ablation" in passed
+    assert "reader_state_evaluation_authorized" in failed
+    assert "synthesis_authorized" in failed
+    assert "strongest_rival_resolved" in failed
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+    return packet_dir
+
+
+def test_selected_nonlocal_law_candidate_ablation_accepts_packet_0001_like_candidate(
+    tmp_path,
+):
+    config, candidate_packet, run_id = (
+        build_selected_nonlocal_law_candidate_ablation_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_selected_target_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+        operator_reviewed=True,
+    )
+
+    assert_selected_nonlocal_law_candidate_ablation_acceptance(
+        config,
+        run_id,
+        result,
+    )
+
+
+def test_selected_nonlocal_law_candidate_ablation_cli_accepts(tmp_path, capsys):
+    _config, candidate_packet, _run_id = (
+        build_selected_nonlocal_law_candidate_ablation_ready_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "ablate-selected-nonlocal-law-candidate",
+            "--candidate-packet",
+            str(candidate_packet),
+            "--operator-reviewed",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["ablation_executed"] is True
+    assert payload["model_calls"] == 0
+    assert payload["candidate_generated"] is False
+
+
+def test_selected_nonlocal_law_candidate_ablation_requires_operator_review(tmp_path):
+    config, candidate_packet, _run_id = (
+        build_selected_nonlocal_law_candidate_ablation_ready_chain(tmp_path)
+    )
+
+    result = run_nonlocal_law_selected_target_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["ablation_executed"] is False
+    assert result.payload["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "mutator", "expected_message"),
+    [
+        (
+            "nonlocal_law_selected_target_candidate_packet",
+            lambda payload: payload.update({"accepted": False}),
+            "accepted must be true",
+        ),
+        (
+            "generated_candidate_text",
+            lambda payload: payload.update({"text": ""}),
+            "payload.text missing or empty",
+        ),
+        (
+            "nonlocal_law_selected_target_candidate_packet",
+            lambda payload: payload.update({"authorization_consumed": False}),
+            "authorization_consumed must be true",
+        ),
+        (
+            "nonlocal_law_selected_target_candidate_packet",
+            lambda payload: payload.update({"model_calls": 2}),
+            "model_calls must be 1",
+        ),
+        (
+            "nonlocal_law_selected_target_candidate_packet",
+            lambda payload: payload.update({"selected_target_seed_id": "wrong"}),
+            "selected_target_seed_id must be",
+        ),
+        (
+            "nonlocal_law_selected_target_candidate_packet",
+            lambda payload: payload.update({"selected_risk_id": "wrong"}),
+            "selected_risk_id must be",
+        ),
+        (
+            "nonlocal_law_selected_target_candidate_packet",
+            lambda payload: payload["validation_report"].update(
+                {"validation_passed": False}
+            ),
+            "validation_passed must be true",
+        ),
+        (
+            "nonlocal_law_selected_target_candidate_packet",
+            lambda payload: payload["validation_report"].update(
+                {"forbidden_rival_hits": ["cup"]}
+            ),
+            "forbidden rival hits",
+        ),
+    ],
+)
+def test_selected_nonlocal_law_candidate_ablation_refuses_invalid_candidate_surfaces(
+    tmp_path,
+    artifact_type,
+    mutator,
+    expected_message,
+):
+    config, candidate_packet, _run_id = (
+        build_selected_nonlocal_law_candidate_ablation_ready_chain(tmp_path)
+    )
+    rewrite_payload(candidate_packet / f"{artifact_type}.json", mutator)
+
+    result = run_nonlocal_law_selected_target_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+    assert result.payload["candidate_generated"] is False
+
+
+def test_selected_nonlocal_law_candidate_ablation_refuses_unrecoverable_non_imitation(
+    tmp_path,
+):
+    config, candidate_packet, _run_id = (
+        build_selected_nonlocal_law_candidate_ablation_ready_chain(tmp_path)
+    )
+    rewrite_payload(
+        candidate_packet / "non_imitation_validation_report.json",
+        lambda payload: payload.update({"passed": False}),
+    )
+
+    result = run_nonlocal_law_selected_target_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+        operator_reviewed=True,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "non-imitation cannot be recovered" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+
+
+def test_selected_nonlocal_law_candidate_ablation_duplicate_refuses(tmp_path):
+    config, candidate_packet, run_id = (
+        build_selected_nonlocal_law_candidate_ablation_ready_chain(tmp_path)
+    )
+    first = run_nonlocal_law_selected_target_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+        operator_reviewed=True,
+    )
+    assert_selected_nonlocal_law_candidate_ablation_acceptance(config, run_id, first)
+
+    duplicate = run_nonlocal_law_selected_target_candidate_ablation(
+        config,
+        candidate_packet=candidate_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "ablation packet already exists" in duplicate.payload["message"]
+    assert duplicate.payload["model_calls"] == 0
+    assert duplicate.payload["candidate_generated"] is False
 
 
 def test_nonlocal_law_candidate_evidence_synthesis_cli_accepts(tmp_path, capsys):
