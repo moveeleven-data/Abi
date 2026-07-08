@@ -203,7 +203,7 @@ SELECTED_TARGET_NEXT_RECOMMENDED_ACTION = (
     "consolidate_selected_target_loop_before_next_target_selection"
 )
 SELECTED_TARGET_LOOP_REVIEW_SUPERSESSION_REASON = (
-    "selected_target_loop_review_handoff_surface_missing"
+    "selected_target_loop_review_consolidation_surface_missing"
 )
 SELECTED_TARGET_EVIDENCE_SUMMARY = (
     "packet_0001 improves the selected target over packet_0002 by making object "
@@ -277,21 +277,25 @@ SELECTED_TARGET_NEXT_CYCLE_TARGET_OPTIONS = (
         "reduce_causal_mechanism_naming",
         "causal_mechanism_overexplained",
         "preserve living-event sequence while making causal relations felt with less explicit mechanism language.",
+        "consolidate before selecting; likely first next target if consolidation preserves ranking.",
     ),
     (
         "enact_return_instead_of_summarizing_law",
         "conclusion_summarizes_instead_of_enacts_return",
         "make the ending return through the altered object field rather than restating the law.",
+        "carry as high-priority next-cycle target option.",
     ),
     (
         "integrate_or_remove_chemistry_register",
         "chemistry_register_unresolved",
         "decide whether chemistry belongs to the local physics or imports an alien register.",
+        "carry as register-risk target option.",
     ),
     (
         "protect_object_field_delicacy",
         "object_field_delicacy_overloaded_by_causal_explanation",
         "keep causal activity without over-instrumenting the object field.",
+        "carry as delicacy-preservation target option.",
     ),
 )
 SELECTED_TARGET_RIVAL_BLOCKER_WHY = (
@@ -1189,12 +1193,19 @@ def _build_selected_target_prior_working_preservation(
         "new_working_current_best_candidate_packet_id": (
             SELECTED_TARGET_EXPECTED_SOURCE_CANDIDATE_PACKET_ID
         ),
+        "current_best_for_next_loop_packet_id": (
+            SELECTED_TARGET_EXPECTED_SOURCE_CANDIDATE_PACKET_ID
+        ),
         "prior_current_best_candidate_packet_id": (
             SELECTED_TARGET_EXPECTED_PRIOR_CURRENT_BEST_PACKET_ID
         ),
         "prior_working_current_best_preserved_as_history": True,
+        "prior_current_best_preserved_as_history": True,
         "packet_0002_not_erased": True,
+        "packet_0063_not_erased": True,
         "packet_0063_preserved_as_prior_current_best_history": True,
+        "packet_0001_not_final": True,
+        "current_best_transition_not_finalization": True,
         "preservation_reason": (
             "selected-target synthesis does not erase packet_0002 or mutate global "
             "current-best state."
@@ -1327,15 +1338,20 @@ def _build_selected_target_rival_blocker_status(
 def _build_selected_target_next_cycle_seed(
     subject: SelectedTargetLoopReviewSubject,
 ) -> dict[str, object]:
+    options = _selected_target_next_cycle_target_options(subject)
     return {
         **_selected_target_source_fields(subject),
-        "next_cycle_target_options": _selected_target_next_cycle_target_options(subject),
+        "next_cycle_target_options": options,
+        "target_seed_options_exposed": True,
+        "target_seed_option_ids": [option["target_seed_id"] for option in options],
         "recommended_next_target_seed": None,
         "target_selected_for_next_cycle": False,
+        "next_target_not_selected": True,
         "do_not_generate_yet": True,
         "do_not_create_work_order_yet": True,
         "cycle_consolidation_required_before_next_repair": True,
         "target_selection_requires_cycle_consolidation": True,
+        "consolidation_required_before_next_target_selection": True,
         "recommended_next_action": SELECTED_TARGET_NEXT_RECOMMENDED_ACTION,
         "next_recommended_action": SELECTED_TARGET_NEXT_RECOMMENDED_ACTION,
         "current_best_updated": True,
@@ -1387,6 +1403,9 @@ def _build_selected_target_gate_report(
         "prior_working_current_best_preserved",
         "active_risks_carried_forward",
         "strongest_rival_remains_blocking",
+        "target_seed_options_exposed",
+        "next_target_not_selected",
+        "consolidation_required_before_next_target_selection",
         "no_generation",
         "no_candidate",
         "no_model_calls",
@@ -1441,6 +1460,11 @@ def _build_selected_target_gate_report(
         "generation_authorized": False,
         "candidate_generated": False,
         "model_calls": 0,
+        "target_seed_options_exposed": True,
+        "next_target_not_selected": True,
+        "consolidation_required_before_next_target_selection": True,
+        "no_candidate_generated_by_loop_review": True,
+        "no_model_calls_by_loop_review": True,
         "finalization_eligible": False,
         "gate_results": gate_results,
         "passed_gates": list(pass_gates),
@@ -1462,6 +1486,7 @@ def _build_selected_target_health_report(
         "source_chain_coherent": True,
         "no_generation_path_introduced": True,
         "no_model_call_introduced": True,
+        "no_candidate_introduced": True,
         "no_candidate_text_mutation": True,
         "current_best_state_mutation_performed": False,
         "global_state_mutation_performed": False,
@@ -1469,11 +1494,14 @@ def _build_selected_target_health_report(
         "finalization_eligible": False,
         "no_finality_claim": True,
         "no_phase_shift_claim": True,
+        "no_strongest_rival_defeat_claim": True,
         "strongest_rival_remains_blocking": True,
         "candidate_generated": False,
         "generation_authorized": False,
         "work_order_created": False,
+        "no_work_order_introduced": True,
         "target_selected_for_next_cycle": False,
+        "no_target_selection_introduced": True,
         "model_calls": 0,
         "worker": "project_health_scope_guard_report_v1_controller",
     }
@@ -1534,6 +1562,7 @@ def _build_selected_target_loop_review_packet(
         "finalization_allowed": False,
         "prior_working_current_best_preserved_as_history": True,
         "prior_current_best_preserved_as_history": True,
+        "prior_historical_current_best_preserved": True,
         "prior_preservation_summary": payloads[
             "prior_working_current_best_preservation_report"
         ]["summary"],
@@ -1551,18 +1580,32 @@ def _build_selected_target_loop_review_packet(
         "next_cycle_target_options": payloads["next_cycle_target_seed_report"][
             "next_cycle_target_options"
         ],
+        "target_seed_options_exposed": True,
+        "target_seed_option_ids": [
+            option["target_seed_id"]
+            for option in payloads["next_cycle_target_seed_report"][
+                "next_cycle_target_options"
+            ]
+        ],
         "recommended_next_target_seed": None,
         "target_selected_for_next_cycle": False,
+        "next_target_not_selected": True,
         "work_order_created": False,
         "cycle_consolidation_required_before_next_repair": True,
         "target_selection_requires_cycle_consolidation": True,
+        "consolidation_required_before_next_target_selection": True,
         "ready_for_cycle_consolidation": True,
         "candidate_generated": False,
         "generation_authorized": False,
+        "no_candidate_introduced": True,
+        "no_generation_path_introduced": True,
+        "no_model_call_introduced": True,
         "model_calls": 0,
         "finalization_eligible": False,
         "no_final_claim": True,
+        "no_finality_claim": True,
         "no_phase_shift_claim": True,
+        "no_strongest_rival_defeat_claim": True,
         "next_recommended_action": SELECTED_TARGET_NEXT_RECOMMENDED_ACTION,
         "gate_report": payloads["selected_target_loop_review_gate_report"],
         "worker": "nonlocal_law_selected_target_loop_review_packet_v1_controller",
@@ -2353,6 +2396,9 @@ def _selected_target_source_fields(
         "prior_current_best_candidate_packet_id": packet.get(
             "prior_current_best_candidate_packet_id"
         ),
+        "prior_historical_current_best_candidate_packet_id": packet.get(
+            "prior_current_best_candidate_packet_id"
+        ),
         "law_id": packet.get("law_id"),
         "selected_target_seed_id": packet.get("selected_target_seed_id"),
         "selected_risk_id": packet.get("selected_risk_id"),
@@ -2377,13 +2423,20 @@ def _selected_target_next_cycle_target_options(
         {
             "rank": rank,
             "option_id": option_id,
+            "target_seed_id": option_id,
             "source_risk_id": source_risk_id,
             "target_summary": target_summary,
+            "recommended_next_handling": recommended_next_handling,
             "requires_cycle_consolidation_before_selection": True,
             "candidate_generation_authorized": False,
             "work_order_created": False,
         }
-        for rank, (option_id, source_risk_id, target_summary) in enumerate(
+        for rank, (
+            option_id,
+            source_risk_id,
+            target_summary,
+            recommended_next_handling,
+        ) in enumerate(
             SELECTED_TARGET_NEXT_CYCLE_TARGET_OPTIONS,
             start=1,
         )
@@ -2521,9 +2574,57 @@ def _selected_target_loop_review_surface_failures(
     ):
         failures.append("packet.current_best_for_next_loop_packet_id")
     require_bool(packet_payload, "global_state_mutation_performed", False, "packet")
+    require_bool(
+        packet_payload,
+        "prior_historical_current_best_preserved",
+        True,
+        "packet",
+    )
+    require_bool(packet_payload, "target_seed_options_exposed", True, "packet")
+    require_list(packet_payload, "target_seed_option_ids", "packet")
+    require_bool(packet_payload, "next_target_not_selected", True, "packet")
+    require_bool(
+        packet_payload,
+        "consolidation_required_before_next_target_selection",
+        True,
+        "packet",
+    )
+    require_bool(packet_payload, "no_candidate_introduced", True, "packet")
+    require_bool(packet_payload, "no_generation_path_introduced", True, "packet")
+    require_bool(packet_payload, "no_model_call_introduced", True, "packet")
+    require_bool(packet_payload, "no_finality_claim", True, "packet")
+    require_bool(
+        packet_payload,
+        "no_strongest_rival_defeat_claim",
+        True,
+        "packet",
+    )
     require_bool(packet_payload, "target_selected_for_next_cycle", False, "packet")
     require_bool(packet_payload, "work_order_created", False, "packet")
     require_list(packet_payload, "next_cycle_target_options", "packet")
+    packet_options = packet_payload.get("next_cycle_target_options")
+    if isinstance(packet_options, list):
+        expected_option_ids = [
+            option[0] for option in SELECTED_TARGET_NEXT_CYCLE_TARGET_OPTIONS
+        ]
+        packet_option_ids: list[str] = []
+        for option in packet_options:
+            if not isinstance(option, dict):
+                failures.append("packet.next_cycle_target_options.item")
+                continue
+            target_seed_id = _string_value(option.get("target_seed_id"))
+            if not target_seed_id:
+                failures.append("packet.next_cycle_target_options.target_seed_id")
+            else:
+                packet_option_ids.append(target_seed_id)
+            if not _string_value(option.get("recommended_next_handling")):
+                failures.append(
+                    "packet.next_cycle_target_options.recommended_next_handling"
+                )
+        if packet_option_ids != expected_option_ids:
+            failures.append("packet.next_cycle_target_options.order")
+        if packet_payload.get("target_seed_option_ids") != expected_option_ids:
+            failures.append("packet.target_seed_option_ids")
     if packet_payload.get("recommended_next_target_seed") is not None:
         failures.append("packet.recommended_next_target_seed")
     require_bool(
@@ -2557,6 +2658,36 @@ def _selected_target_loop_review_surface_failures(
     require_bool(
         preservation,
         "packet_0002_not_erased",
+        True,
+        "prior_working_current_best_preservation_report",
+    )
+    require_bool(
+        preservation,
+        "prior_working_current_best_preserved_as_history",
+        True,
+        "prior_working_current_best_preservation_report",
+    )
+    require_bool(
+        preservation,
+        "prior_current_best_preserved_as_history",
+        True,
+        "prior_working_current_best_preservation_report",
+    )
+    require_bool(
+        preservation,
+        "packet_0063_not_erased",
+        True,
+        "prior_working_current_best_preservation_report",
+    )
+    require_bool(
+        preservation,
+        "packet_0001_not_final",
+        True,
+        "prior_working_current_best_preservation_report",
+    )
+    require_bool(
+        preservation,
+        "current_best_transition_not_finalization",
         True,
         "prior_working_current_best_preservation_report",
     )
@@ -2619,8 +2750,52 @@ def _selected_target_loop_review_surface_failures(
 
     seed = payload_for("next_cycle_target_seed_report")
     require_list(seed, "next_cycle_target_options", "next_cycle_target_seed_report")
+    require_bool(
+        seed,
+        "target_seed_options_exposed",
+        True,
+        "next_cycle_target_seed_report",
+    )
+    require_list(seed, "target_seed_option_ids", "next_cycle_target_seed_report")
+    seed_options = seed.get("next_cycle_target_options")
+    if isinstance(seed_options, list):
+        expected_option_ids = [
+            option[0] for option in SELECTED_TARGET_NEXT_CYCLE_TARGET_OPTIONS
+        ]
+        seed_option_ids: list[str] = []
+        for option in seed_options:
+            if not isinstance(option, dict):
+                failures.append("next_cycle_target_seed_report.next_cycle_target_options.item")
+                continue
+            target_seed_id = _string_value(option.get("target_seed_id"))
+            if not target_seed_id:
+                failures.append(
+                    "next_cycle_target_seed_report.next_cycle_target_options.target_seed_id"
+                )
+            else:
+                seed_option_ids.append(target_seed_id)
+            if not _string_value(option.get("recommended_next_handling")):
+                failures.append(
+                    "next_cycle_target_seed_report.next_cycle_target_options.recommended_next_handling"
+                )
+        if seed_option_ids != expected_option_ids:
+            failures.append("next_cycle_target_seed_report.next_cycle_target_options.order")
+        if seed.get("target_seed_option_ids") != expected_option_ids:
+            failures.append("next_cycle_target_seed_report.target_seed_option_ids")
     if seed.get("recommended_next_target_seed") is not None:
         failures.append("next_cycle_target_seed_report.recommended_next_target_seed")
+    require_bool(
+        seed,
+        "next_target_not_selected",
+        True,
+        "next_cycle_target_seed_report",
+    )
+    require_bool(
+        seed,
+        "consolidation_required_before_next_target_selection",
+        True,
+        "next_cycle_target_seed_report",
+    )
     require_bool(seed, "do_not_generate_yet", True, "next_cycle_target_seed_report")
     require_bool(
         seed,
@@ -2634,6 +2809,32 @@ def _selected_target_loop_review_surface_failures(
         False,
         "next_cycle_target_seed_report",
     )
+
+    gate = payload_for("selected_target_loop_review_gate_report")
+    require_bool(gate, "target_seed_options_exposed", True, "gate")
+    require_bool(gate, "next_target_not_selected", True, "gate")
+    require_bool(
+        gate,
+        "consolidation_required_before_next_target_selection",
+        True,
+        "gate",
+    )
+    require_bool(gate, "no_candidate_generated_by_loop_review", True, "gate")
+    require_bool(gate, "no_model_calls_by_loop_review", True, "gate")
+
+    health = payload_for("project_health_scope_guard_report")
+    require_bool(health, "project_health_scope_guard_passed", True, "health")
+    require_bool(health, "source_chain_coherent", True, "health")
+    require_bool(health, "no_generation_path_introduced", True, "health")
+    require_bool(health, "no_model_call_introduced", True, "health")
+    require_bool(health, "no_candidate_introduced", True, "health")
+    require_bool(health, "no_finality_claim", True, "health")
+    require_bool(health, "no_phase_shift_claim", True, "health")
+    require_bool(health, "no_strongest_rival_defeat_claim", True, "health")
+    require_bool(health, "no_work_order_introduced", True, "health")
+    require_bool(health, "no_target_selection_introduced", True, "health")
+    require_bool(health, "global_state_mutation_performed", False, "health")
+    require_bool(health, "current_best_state_mutation_performed", False, "health")
     return failures
 
 

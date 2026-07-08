@@ -29090,6 +29090,7 @@ def assert_selected_nonlocal_law_loop_review_acceptance(
     assert result.payload["current_best_state_mutation_performed"] is False
     assert result.payload["global_state_mutation_performed"] is False
     assert result.payload["current_best_decision_packet_is_source_of_truth"] is True
+    assert result.payload["prior_historical_current_best_preserved"] is True
     assert result.payload["selected_target_effect"] == "supported_but_incomplete"
     assert result.payload["reader_state_support"] == "supportive_with_active_risks"
     assert result.payload["strongest_rival_status"] == "narrowed_but_blocking"
@@ -29099,16 +29100,30 @@ def assert_selected_nonlocal_law_loop_review_acceptance(
     assert result.payload["active_risk_count"] == 8
     assert result.payload["active_risks_remain"] is True
     assert result.payload["next_cycle_target_options"]
+    assert result.payload["target_seed_options_exposed"] is True
+    assert result.payload["target_seed_option_ids"] == [
+        "reduce_causal_mechanism_naming",
+        "enact_return_instead_of_summarizing_law",
+        "integrate_or_remove_chemistry_register",
+        "protect_object_field_delicacy",
+    ]
     assert result.payload["recommended_next_target_seed"] is None
     assert result.payload["target_selected_for_next_cycle"] is False
+    assert result.payload["next_target_not_selected"] is True
     assert result.payload["work_order_created"] is False
     assert result.payload["candidate_generated"] is False
     assert result.payload["generation_authorized"] is False
+    assert result.payload["no_candidate_introduced"] is True
+    assert result.payload["no_generation_path_introduced"] is True
+    assert result.payload["no_model_call_introduced"] is True
     assert result.payload["model_calls"] == 0
     assert result.payload["counts"]["model_calls"] == 0
     assert result.payload["finalization_eligible"] is False
     assert result.payload["no_final_claim"] is True
+    assert result.payload["no_finality_claim"] is True
     assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["no_strongest_rival_defeat_claim"] is True
+    assert result.payload["consolidation_required_before_next_target_selection"] is True
     assert result.payload["next_recommended_action"] == (
         "consolidate_selected_target_loop_before_next_target_selection"
     )
@@ -29135,8 +29150,17 @@ def assert_selected_nonlocal_law_loop_review_acceptance(
     assert preservation["prior_working_current_best_candidate_packet_id"] == (
         "packet_0002"
     )
+    assert preservation["new_working_current_best_candidate_packet_id"] == "packet_0001"
+    assert preservation["current_best_for_next_loop_packet_id"] == "packet_0001"
+    assert preservation["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert preservation["prior_working_current_best_preserved_as_history"] is True
+    assert preservation["prior_current_best_preserved_as_history"] is True
     assert preservation["packet_0002_not_erased"] is True
+    assert preservation["packet_0063_not_erased"] is True
     assert preservation["packet_0063_preserved_as_prior_current_best_history"] is True
+    assert preservation["packet_0001_not_final"] is True
+    assert preservation["current_best_transition_not_finalization"] is True
+    assert preservation["summary"]
 
     evidence = read_payload(packet_dir / "selected_target_evidence_summary.json")
     assert evidence["selected_target_effect"] == "supported_but_incomplete"
@@ -29179,18 +29203,32 @@ def assert_selected_nonlocal_law_loop_review_acceptance(
 
     seed = read_payload(packet_dir / "next_cycle_target_seed_report.json")
     option_ids = [option["option_id"] for option in seed["next_cycle_target_options"]]
+    target_seed_ids = [
+        option["target_seed_id"] for option in seed["next_cycle_target_options"]
+    ]
     assert option_ids == [
         "reduce_causal_mechanism_naming",
         "enact_return_instead_of_summarizing_law",
         "integrate_or_remove_chemistry_register",
         "protect_object_field_delicacy",
     ]
+    assert target_seed_ids == option_ids
+    assert seed["target_seed_option_ids"] == option_ids
+    assert all(
+        option["recommended_next_handling"]
+        for option in seed["next_cycle_target_options"]
+    )
+    assert seed["next_cycle_target_options"][0]["recommended_next_handling"] == (
+        "consolidate before selecting; likely first next target if consolidation preserves ranking."
+    )
     assert seed["recommended_next_target_seed"] is None
     assert seed["target_selected_for_next_cycle"] is False
+    assert seed["next_target_not_selected"] is True
     assert seed["do_not_generate_yet"] is True
     assert seed["do_not_create_work_order_yet"] is True
     assert seed["cycle_consolidation_required_before_next_repair"] is True
     assert seed["target_selection_requires_cycle_consolidation"] is True
+    assert seed["consolidation_required_before_next_target_selection"] is True
     assert seed["recommended_next_action"] == (
         "consolidate_selected_target_loop_before_next_target_selection"
     )
@@ -29221,11 +29259,23 @@ def assert_selected_nonlocal_law_loop_review_acceptance(
     assert "generation_authorized" in gate["failed_gates"]
     assert "work_order_created" in gate["failed_gates"]
     assert "target_selected_for_next_cycle" in gate["failed_gates"]
+    assert gate["target_seed_options_exposed"] is True
+    assert gate["next_target_not_selected"] is True
+    assert gate["consolidation_required_before_next_target_selection"] is True
+    assert gate["no_candidate_generated_by_loop_review"] is True
+    assert gate["no_model_calls_by_loop_review"] is True
 
     health = read_payload(packet_dir / "project_health_scope_guard_report.json")
     assert health["project_health_scope_guard_passed"] is True
+    assert health["source_chain_coherent"] is True
     assert health["no_generation_path_introduced"] is True
     assert health["no_model_call_introduced"] is True
+    assert health["no_candidate_introduced"] is True
+    assert health["no_finality_claim"] is True
+    assert health["no_phase_shift_claim"] is True
+    assert health["no_strongest_rival_defeat_claim"] is True
+    assert health["no_work_order_introduced"] is True
+    assert health["no_target_selection_introduced"] is True
     assert health["current_best_state_mutation_performed"] is False
     assert health["global_state_mutation_performed"] is False
 
@@ -29259,6 +29309,95 @@ def test_loop_review_accepts_selected_nonlocal_law_evidence_synthesis_packet(
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
     assert len(after_calls) == len(before_calls)
+
+
+def test_loop_review_supersedes_stale_selected_target_consolidation_surface(
+    tmp_path,
+):
+    config, synthesis_packet, run_id, synthesis_payload = (
+        build_selected_nonlocal_law_loop_review_ready_chain(tmp_path)
+    )
+    stale = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+    stale_packet_dir = assert_selected_nonlocal_law_loop_review_acceptance(
+        config,
+        run_id,
+        stale,
+        synthesis_payload,
+    )
+
+    def _remove_option_handoff_fields(payload: dict[str, object]) -> None:
+        payload.pop("target_seed_option_ids", None)
+        payload.pop("target_seed_options_exposed", None)
+        for option in payload.get("next_cycle_target_options", []):
+            if isinstance(option, dict):
+                option.pop("target_seed_id", None)
+                option.pop("recommended_next_handling", None)
+
+    rewrite_payload(
+        stale_packet_dir / "nonlocal_law_selected_target_loop_review_packet.json",
+        lambda payload: (
+            _remove_option_handoff_fields(payload),
+            payload.pop("prior_historical_current_best_preserved", None),
+            payload.pop("no_candidate_introduced", None),
+        ),
+    )
+    rewrite_payload(
+        stale_packet_dir / "next_cycle_target_seed_report.json",
+        _remove_option_handoff_fields,
+    )
+    rewrite_payload(
+        stale_packet_dir / "project_health_scope_guard_report.json",
+        lambda payload: payload.pop("no_candidate_introduced", None),
+    )
+
+    corrected = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+
+    corrected_packet_dir = assert_selected_nonlocal_law_loop_review_acceptance(
+        config,
+        run_id,
+        corrected,
+        synthesis_payload,
+    )
+    assert stale_packet_dir.name == "packet_0001"
+    assert corrected_packet_dir.name == "packet_0002"
+    assert corrected.payload["superseded_loop_review_packet_id"] == "packet_0001"
+    assert corrected.payload["supersession_reason"] == (
+        "selected_target_loop_review_consolidation_surface_missing"
+    )
+    assert corrected.payload["target_seed_option_ids"] == [
+        "reduce_causal_mechanism_naming",
+        "enact_return_instead_of_summarizing_law",
+        "integrate_or_remove_chemistry_register",
+        "protect_object_field_delicacy",
+    ]
+    assert corrected.payload["next_target_not_selected"] is True
+    assert corrected.payload["consolidation_required_before_next_target_selection"] is True
+    assert corrected.payload["prior_historical_current_best_preserved"] is True
+    assert corrected.payload["no_candidate_introduced"] is True
+    assert corrected.payload["no_generation_path_introduced"] is True
+    assert corrected.payload["no_model_call_introduced"] is True
+    assert corrected.payload["no_finality_claim"] is True
+    assert corrected.payload["active_risk_count"] == 8
+    assert corrected.payload["strongest_rival_remains_blocking"] is True
+    assert corrected.payload["model_calls"] == 0
+    assert read_payload(
+        stale_packet_dir / "nonlocal_law_selected_target_loop_review_packet.json"
+    ).get("target_seed_option_ids") is None
+
+    duplicate = run_evidence_loop_review(config, synthesis_packet=synthesis_packet)
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "corrected current-valid selected-target loop-review decision already exists" in (
+        duplicate.payload["message"]
+    )
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
 
 
 def test_loop_review_refuses_duplicate_selected_target_decision(tmp_path):
