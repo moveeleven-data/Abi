@@ -113,6 +113,9 @@ from abi.modules.nonlocal_law_selected_target_reader_state_evaluation import (
     NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_MAX_MODEL_CALLS_DEFAULT,
     run_nonlocal_law_selected_target_reader_state_evaluation,
 )
+from abi.modules.nonlocal_law_selected_target_evidence_synthesis import (
+    run_nonlocal_law_selected_target_evidence_synthesis,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -848,6 +851,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=NONLOCAL_LAW_SELECTED_TARGET_READER_STATE_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model calls allowed for guarded live-model paths.",
     )
+    autonomous_selected_nonlocal_law_synthesis_parser = (
+        autonomous_subparsers.add_parser(
+            "synthesize-selected-nonlocal-law-candidate-evidence",
+            help="Synthesize selected-target evidence without generation",
+        )
+    )
+    autonomous_selected_nonlocal_law_synthesis_parser.add_argument(
+        "--reader-state-packet",
+        type=Path,
+        required=True,
+        help="Model-backed selected-target reader-state packet directory.",
+    )
+    autonomous_selected_nonlocal_law_synthesis_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the selected-target reader-state packet.",
+    )
     autonomous_nonlocal_law_authorization_parser = autonomous_subparsers.add_parser(
         "authorize-nonlocal-law-generation",
         help="Authorize one bounded nonlocal law-guided generation attempt",
@@ -1565,6 +1585,16 @@ def main(argv: list[str] | None = None) -> int:
             operator_reviewed=args.operator_reviewed,
             allow_live_model=args.allow_live_model,
             max_model_calls=args.max_model_calls,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command
+        == "synthesize-selected-nonlocal-law-candidate-evidence"
+    ):
+        return _cmd_autonomous_synthesize_selected_nonlocal_law_candidate_evidence(
+            config,
+            reader_state_packet=args.reader_state_packet,
+            operator_reviewed=args.operator_reviewed,
         )
     if args.command == "autonomous" and args.autonomous_command == "authorize-next-cycle":
         return _cmd_autonomous_authorize_next_cycle(
@@ -2344,6 +2374,21 @@ def _cmd_autonomous_evaluate_selected_nonlocal_law_candidate_reader_state(
         operator_reviewed=operator_reviewed,
         allow_live_model=allow_live_model,
         max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_synthesize_selected_nonlocal_law_candidate_evidence(
+    config: AbiConfig,
+    *,
+    reader_state_packet: Path,
+    operator_reviewed: bool,
+) -> int:
+    result = run_nonlocal_law_selected_target_evidence_synthesis(
+        config,
+        reader_state_packet=reader_state_packet,
+        operator_reviewed=operator_reviewed,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
