@@ -25701,6 +25701,77 @@ def build_nonlocal_law_selected_target_generation_authorization_ready_chain(
     )
 
 
+def degrade_nonlocal_law_selected_target_generation_authorization_surface(
+    packet_dir: Path,
+) -> None:
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    def remove_unit_roles(payload):
+        for unit in payload.get("target_units", []):
+            if isinstance(unit, dict):
+                unit.pop("authorized_role", None)
+        for field_name in (
+            "material_generation_unit_ids",
+            "preservation_or_guard_unit_ids",
+        ):
+            payload.pop(field_name, None)
+
+    rewrite_payload(
+        packet_dir / "target_unit_authorization_scope.json",
+        remove_unit_roles,
+    )
+    rewrite_payload(
+        packet_dir / "project_health_scope_guard_report.json",
+        remove_fields(
+            "source_work_order_accepted",
+            "source_work_order_current_valid",
+            "no_candidate_introduced",
+            "no_model_call_introduced",
+            "no_finality_claim",
+            "no_strongest_rival_defeat_claim",
+            "authorization_does_not_create_candidate",
+            "authorization_does_not_call_model",
+            "authorization_does_not_finalize",
+            "authorization_unconsumed",
+            "one_attempt_only",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "model_call_budget_report.json",
+        remove_fields(
+            "model_calls_made_by_authorization",
+            "model_call_budget_for_future_generate_command_only",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "generation_lock_transition_report.json",
+        remove_fields("authorization_packet_does_not_run_generation"),
+    )
+    rewrite_payload(
+        packet_dir / "nonlocal_law_selected_target_generation_authorization_packet.json",
+        remove_fields(
+            "material_generation_unit_ids",
+            "preservation_or_guard_unit_ids",
+            "no_candidate_introduced",
+            "no_model_call_introduced",
+            "no_finality_claim",
+            "no_strongest_rival_defeat_claim",
+            "authorization_does_not_create_candidate",
+            "authorization_does_not_call_model",
+            "model_calls_made_by_authorization",
+            "model_call_budget_for_future_generate_command_only",
+            "authorization_packet_does_not_run_generation",
+            "ready_for_selected_target_candidate_generation",
+            "generate_command_requires_allow_live_model",
+        ),
+    )
+
+
 def test_nonlocal_law_selected_target_work_order_accepts_corrected_selection(
     tmp_path,
 ):
@@ -26312,7 +26383,20 @@ def test_nonlocal_law_selected_target_generation_authorization_accepts_work_orde
     assert result.payload["finalization_eligible"] is False
     assert result.payload["no_final_claim"] is True
     assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["no_candidate_introduced"] is True
+    assert result.payload["no_model_call_introduced"] is True
+    assert result.payload["no_finality_claim"] is True
+    assert result.payload["no_strongest_rival_defeat_claim"] is True
+    assert result.payload["authorization_does_not_create_candidate"] is True
+    assert result.payload["authorization_does_not_call_model"] is True
+    assert result.payload["model_calls_made_by_authorization"] == 0
+    assert result.payload["model_call_budget_for_future_generate_command_only"] is True
+    assert result.payload["authorization_packet_does_not_run_generation"] is True
+    assert result.payload["ready_for_selected_target_candidate_generation"] is True
+    assert result.payload["generate_command_requires_allow_live_model"] is True
     assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["superseded_authorization_packet_id"] is None
+    assert result.payload["supersession_reason"] is None
     assert result.payload["next_recommended_action"] == (
         "generate_selected_nonlocal_law_candidate"
     )
@@ -26354,6 +26438,17 @@ def test_nonlocal_law_selected_target_generation_authorization_accepts_work_orde
 
     units = read_payload(packet_dir / "target_unit_authorization_scope.json")
     assert units["target_unit_ids"] == list(NONLOCAL_LAW_SELECTED_TARGET_UNIT_IDS)
+    assert units["material_generation_unit_ids"] == [
+        "static_trace_to_active_condition",
+        "causal_bridge_between_object_events",
+        "living_consequence_before_naming",
+    ]
+    assert units["preservation_or_guard_unit_ids"] == [
+        "preserve_earned_explanation_timing",
+        "preserve_packet_0002_object_field",
+        "non_imitation_and_rival_guard",
+        "carry_forward_unselected_risks",
+    ]
     assert len(units["target_units"]) == 7
     unit_map = {unit["unit_id"]: unit for unit in units["target_units"]}
     assert set(unit_map) == set(NONLOCAL_LAW_SELECTED_TARGET_UNIT_IDS)
@@ -26370,6 +26465,11 @@ def test_nonlocal_law_selected_target_generation_authorization_accepts_work_orde
         assert unit["forbidden_regressions"]
         assert unit["evidence_basis"]
         assert unit["authorized_for_generation"] is (unit_id in material_units)
+        assert unit["authorized_role"] == (
+            "material_generation_unit"
+            if unit_id in material_units
+            else "preservation_or_guard_constraint"
+        )
         if unit_id not in material_units:
             assert unit["authorization_role"] == "constraint_preservation_guard"
 
@@ -26441,6 +26541,8 @@ def test_nonlocal_law_selected_target_generation_authorization_accepts_work_orde
     assert budget["model_call_budget"] == 1
     assert budget["model_calls_consumed"] == 0
     assert budget["remaining_model_calls"] == 1
+    assert budget["model_calls_made_by_authorization"] == 0
+    assert budget["model_call_budget_for_future_generate_command_only"] is True
     assert budget["client_must_be_explicit"] is True
     assert budget["live_model_requires_allow_live_model"] is True
 
@@ -26454,6 +26556,23 @@ def test_nonlocal_law_selected_target_generation_authorization_accepts_work_orde
         "selected_target_generation_unlocked_for_one_attempt"
     )
     assert transition["generation_requires_separate_generate_command"] is True
+    assert transition["authorization_packet_does_not_run_generation"] is True
+
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["project_health_scope_guard_passed"] is True
+    assert health["source_chain_coherent"] is True
+    assert health["source_work_order_accepted"] is True
+    assert health["source_work_order_current_valid"] is True
+    assert health["no_candidate_introduced"] is True
+    assert health["no_model_call_introduced"] is True
+    assert health["no_finality_claim"] is True
+    assert health["no_phase_shift_claim"] is True
+    assert health["no_strongest_rival_defeat_claim"] is True
+    assert health["authorization_does_not_create_candidate"] is True
+    assert health["authorization_does_not_call_model"] is True
+    assert health["authorization_does_not_finalize"] is True
+    assert health["authorization_unconsumed"] is True
+    assert health["one_attempt_only"] is True
 
     gate = read_payload(
         packet_dir / "selected_target_generation_authorization_gate_report.json"
@@ -26533,6 +26652,109 @@ def test_nonlocal_law_selected_target_generation_authorization_cli_accepts(
     assert payload["authorization_consumed"] is False
     assert payload["candidate_generated"] is False
     assert payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_generation_authorization_supersedes_stale_surface(
+    tmp_path,
+):
+    config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+    stale = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_dir = Path(str(stale.payload["packet_dir"]))
+    degrade_nonlocal_law_selected_target_generation_authorization_surface(stale_dir)
+
+    successor = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+
+    assert successor.exit_code == 0
+    assert successor.payload["accepted"] is True
+    assert successor.payload["packet_id"] == "packet_0002"
+    assert successor.payload["superseded_authorization_packet_id"] == "packet_0001"
+    assert successor.payload["supersession_reason"] == (
+        "nonlocal_law_selected_target_generation_authorization_surface_missing"
+    )
+    assert successor.payload["source_work_order_packet_id"] == "packet_0002"
+    assert successor.payload["selected_target_seed_id"] == (
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    )
+    assert successor.payload["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert successor.payload["generation_authorized"] is True
+    assert successor.payload["next_generation_authorized"] is True
+    assert successor.payload["generation_attempt_budget"] == 1
+    assert successor.payload["authorization_consumed"] is False
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["model_calls"] == 0
+    assert successor.payload["finalization_eligible"] is False
+    assert successor.payload["no_final_claim"] is True
+    assert successor.payload["no_phase_shift_claim"] is True
+    assert successor.payload["strongest_rival_defeated_claimed"] is False
+    assert successor.payload["material_generation_unit_ids"] == [
+        "static_trace_to_active_condition",
+        "causal_bridge_between_object_events",
+        "living_consequence_before_naming",
+    ]
+    assert successor.payload["preservation_or_guard_unit_ids"] == [
+        "preserve_earned_explanation_timing",
+        "preserve_packet_0002_object_field",
+        "non_imitation_and_rival_guard",
+        "carry_forward_unselected_risks",
+    ]
+    assert successor.payload["no_candidate_introduced"] is True
+    assert successor.payload["no_model_call_introduced"] is True
+    assert successor.payload["no_finality_claim"] is True
+    assert successor.payload["no_strongest_rival_defeat_claim"] is True
+    assert successor.payload["authorization_does_not_create_candidate"] is True
+    assert successor.payload["authorization_does_not_call_model"] is True
+    assert successor.payload["model_calls_made_by_authorization"] == 0
+    assert successor.payload["ready_for_selected_target_candidate_generation"] is True
+
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    units = read_payload(successor_dir / "target_unit_authorization_scope.json")
+    unit_roles = {
+        unit["unit_id"]: unit["authorized_role"]
+        for unit in units["target_units"]
+    }
+    for unit_id in (
+        "static_trace_to_active_condition",
+        "causal_bridge_between_object_events",
+        "living_consequence_before_naming",
+    ):
+        assert unit_roles[unit_id] == "material_generation_unit"
+    for unit_id in (
+        "preserve_earned_explanation_timing",
+        "preserve_packet_0002_object_field",
+        "non_imitation_and_rival_guard",
+        "carry_forward_unselected_risks",
+    ):
+        assert unit_roles[unit_id] == "preservation_or_guard_constraint"
+
+    stale_packet = read_payload(
+        stale_dir / "nonlocal_law_selected_target_generation_authorization_packet.json"
+    )
+    assert "ready_for_selected_target_candidate_generation" not in stale_packet
+
+    duplicate = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+    assert duplicate.exit_code == 1
+    assert "unconsumed current-valid authorization" in duplicate.payload["message"]
 
 
 def test_nonlocal_law_selected_target_generation_authorization_requires_review(
@@ -26782,6 +27004,76 @@ def test_selected_nonlocal_law_candidate_generation_placeholder_refuses_live(
     assert result.payload["next_recommended_action"] == (
         "implement_selected_nonlocal_law_candidate_generation"
     )
+
+
+def test_selected_nonlocal_law_candidate_generation_placeholder_refuses_stale_auth(
+    tmp_path,
+):
+    config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+    authorization = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+    assert authorization.exit_code == 0
+    authorization_packet = Path(str(authorization.payload["packet_dir"]))
+    degrade_nonlocal_law_selected_target_generation_authorization_surface(
+        authorization_packet
+    )
+
+    result = run_selected_nonlocal_law_candidate_generation_placeholder(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "authorization packet is stale" in result.payload["message"]
+    assert "target_unit:" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+
+
+def test_selected_nonlocal_law_candidate_generation_placeholder_refuses_corrected_auth(
+    tmp_path,
+):
+    config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+    authorization = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+    assert authorization.exit_code == 0
+    authorization_packet = Path(str(authorization.payload["packet_dir"]))
+
+    result = run_selected_nonlocal_law_candidate_generation_placeholder(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--allow-live-model is required" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
 
 
 def test_nonlocal_law_candidate_evidence_synthesis_cli_accepts(tmp_path, capsys):

@@ -68,6 +68,9 @@ NEXT_ACTION_REFUSE = "review_selected_target_work_order_before_generation_author
 NEXT_ACTION_GENERATOR_NOT_IMPLEMENTED = (
     "implement_selected_nonlocal_law_candidate_generation"
 )
+SUPERSESSION_REASON_AUTHORIZATION_SURFACE_MISSING = (
+    "nonlocal_law_selected_target_generation_authorization_surface_missing"
+)
 
 MATERIAL_GENERATION_UNIT_IDS = (
     "static_trace_to_active_condition",
@@ -117,6 +120,17 @@ class NonlocalLawSelectedTargetGenerationAuthorizationSubject:
     work_order_artifact_ids: dict[str, str]
     payloads: dict[str, dict[str, Any]]
     source_parent_ids: tuple[str, ...]
+    superseded_authorization_packet_id: str | None = None
+    supersession_reason: str | None = None
+    stale_authorization_surface_failures: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AuthorizationSupersessionContext:
+    corrected_current_valid_authorization_exists: bool
+    superseded_authorization_packet_id: str | None = None
+    supersession_reason: str | None = None
+    stale_surface_failures: tuple[str, ...] = ()
 
 
 def run_nonlocal_law_selected_target_generation_authorization(
@@ -189,7 +203,10 @@ def run_nonlocal_law_selected_target_generation_authorization(
                     f"run is not registered: {subject.run_id}"
                 ),
             )
-        duplicate = _unconsumed_authorization_for_work_order(connection, subject)
+        if subject.superseded_authorization_packet_id is None:
+            duplicate = _unconsumed_authorization_for_work_order(connection, subject)
+        else:
+            duplicate = None
         if duplicate is not None:
             return _refusal(
                 work_order_packet=work_order_packet_dir,
@@ -378,6 +395,28 @@ def run_selected_nonlocal_law_candidate_generation_placeholder(
 ) -> NonlocalLawSelectedTargetGenerationAuthorizationResult:
     initialize_database(config)
     resolved_packet = _resolve_path(config, authorization_packet)
+    stale_message = _stale_authorization_message(resolved_packet)
+    if stale_message is not None:
+        return NonlocalLawSelectedTargetGenerationAuthorizationResult(
+            exit_code=1,
+            payload={
+                "accepted": False,
+                "refused": True,
+                "message": stale_message,
+                "client": client_name,
+                "authorization_packet": str(resolved_packet),
+                "generation_authorized": True,
+                "next_generation_authorized": True,
+                "authorization_consumed": False,
+                "candidate_generated": False,
+                "model_calls": 0,
+                "finalization_eligible": False,
+                "no_final_claim": True,
+                "no_phase_shift_claim": True,
+                "strongest_rival_defeated_claimed": False,
+                "next_recommended_action": NEXT_ACTION_GENERATOR_NOT_IMPLEMENTED,
+            },
+        )
     if not allow_live_model:
         message = (
             "Selected nonlocal law candidate generation refused; "
@@ -466,6 +505,17 @@ def _load_subject(
             *work_order_artifact_ids.values(),
         ]
     )
+    supersession = _authorization_supersession_context(
+        config,
+        run_id=run_id,
+        source_work_order_packet_id=work_order_packet_id,
+    )
+    if supersession.corrected_current_valid_authorization_exists:
+        raise ValueError(
+            "Selected nonlocal law generation authorization refused; an "
+            "unconsumed current-valid authorization already exists for this "
+            "work order."
+        )
     return NonlocalLawSelectedTargetGenerationAuthorizationSubject(
         run_id=run_id,
         work_order_packet_dir=work_order_packet_dir,
@@ -476,6 +526,11 @@ def _load_subject(
         work_order_artifact_ids=work_order_artifact_ids,
         payloads=payloads,
         source_parent_ids=tuple(source_parent_ids),
+        superseded_authorization_packet_id=(
+            supersession.superseded_authorization_packet_id
+        ),
+        supersession_reason=supersession.supersession_reason,
+        stale_authorization_surface_failures=supersession.stale_surface_failures,
     )
 
 
@@ -736,6 +791,11 @@ def _build_target_unit_authorization_scope(
                 "forbidden_regressions": _string_list(unit.get("forbidden_regressions")),
                 "evidence_basis": _string_list(unit.get("evidence_basis")),
                 "authorized_for_generation": authorized_for_generation,
+                "authorized_role": (
+                    "material_generation_unit"
+                    if authorized_for_generation
+                    else "preservation_or_guard_constraint"
+                ),
                 "authorization_role": (
                     "material_generation"
                     if authorized_for_generation
@@ -750,6 +810,7 @@ def _build_target_unit_authorization_scope(
         "target_unit_ids": list(TARGET_UNIT_IDS),
         "target_units": target_units,
         "material_generation_unit_ids": list(MATERIAL_GENERATION_UNIT_IDS),
+        "preservation_or_guard_unit_ids": list(CONSTRAINT_UNIT_IDS),
         "constraint_unit_ids": list(CONSTRAINT_UNIT_IDS),
         "target_unit_count": len(target_units),
         "generation_limited_to_selected_target": True,
@@ -877,6 +938,8 @@ def _build_model_call_budget_report(
         "model_call_budget": 1,
         "model_calls_consumed": 0,
         "remaining_model_calls": 1,
+        "model_calls_made_by_authorization": 0,
+        "model_call_budget_for_future_generate_command_only": True,
         "client_must_be_explicit": True,
         "live_model_requires_allow_live_model": True,
         "generation_attempt_budget": 1,
@@ -901,6 +964,7 @@ def _build_generation_lock_transition_report(
         "model_calls": 0,
         "lock_transition": "selected_target_generation_unlocked_for_one_attempt",
         "generation_requires_separate_generate_command": True,
+        "authorization_packet_does_not_run_generation": True,
         "worker": "generation_lock_transition_report_v1_controller",
     }
 
@@ -1014,6 +1078,17 @@ def _build_project_health_scope_guard_report(
         "passed": True,
         "project_health_scope_guard_passed": True,
         "source_chain_coherent": True,
+        "source_work_order_accepted": True,
+        "source_work_order_current_valid": True,
+        "no_candidate_introduced": True,
+        "no_model_call_introduced": True,
+        "no_finality_claim": True,
+        "no_strongest_rival_defeat_claim": True,
+        "authorization_does_not_create_candidate": True,
+        "authorization_does_not_call_model": True,
+        "authorization_does_not_finalize": True,
+        "authorization_unconsumed": True,
+        "one_attempt_only": True,
         "generation_authorized": True,
         "next_generation_authorized": True,
         "generation_attempt_budget": 1,
@@ -1074,6 +1149,8 @@ def _build_packet_summary(
         "authorization_consumed": False,
         "candidate_generated": False,
         "model_calls": 0,
+        "material_generation_unit_ids": list(MATERIAL_GENERATION_UNIT_IDS),
+        "preservation_or_guard_unit_ids": list(CONSTRAINT_UNIT_IDS),
         "target_unit_ids": list(TARGET_UNIT_IDS),
         "target_units": list(units["target_units"]),
         "materiality_requirements": list(validation["materiality_requirements"]),
@@ -1089,6 +1166,17 @@ def _build_packet_summary(
         "not_finalization_eligible": True,
         "no_final_claim": True,
         "no_phase_shift_claim": True,
+        "no_candidate_introduced": True,
+        "no_model_call_introduced": True,
+        "no_finality_claim": True,
+        "no_strongest_rival_defeat_claim": True,
+        "authorization_does_not_create_candidate": True,
+        "authorization_does_not_call_model": True,
+        "model_calls_made_by_authorization": 0,
+        "model_call_budget_for_future_generate_command_only": True,
+        "authorization_packet_does_not_run_generation": True,
+        "ready_for_selected_target_candidate_generation": True,
+        "generate_command_requires_allow_live_model": True,
         "strongest_rival_defeated_claimed": False,
         "strongest_rival_pressure_remains_blocking": True,
         "next_recommended_action": NEXT_ACTION_AUTHORIZE,
@@ -1123,6 +1211,13 @@ def _source_fields(
     packet = _packet(subject)
     return {
         "source_work_order_packet_id": subject.work_order_packet_id,
+        "superseded_authorization_packet_id": (
+            subject.superseded_authorization_packet_id
+        ),
+        "supersession_reason": subject.supersession_reason,
+        "stale_authorization_surface_failures": list(
+            subject.stale_authorization_surface_failures
+        ),
         "source_target_selection_packet_id": packet.get(
             "source_target_selection_packet_id"
         ),
@@ -1197,6 +1292,258 @@ def _work_order_has_authorization_surface(payload: dict[str, Any]) -> bool:
     )
 
 
+def _authorization_supersession_context(
+    config: AbiConfig,
+    *,
+    run_id: str,
+    source_work_order_packet_id: str,
+) -> AuthorizationSupersessionContext:
+    root = config.run_dir(run_id) / "nonlocal_law_selected_target_generation_authorization"
+    if not root.exists():
+        return AuthorizationSupersessionContext(False)
+    stale_packet_id: str | None = None
+    stale_failures: tuple[str, ...] = ()
+    for packet_dir in sorted(root.glob("packet_*")):
+        packet = _optional_authorization_payload(
+            packet_dir / "nonlocal_law_selected_target_generation_authorization_packet.json"
+        )
+        if (
+            packet.get("accepted") is True
+            and packet.get("source_work_order_packet_id") == source_work_order_packet_id
+            and packet.get("generation_authorized") is True
+            and packet.get("authorization_consumed") is False
+            and packet.get("candidate_generated") is False
+            and int(packet.get("model_calls") or 0) == 0
+        ):
+            failures = _authorization_surface_failures(packet_dir)
+            if not failures:
+                return AuthorizationSupersessionContext(
+                    corrected_current_valid_authorization_exists=True
+                )
+            stale_packet_id = str(packet.get("packet_id") or packet_dir.name)
+            stale_failures = tuple(failures)
+    if stale_packet_id is None:
+        return AuthorizationSupersessionContext(False)
+    return AuthorizationSupersessionContext(
+        corrected_current_valid_authorization_exists=False,
+        superseded_authorization_packet_id=stale_packet_id,
+        supersession_reason=SUPERSESSION_REASON_AUTHORIZATION_SURFACE_MISSING,
+        stale_surface_failures=stale_failures,
+    )
+
+
+def _authorization_surface_failures(packet_dir: Path) -> list[str]:
+    failures: list[str] = []
+    packet = _optional_authorization_payload(
+        packet_dir / "nonlocal_law_selected_target_generation_authorization_packet.json"
+    )
+    units = _optional_authorization_payload(
+        packet_dir / "target_unit_authorization_scope.json"
+    )
+    health = _optional_authorization_payload(
+        packet_dir / "project_health_scope_guard_report.json"
+    )
+    budget = _optional_authorization_payload(packet_dir / "model_call_budget_report.json")
+    lock = _optional_authorization_payload(
+        packet_dir / "generation_lock_transition_report.json"
+    )
+
+    _require_authorization_bool(packet, "accepted", True, "packet", failures)
+    _require_authorization_bool(
+        packet,
+        "generation_authorized",
+        True,
+        "packet",
+        failures,
+    )
+    _require_authorization_bool(
+        packet,
+        "authorization_consumed",
+        False,
+        "packet",
+        failures,
+    )
+    _require_authorization_bool(
+        packet,
+        "candidate_generated",
+        False,
+        "packet",
+        failures,
+    )
+    _require_authorization_int(packet, "model_calls", 0, "packet", failures)
+    for field_name in (
+        "no_candidate_introduced",
+        "no_model_call_introduced",
+        "no_finality_claim",
+        "no_strongest_rival_defeat_claim",
+        "authorization_does_not_create_candidate",
+        "authorization_does_not_call_model",
+        "model_call_budget_for_future_generate_command_only",
+        "authorization_packet_does_not_run_generation",
+        "ready_for_selected_target_candidate_generation",
+        "generate_command_requires_allow_live_model",
+    ):
+        _require_authorization_bool(packet, field_name, True, "packet", failures)
+    _require_authorization_int(
+        packet,
+        "model_calls_made_by_authorization",
+        0,
+        "packet",
+        failures,
+    )
+    _require_authorization_list(
+        packet,
+        "material_generation_unit_ids",
+        list(MATERIAL_GENERATION_UNIT_IDS),
+        "packet",
+        failures,
+    )
+    _require_authorization_list(
+        packet,
+        "preservation_or_guard_unit_ids",
+        list(CONSTRAINT_UNIT_IDS),
+        "packet",
+        failures,
+    )
+
+    unit_rows = units.get("target_units")
+    if not isinstance(unit_rows, list):
+        failures.append("target_unit_authorization_scope.target_units")
+    else:
+        roles_by_unit = {
+            str(row.get("unit_id")): row.get("authorized_role")
+            for row in unit_rows
+            if isinstance(row, dict)
+        }
+        for unit_id in MATERIAL_GENERATION_UNIT_IDS:
+            if roles_by_unit.get(unit_id) != "material_generation_unit":
+                failures.append(f"target_unit:{unit_id}.authorized_role")
+        for unit_id in CONSTRAINT_UNIT_IDS:
+            if roles_by_unit.get(unit_id) != "preservation_or_guard_constraint":
+                failures.append(f"target_unit:{unit_id}.authorized_role")
+    _require_authorization_list(
+        units,
+        "material_generation_unit_ids",
+        list(MATERIAL_GENERATION_UNIT_IDS),
+        "target_unit_authorization_scope",
+        failures,
+    )
+    _require_authorization_list(
+        units,
+        "preservation_or_guard_unit_ids",
+        list(CONSTRAINT_UNIT_IDS),
+        "target_unit_authorization_scope",
+        failures,
+    )
+
+    for field_name in (
+        "project_health_scope_guard_passed",
+        "source_chain_coherent",
+        "source_work_order_accepted",
+        "source_work_order_current_valid",
+        "no_candidate_introduced",
+        "no_model_call_introduced",
+        "no_finality_claim",
+        "no_phase_shift_claim",
+        "no_strongest_rival_defeat_claim",
+        "authorization_does_not_create_candidate",
+        "authorization_does_not_call_model",
+        "authorization_does_not_finalize",
+        "authorization_unconsumed",
+        "one_attempt_only",
+    ):
+        _require_authorization_bool(health, field_name, True, "health", failures)
+
+    _require_authorization_int(budget, "model_call_budget", 1, "budget", failures)
+    _require_authorization_int(budget, "model_calls_consumed", 0, "budget", failures)
+    _require_authorization_int(budget, "remaining_model_calls", 1, "budget", failures)
+    _require_authorization_int(
+        budget,
+        "model_calls_made_by_authorization",
+        0,
+        "budget",
+        failures,
+    )
+    _require_authorization_bool(
+        budget,
+        "model_call_budget_for_future_generate_command_only",
+        True,
+        "budget",
+        failures,
+    )
+    _require_authorization_bool(budget, "client_must_be_explicit", True, "budget", failures)
+    _require_authorization_bool(
+        budget,
+        "live_model_requires_allow_live_model",
+        True,
+        "budget",
+        failures,
+    )
+
+    _require_authorization_bool(
+        lock,
+        "authorization_packet_does_not_run_generation",
+        True,
+        "lock",
+        failures,
+    )
+    return failures
+
+
+def _optional_authorization_payload(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return _read_envelope_payload(path)
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _require_authorization_bool(
+    payload: dict[str, Any],
+    field_name: str,
+    expected: bool,
+    prefix: str,
+    failures: list[str],
+) -> None:
+    if payload.get(field_name) is not expected:
+        failures.append(f"{prefix}.{field_name}")
+
+
+def _require_authorization_int(
+    payload: dict[str, Any],
+    field_name: str,
+    expected: int,
+    prefix: str,
+    failures: list[str],
+) -> None:
+    if field_name not in payload or int(payload.get(field_name) or 0) != expected:
+        failures.append(f"{prefix}.{field_name}")
+
+
+def _require_authorization_list(
+    payload: dict[str, Any],
+    field_name: str,
+    expected: list[str],
+    prefix: str,
+    failures: list[str],
+) -> None:
+    value = payload.get(field_name)
+    if not isinstance(value, list) or [str(item) for item in value] != expected:
+        failures.append(f"{prefix}.{field_name}")
+
+
+def _stale_authorization_message(packet_dir: Path) -> str | None:
+    failures = _authorization_surface_failures(packet_dir)
+    if not failures:
+        return None
+    return (
+        "Selected nonlocal law candidate generation refused; authorization "
+        "packet is stale for generator handoff because required surface fields "
+        f"are missing: {', '.join(failures)}."
+    )
+
+
 def _unconsumed_authorization_for_work_order(
     connection: sqlite3.Connection,
     subject: NonlocalLawSelectedTargetGenerationAuthorizationSubject,
@@ -1215,6 +1562,7 @@ def _unconsumed_authorization_for_work_order(
             and payload.get("generation_authorized") is True
             and payload.get("authorization_consumed") is False
             and payload.get("candidate_generated") is False
+            and not _authorization_surface_failures(Path(artifact.path).parent)
         ):
             return artifact
     return None
