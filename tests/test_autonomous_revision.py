@@ -24886,6 +24886,67 @@ def build_nonlocal_law_consolidated_target_selection_ready_packet(tmp_path):
     return config, Path(str(corrected.payload["packet_dir"])), stale_packet_dir, run_id
 
 
+def degrade_nonlocal_law_consolidated_target_selection_work_order_surface(
+    packet_dir: Path,
+) -> None:
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    packet_fields = (
+        "ranking_summary",
+        "ranked_targets",
+        "selected_target_does_not_universalize_law",
+        "source_chain_coherent",
+        "no_work_order_introduced",
+        "no_generation_path_introduced",
+        "no_model_call_introduced",
+        "ready_for_selected_target_work_order_planning",
+    )
+    ranking_fields = ("summary", "ranking_summary", "ranked_targets")
+    guard_fields = (
+        "selected_target_does_not_universalize_first_read_pressure_precedes_explanation_law",
+        "selected_target_preserves_context_bound_transfer",
+        "forbidden_universalizations",
+        "selected_target_does_not_universalize_law",
+    )
+    health_fields = (
+        "source_chain_coherent",
+        "no_work_order_introduced",
+        "no_generation_path_introduced",
+        "no_model_call_introduced",
+    )
+    readiness_fields = (
+        "selected_target_selection_packet_id",
+        "ready_for_selected_target_work_order_planning",
+        "selected_target_class",
+    )
+
+    rewrite_payload(
+        packet_dir / "nonlocal_law_consolidated_target_selection_packet.json",
+        remove_fields(*packet_fields),
+    )
+    rewrite_payload(
+        packet_dir / "target_candidate_ranking_report.json",
+        remove_fields(*ranking_fields),
+    )
+    rewrite_payload(
+        packet_dir / "non_universalization_guard_carry_forward_report.json",
+        remove_fields(*guard_fields),
+    )
+    rewrite_payload(
+        packet_dir / "project_health_scope_guard_report.json",
+        remove_fields(*health_fields),
+    )
+    rewrite_payload(
+        packet_dir / "next_work_order_readiness_report.json",
+        remove_fields(*readiness_fields),
+    )
+
+
 def test_nonlocal_law_consolidated_target_selection_accepts_corrected_packet(
     tmp_path,
 ):
@@ -24933,6 +24994,24 @@ def test_nonlocal_law_consolidated_target_selection_accepts_corrected_packet(
     assert result.payload["no_phase_shift_claim"] is True
     assert result.payload["strongest_rival_defeated_claimed"] is False
     assert result.payload["ready_for_work_order_planning"] is True
+    assert result.payload["ready_for_selected_target_work_order_planning"] is True
+    assert result.payload["superseded_target_selection_packet_id"] is None
+    assert result.payload["supersession_reason"] is None
+    assert result.payload["ranking_summary"]
+    ranked_target_ids = [
+        target["target_seed_id"] for target in result.payload["ranked_targets"]
+    ]
+    assert ranked_target_ids == [
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID,
+        "reduce_explanation_explicitness_after_initial_pressure",
+        "enact_return_instead_of_summarizing_law",
+        "repair_chemistry_register_intrusion",
+    ]
+    assert result.payload["selected_target_does_not_universalize_law"] is True
+    assert result.payload["source_chain_coherent"] is True
+    assert result.payload["no_work_order_introduced"] is True
+    assert result.payload["no_generation_path_introduced"] is True
+    assert result.payload["no_model_call_introduced"] is True
     assert result.payload["next_recommended_action"] == (
         "review_consolidated_target_selection_before_work_order_planning"
     )
@@ -24952,11 +25031,35 @@ def test_nonlocal_law_consolidated_target_selection_accepts_corrected_packet(
     assert decision["generation_requires_future_authorization"] is True
 
     ranking = read_payload(packet_dir / "target_candidate_ranking_report.json")
+    assert ranking["summary"]
+    assert ranking["ranking_summary"] == ranking["summary"]
+    assert ranking["ranking_method"] == "controller_owned_consolidated_risk_priority"
+    assert ranking["ranking_basis"] == [
+        "structural depth before local wording",
+        "causal sequence before register polish",
+        "preserve first-loop lesson",
+        "avoid generic vividness",
+        "avoid rival imitation",
+    ]
+    assert ranking["selected_target_rank"] == 1
     assert ranking["selected_target_count"] == 1
-    assert ranking["ranked_target_candidates"][0]["target_seed_id"] == (
+    ranked_ids = [target["target_seed_id"] for target in ranking["ranked_targets"]]
+    assert ranked_ids == [
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID,
+        "reduce_explanation_explicitness_after_initial_pressure",
+        "enact_return_instead_of_summarizing_law",
+        "repair_chemistry_register_intrusion",
+    ]
+    assert ranking["ranked_targets"][0]["target_seed_id"] == (
         NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
     )
-    assert ranking["ranked_target_candidates"][0]["selected"] is True
+    assert ranking["ranked_targets"][0]["selected_now"] is True
+    assert all(
+        target["work_order_created"] is False for target in ranking["ranked_targets"]
+    )
+    assert all(
+        target["generation_authorized"] is False for target in ranking["ranked_targets"]
+    )
 
     selected = read_payload(packet_dir / "selected_risk_evidence_report.json")
     assert selected["risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
@@ -24991,9 +25094,27 @@ def test_nonlocal_law_consolidated_target_selection_accepts_corrected_packet(
     )
     assert guard["universalized_rule_created"] is False
     assert guard["lesson_scope"] == "work_local"
+    assert guard[
+        "selected_target_does_not_universalize_first_read_pressure_precedes_explanation_law"
+    ] is True
     assert guard["selected_target_does_not_universalize_law"] is True
     assert guard["selected_target_does_not_mean_always_add_events"] is True
     assert guard["selected_target_does_not_mean_imitate_rival_causal_sequence"] is True
+    assert (
+        guard[
+            "selected_target_does_not_mean_object_detail_is_always_better_than_explanation"
+        ]
+        is True
+    )
+    assert guard["selected_target_preserves_context_bound_transfer"] is True
+    assert guard["forbidden_universalizations"] == [
+        "always delay explanation",
+        "always begin with objects",
+        "always use table/spoon/ring fields",
+        "always add events",
+        "always treat explanation as failure",
+        "always imitate rival causal staging",
+    ]
 
     rival = read_payload(packet_dir / "strongest_rival_blocker_carry_forward_report.json")
     assert rival["strongest_rival_status"] == "narrowed_but_blocking"
@@ -25003,6 +25124,11 @@ def test_nonlocal_law_consolidated_target_selection_accepts_corrected_packet(
 
     readiness = read_payload(packet_dir / "next_work_order_readiness_report.json")
     assert readiness["ready_for_work_order_planning"] is True
+    assert readiness["ready_for_selected_target_work_order_planning"] is True
+    assert readiness["selected_target_selection_packet_id"] == result.payload["packet_id"]
+    assert readiness["selected_target_seed_id"] == NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    assert readiness["selected_target_class"] == "living_event_sequence_repair_target"
+    assert readiness["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
     assert readiness["work_order_authorized"] is False
     assert readiness["work_order_requires_separate_command"] is True
     assert readiness["generation_authorized"] is False
@@ -25023,6 +25149,20 @@ def test_nonlocal_law_consolidated_target_selection_accepts_corrected_packet(
     assert gate["model_calls"] == 0
     assert "strongest rival remains blocking" in gate["unresolved_blockers"]
 
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["project_health_scope_guard_passed"] is True
+    assert health["source_chain_coherent"] is True
+    assert health["source_consolidation_accepted"] is True
+    assert health["selected_target_from_allowed_seed"] is True
+    assert health["exactly_one_target_selected"] is True
+    assert health["no_work_order_introduced"] is True
+    assert health["no_generation_path_introduced"] is True
+    assert health["no_model_call_introduced"] is True
+    assert health["no_candidate_introduced"] is True
+    assert health["no_finality_claim"] is True
+    assert health["no_phase_shift_claim"] is True
+    assert health["no_strongest_rival_defeat_claim"] is True
+
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection)
         final_report = check_finalization(
@@ -25032,6 +25172,86 @@ def test_nonlocal_law_consolidated_target_selection_accepts_corrected_packet(
         )
     assert len(after_calls) == len(before_calls)
     assert final_report.refused is True
+
+
+def test_nonlocal_law_consolidated_target_selection_supersedes_stale_work_order_surface(
+    tmp_path,
+):
+    config, consolidation_packet, _stale_packet, _run_id = (
+        build_nonlocal_law_consolidated_target_selection_ready_packet(tmp_path)
+    )
+    stale = run_nonlocal_law_consolidated_target_selection(
+        config,
+        consolidation_packet=consolidation_packet,
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_packet_dir = Path(str(stale.payload["packet_dir"]))
+    degrade_nonlocal_law_consolidated_target_selection_work_order_surface(
+        stale_packet_dir
+    )
+
+    successor = run_nonlocal_law_consolidated_target_selection(
+        config,
+        consolidation_packet=consolidation_packet,
+        operator_reviewed=True,
+    )
+
+    assert successor.exit_code == 0
+    assert successor.payload["accepted"] is True
+    assert successor.payload["packet_id"] == "packet_0002"
+    assert successor.payload["superseded_target_selection_packet_id"] == "packet_0001"
+    assert (
+        successor.payload["supersession_reason"]
+        == "nonlocal_law_target_selection_work_order_surface_missing"
+    )
+    assert "packet.ranking_summary" in successor.payload[
+        "stale_target_selection_surface_failures"
+    ]
+    assert successor.payload["ranking_summary"]
+    ranked_target_ids = [
+        target["target_seed_id"] for target in successor.payload["ranked_targets"]
+    ]
+    assert ranked_target_ids == [
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID,
+        "reduce_explanation_explicitness_after_initial_pressure",
+        "enact_return_instead_of_summarizing_law",
+        "repair_chemistry_register_intrusion",
+    ]
+    assert successor.payload["ranked_targets"][0]["target_seed_id"] == (
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    )
+    assert successor.payload["selected_target_does_not_universalize_law"] is True
+    assert successor.payload["source_chain_coherent"] is True
+    assert successor.payload["no_work_order_introduced"] is True
+    assert successor.payload["no_generation_path_introduced"] is True
+    assert successor.payload["no_model_call_introduced"] is True
+    assert successor.payload["ready_for_selected_target_work_order_planning"] is True
+    assert successor.payload["work_order_created"] is False
+    assert successor.payload["generation_authorized"] is False
+    assert successor.payload["candidate_generated"] is False
+    assert successor.payload["model_calls"] == 0
+
+    successor_dir = Path(str(successor.payload["packet_dir"]))
+    readiness = read_payload(successor_dir / "next_work_order_readiness_report.json")
+    assert readiness["selected_target_selection_packet_id"] == "packet_0002"
+    assert readiness["ready_for_selected_target_work_order_planning"] is True
+    health = read_payload(successor_dir / "project_health_scope_guard_report.json")
+    assert health["source_chain_coherent"] is True
+    assert health["no_work_order_introduced"] is True
+    assert health["no_generation_path_introduced"] is True
+    assert health["no_model_call_introduced"] is True
+
+    duplicate = run_nonlocal_law_consolidated_target_selection(
+        config,
+        consolidation_packet=consolidation_packet,
+        operator_reviewed=True,
+    )
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "target selection already exists" in duplicate.payload["message"]
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_nonlocal_law_consolidated_target_selection_requires_operator_review(
