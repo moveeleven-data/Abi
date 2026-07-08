@@ -208,6 +208,13 @@ from abi.modules.nonlocal_law_selected_target_work_order import (
     TARGET_UNIT_IDS as NONLOCAL_LAW_SELECTED_TARGET_UNIT_IDS,
     run_nonlocal_law_selected_target_work_order_planning,
 )
+from abi.modules.nonlocal_law_selected_target_generation_authorization import (
+    AUTHORIZATION_DECISION_AUTHORIZE_ONE as SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    AUTHORIZATION_DECISION_REFUSE as SELECTED_TARGET_AUTH_DECISION_REFUSE,
+    NONLOCAL_LAW_SELECTED_TARGET_GENERATION_AUTHORIZATION_ARTIFACT_TYPES,
+    run_nonlocal_law_selected_target_generation_authorization,
+    run_selected_nonlocal_law_candidate_generation_placeholder,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -25660,6 +25667,40 @@ def degrade_nonlocal_law_selected_target_work_order_authorization_surface(
     )
 
 
+def build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+    tmp_path,
+):
+    config, target_selection_packet, _stale_selection, run_id = (
+        build_nonlocal_law_selected_target_work_order_ready_packet(tmp_path)
+    )
+    stale = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_packet_dir = Path(str(stale.payload["packet_dir"]))
+    degrade_nonlocal_law_selected_target_work_order_authorization_surface(
+        stale_packet_dir
+    )
+    corrected = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert corrected.exit_code == 0
+    assert corrected.payload["packet_id"] == "packet_0002"
+    assert corrected.payload["ready_for_selected_target_generation_authorization"] is True
+    return (
+        config,
+        Path(str(corrected.payload["packet_dir"])),
+        stale_packet_dir,
+        run_id,
+        corrected.payload,
+    )
+
+
 def test_nonlocal_law_selected_target_work_order_accepts_corrected_selection(
     tmp_path,
 ):
@@ -26224,6 +26265,523 @@ def test_nonlocal_law_selected_target_work_order_cli_accepts(tmp_path, capsys):
     assert payload["generation_authorized"] is False
     assert payload["candidate_generated"] is False
     assert payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_generation_authorization_accepts_work_order(
+    tmp_path,
+):
+    config, work_order_packet, _stale_work_order, run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection, run_id=run_id)
+
+    result = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["packet_id"] == "packet_0001"
+    assert result.payload["source_work_order_packet_id"] == "packet_0002"
+    assert result.payload["source_target_selection_packet_id"] == "packet_0002"
+    assert result.payload["source_consolidation_packet_id"] == "packet_0002"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0002"
+    assert result.payload["source_synthesis_packet_id"] == "packet_0002"
+    assert result.payload["source_reader_state_packet_id"] == "packet_0002"
+    assert result.payload["source_candidate_packet_id"] == "packet_0002"
+    assert result.payload["prior_current_best_candidate_packet_id"] == "packet_0063"
+    assert result.payload["current_best_for_next_loop_packet_id"] == "packet_0002"
+    assert result.payload["law_id"] == DISCOVERED_LOCAL_LAW_ID
+    assert result.payload["selected_target_seed_id"] == (
+        NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    )
+    assert result.payload["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert result.payload["decision"] == SELECTED_TARGET_AUTH_DECISION_AUTHORIZE
+    assert result.payload["generation_authorized"] is True
+    assert result.payload["next_generation_authorized"] is True
+    assert result.payload["generation_attempt_budget"] == 1
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["next_recommended_action"] == (
+        "generate_selected_nonlocal_law_candidate"
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == (
+        "nonlocal_law_selected_target_generation_authorization"
+    )
+    assert set(result.payload["artifact_paths"]) == set(
+        NONLOCAL_LAW_SELECTED_TARGET_GENERATION_AUTHORIZATION_ARTIFACT_TYPES
+    )
+    for artifact_type in (
+        NONLOCAL_LAW_SELECTED_TARGET_GENERATION_AUTHORIZATION_ARTIFACT_TYPES
+    ):
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    decision = read_payload(packet_dir / "authorization_decision_record.json")
+    assert decision["decision"] == SELECTED_TARGET_AUTH_DECISION_AUTHORIZE
+    assert decision["operator_reviewed"] is True
+    assert decision["authorization_scope"] == (
+        "one_bounded_selected_target_generation"
+    )
+    assert decision["generation_attempt_budget"] == 1
+    assert decision["authorization_consumed"] is False
+    assert decision["candidate_generated"] is False
+    assert decision["model_calls"] == 0
+    assert decision["finalization_allowed"] is False
+
+    scope = read_payload(packet_dir / "selected_target_generation_scope_review.json")
+    assert scope["work_order_scope"] == "living_event_sequence_repair"
+    assert scope["free_rewrite_allowed"] is False
+    assert scope["generation_allowed_by_this_authorization"] is True
+    assert scope["generation_limited_to_selected_target"] is True
+    assert scope["generation_must_not_expand_target_scope"] is True
+    assert scope["generation_must_preserve_packet_0002_object_field"] is True
+    assert scope["generation_must_preserve_earned_explanation_timing"] is True
+    assert scope["generation_must_not_copy_rival"] is True
+    assert scope["generation_must_not_claim_finality"] is True
+
+    units = read_payload(packet_dir / "target_unit_authorization_scope.json")
+    assert units["target_unit_ids"] == list(NONLOCAL_LAW_SELECTED_TARGET_UNIT_IDS)
+    assert len(units["target_units"]) == 7
+    unit_map = {unit["unit_id"]: unit for unit in units["target_units"]}
+    assert set(unit_map) == set(NONLOCAL_LAW_SELECTED_TARGET_UNIT_IDS)
+    material_units = {
+        "static_trace_to_active_condition",
+        "causal_bridge_between_object_events",
+        "living_consequence_before_naming",
+    }
+    for unit_id, unit in unit_map.items():
+        assert unit["target_requirement"]
+        assert unit["material_change_required"]
+        assert unit["semantic_validation_requirement"]
+        assert unit["protected_strengths"]
+        assert unit["forbidden_regressions"]
+        assert unit["evidence_basis"]
+        assert unit["authorized_for_generation"] is (unit_id in material_units)
+        if unit_id not in material_units:
+            assert unit["authorization_role"] == "constraint_preservation_guard"
+
+    validation = read_payload(
+        packet_dir / "materiality_semantic_validation_readiness_report.json"
+    )
+    assert validation["materiality_requirements"]
+    assert validation["semantic_validation_requirements"]
+    assert validation["validation_required_before_candidate_evidence"] is True
+    assert validation["materiality_policy_id"] == (
+        "selected_nonlocal_law_target_materiality_v1"
+    )
+    assert validation["semantic_validator_id"] == (
+        "selected_nonlocal_law_target_semantic_validator_v1"
+    )
+    assert validation["validation_must_pass_before_authorization_consumed"] is True
+    assert validation["failed_validation_does_not_consume_authorization"] is True
+
+    forbidden = read_payload(
+        packet_dir / "forbidden_rival_and_regression_review.json"
+    )
+    assert "cup" in forbidden["forbidden_rival_sequence"]
+    assert "rival diction" in forbidden["forbidden_rival_modes"]
+    assert forbidden["forbidden_regressions"]
+    assert forbidden["rival_imitation_forbidden"] is True
+    assert forbidden["selected_target_must_not_copy_rival_causal_sequence"] is True
+    assert forbidden["generic_incident_addition_forbidden"] is True
+    assert forbidden["object_inventory_as_living_causality_forbidden"] is True
+
+    protected = read_payload(packet_dir / "protected_strengths_review.json")
+    assert "first-read pressure improved" in protected["protected_strengths"]
+    assert "object-event consequence improved" in protected["protected_strengths"]
+    assert "explanation timing improved" in protected["protected_strengths"]
+    assert "reread return improved" in protected["protected_strengths"]
+    assert "non-imitation passed" in protected["protected_strengths"]
+    assert "table/ring/dust/spoon/saucer/light field" in protected[
+        "protected_strengths"
+    ]
+    assert "no outside answer pressure" in protected["protected_strengths"]
+    assert "proof packet_0034" in protected["protected_strengths"]
+    assert "prior reader-state packet_0013" in protected["protected_strengths"]
+    assert "source-chain through loop-review/consolidation/target-selection/work-order" in (
+        protected["protected_strengths"]
+    )
+    assert "packet_0063 preserved as prior-current-best history" in protected[
+        "protected_strengths"
+    ]
+
+    evidence = read_payload(packet_dir / "post_generation_evidence_plan.json")
+    assert evidence["required_next_steps_after_generation"] == [
+        "ablate_selected_nonlocal_law_candidate",
+        "evaluate_selected_nonlocal_law_candidate_reader_state",
+        "synthesize_selected_nonlocal_law_candidate_evidence",
+    ]
+    assert "full_selected_target_intervention" in evidence["ablation_controls"]
+    assert "revert_to_packet_0002" in evidence["ablation_controls"]
+    assert "remove_living_event_sequence_repair" in evidence["ablation_controls"]
+    assert "restore_static_retrospective_trace" in evidence["ablation_controls"]
+    assert "generic_incident_addition_control" in evidence["ablation_controls"]
+    assert "rival_imitation_control" in evidence["ablation_controls"]
+    assert "strongest_rival_comparison" in evidence["ablation_controls"]
+    assert "do object traces become active conditions?" in evidence[
+        "reader_state_focus"
+    ]
+    assert evidence["synthesis_required_before_current_best_update"] is True
+    assert evidence["finalization_forbidden_after_generation"] is True
+
+    budget = read_payload(packet_dir / "model_call_budget_report.json")
+    assert budget["model_call_budget"] == 1
+    assert budget["model_calls_consumed"] == 0
+    assert budget["remaining_model_calls"] == 1
+    assert budget["client_must_be_explicit"] is True
+    assert budget["live_model_requires_allow_live_model"] is True
+
+    transition = read_payload(packet_dir / "generation_lock_transition_report.json")
+    assert transition["prior_generation_authorized"] is False
+    assert transition["generation_authorized"] is True
+    assert transition["next_generation_authorized"] is True
+    assert transition["generation_attempt_budget"] == 1
+    assert transition["authorization_consumed"] is False
+    assert transition["lock_transition"] == (
+        "selected_target_generation_unlocked_for_one_attempt"
+    )
+    assert transition["generation_requires_separate_generate_command"] is True
+
+    gate = read_payload(
+        packet_dir / "selected_target_generation_authorization_gate_report.json"
+    )
+    gate_results = {row["gate_name"]: row for row in gate["gate_results"]}
+    assert gate["passed"] is False
+    for gate_name in (
+        "operator_reviewed",
+        "source_work_order_accepted",
+        "source_work_order_current_valid",
+        "source_chain_coherent",
+        "work_order_ready_for_generation_authorization",
+        "selected_target_exact",
+        "selected_risk_exact",
+        "generation_decision_valid",
+        "exactly_one_attempt_authorized",
+        "authorization_unconsumed",
+        "no_candidate_generated",
+        "no_model_calls",
+        "no_final_claim",
+        "no_phase_shift_claim",
+        "no_strongest_rival_defeat_claim",
+    ):
+        assert gate_results[gate_name]["passed"] is True
+    for gate_name in (
+        "candidate_generated",
+        "authorization_consumed",
+        "finalization_eligible",
+        "strongest_rival_resolved",
+    ):
+        assert gate_results[gate_name]["passed"] is False
+
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection, run_id=run_id)
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert len(after_calls) == len(before_calls)
+    assert finalization.refused is True
+
+
+def test_nonlocal_law_selected_target_generation_authorization_cli_accepts(
+    tmp_path,
+    capsys,
+):
+    _config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "authorize-selected-nonlocal-law-generation",
+            "--work-order-packet",
+            str(work_order_packet),
+            "--operator-reviewed",
+            "--decision",
+            SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["source_work_order_packet_id"] == "packet_0002"
+    assert payload["selected_target_seed_id"] == NONLOCAL_LAW_SELECTED_TARGET_SEED_ID
+    assert payload["selected_risk_id"] == NONLOCAL_LAW_SELECTED_RISK_ID
+    assert payload["generation_authorized"] is True
+    assert payload["next_generation_authorized"] is True
+    assert payload["generation_attempt_budget"] == 1
+    assert payload["authorization_consumed"] is False
+    assert payload["candidate_generated"] is False
+    assert payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_generation_authorization_requires_review(
+    tmp_path,
+):
+    config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+
+    result = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=False,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "--operator-reviewed" in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_generation_authorization_refuses_stale(
+    tmp_path,
+):
+    config, _work_order_packet, stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+
+    result = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=stale_work_order,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "stale or superseded" in result.payload["message"]
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "mutator", "expected_message"),
+    [
+        (
+            "nonlocal_law_selected_target_work_order_packet",
+            lambda payload: payload.__setitem__("selected_target_seed_id", "wrong"),
+            "selected_target_seed_id",
+        ),
+        (
+            "nonlocal_law_selected_target_work_order_packet",
+            lambda payload: payload.__setitem__("selected_risk_id", "wrong"),
+            "selected_risk_id",
+        ),
+        (
+            "nonlocal_law_selected_target_work_order_packet",
+            lambda payload: payload.__setitem__("source_chain_coherent", False),
+            "source_chain_coherent",
+        ),
+        (
+            "nonlocal_law_selected_target_work_order_packet",
+            lambda payload: payload.__setitem__("free_rewrite_allowed", True),
+            "free_rewrite_allowed",
+        ),
+        (
+            "nonlocal_law_selected_target_work_order_packet",
+            lambda payload: payload.__setitem__("generation_allowed", True),
+            "generation_allowed",
+        ),
+        (
+            "future_generation_contract",
+            lambda payload: payload.__setitem__("future_generation_authorized", True),
+            "future_generation_authorized",
+        ),
+        (
+            "materiality_and_semantic_validation_plan",
+            lambda payload: payload.__setitem__("materiality_requirements", []),
+            "materiality requirements",
+        ),
+        (
+            "materiality_and_semantic_validation_plan",
+            lambda payload: payload.__setitem__(
+                "semantic_validation_requirements",
+                [],
+            ),
+            "semantic validation requirements",
+        ),
+        (
+            "forbidden_rival_imitation_inventory",
+            lambda payload: payload.__setitem__(
+                "forbidden_rival_objects_or_sequence",
+                [],
+            ),
+            "forbidden rival inventory",
+        ),
+        (
+            "nonlocal_law_selected_target_work_order_packet",
+            lambda payload: payload.__setitem__("finalization_eligible", True),
+            "claim appears",
+        ),
+        (
+            "nonlocal_law_selected_target_work_order_packet",
+            lambda payload: payload.__setitem__("phase_shift_claimed", True),
+            "claim appears",
+        ),
+        (
+            "nonlocal_law_selected_target_work_order_packet",
+            lambda payload: payload.__setitem__(
+                "strongest_rival_defeated_claimed",
+                True,
+            ),
+            "claim appears",
+        ),
+    ],
+)
+def test_nonlocal_law_selected_target_generation_authorization_refusals(
+    tmp_path,
+    artifact_type,
+    mutator,
+    expected_message,
+):
+    config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+    bad_packet = copy_packet_with_payload_mutation(
+        tmp_path,
+        work_order_packet,
+        copy_name=f"bad_selected_auth_{artifact_type}_{expected_message[:8]}",
+        artifact_type=artifact_type,
+        mutator=mutator,
+    )
+
+    result = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=bad_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert expected_message in result.payload["message"]
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_generation_authorization_refuses_duplicate(
+    tmp_path,
+):
+    config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+    first = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+    assert first.exit_code == 0
+
+    duplicate = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+
+    assert duplicate.exit_code == 1
+    assert "unconsumed current-valid authorization" in duplicate.payload["message"]
+    assert duplicate.payload["authorization_consumed"] is False
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["model_calls"] == 0
+
+
+def test_nonlocal_law_selected_target_generation_authorization_refuse_decision(
+    tmp_path,
+):
+    config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+
+    result = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_REFUSE,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["generation_authorized"] is False
+    assert result.payload["generation_attempt_budget"] == 0
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+
+
+def test_selected_nonlocal_law_candidate_generation_placeholder_refuses_live(
+    tmp_path,
+):
+    config, work_order_packet, _stale_work_order, _run_id, _work_order_payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path
+        )
+    )
+    authorization = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_AUTH_DECISION_AUTHORIZE,
+    )
+    assert authorization.exit_code == 0
+    authorization_packet = Path(str(authorization.payload["packet_dir"]))
+
+    result = run_selected_nonlocal_law_candidate_generation_placeholder(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--allow-live-model is required" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["next_recommended_action"] == (
+        "implement_selected_nonlocal_law_candidate_generation"
+    )
 
 
 def test_nonlocal_law_candidate_evidence_synthesis_cli_accepts(tmp_path, capsys):

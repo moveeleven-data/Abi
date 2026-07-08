@@ -96,6 +96,11 @@ from abi.modules.nonlocal_law_consolidated_target_selection import (
 from abi.modules.nonlocal_law_selected_target_work_order import (
     run_nonlocal_law_selected_target_work_order_planning,
 )
+from abi.modules.nonlocal_law_selected_target_generation_authorization import (
+    NONLOCAL_LAW_SELECTED_TARGET_GENERATION_AUTHORIZATION_DECISIONS,
+    run_nonlocal_law_selected_target_generation_authorization,
+    run_selected_nonlocal_law_candidate_generation_placeholder,
+)
 from abi.modules.bounded_macro_recomposition import (
     BOUNDED_MACRO_RECOMPOSITION_CLIENTS,
     BOUNDED_MACRO_RECOMPOSITION_MAX_MODEL_CALLS_DEFAULT,
@@ -727,6 +732,52 @@ def build_parser() -> argparse.ArgumentParser:
         "--operator-reviewed",
         action="store_true",
         help="Confirm the operator reviewed the selected target packet.",
+    )
+    autonomous_selected_nonlocal_law_authorization_parser = (
+        autonomous_subparsers.add_parser(
+            "authorize-selected-nonlocal-law-generation",
+            help="Authorize one bounded selected-target generation attempt",
+        )
+    )
+    autonomous_selected_nonlocal_law_authorization_parser.add_argument(
+        "--work-order-packet",
+        type=Path,
+        required=True,
+        help="Corrected selected-target work-order packet directory to consume.",
+    )
+    autonomous_selected_nonlocal_law_authorization_parser.add_argument(
+        "--operator-reviewed",
+        action="store_true",
+        help="Confirm the operator reviewed the selected-target work order.",
+    )
+    autonomous_selected_nonlocal_law_authorization_parser.add_argument(
+        "--decision",
+        choices=NONLOCAL_LAW_SELECTED_TARGET_GENERATION_AUTHORIZATION_DECISIONS,
+        required=True,
+        help="Operator selected-target generation authorization decision.",
+    )
+    autonomous_selected_nonlocal_law_candidate_parser = (
+        autonomous_subparsers.add_parser(
+            "generate-selected-nonlocal-law-candidate",
+            help="Placeholder for future selected nonlocal law candidate generation",
+        )
+    )
+    autonomous_selected_nonlocal_law_candidate_parser.add_argument(
+        "--client",
+        choices=("openai",),
+        required=True,
+        help="Future selected-target generation client path.",
+    )
+    autonomous_selected_nonlocal_law_candidate_parser.add_argument(
+        "--authorization-packet",
+        type=Path,
+        required=True,
+        help="Selected-target generation authorization packet directory.",
+    )
+    autonomous_selected_nonlocal_law_candidate_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
     )
     autonomous_nonlocal_law_authorization_parser = autonomous_subparsers.add_parser(
         "authorize-nonlocal-law-generation",
@@ -1402,6 +1453,26 @@ def main(argv: list[str] | None = None) -> int:
             config,
             target_selection_packet=args.target_selection_packet,
             operator_reviewed=args.operator_reviewed,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "authorize-selected-nonlocal-law-generation"
+    ):
+        return _cmd_autonomous_authorize_selected_nonlocal_law_generation(
+            config,
+            work_order_packet=args.work_order_packet,
+            operator_reviewed=args.operator_reviewed,
+            decision=args.decision,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "generate-selected-nonlocal-law-candidate"
+    ):
+        return _cmd_autonomous_generate_selected_nonlocal_law_candidate(
+            config,
+            client_name=args.client,
+            authorization_packet=args.authorization_packet,
+            allow_live_model=args.allow_live_model,
         )
     if args.command == "autonomous" and args.autonomous_command == "authorize-next-cycle":
         return _cmd_autonomous_authorize_next_cycle(
@@ -2109,6 +2180,40 @@ def _cmd_autonomous_plan_selected_nonlocal_law_work_order(
         config,
         target_selection_packet=target_selection_packet,
         operator_reviewed=operator_reviewed,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_authorize_selected_nonlocal_law_generation(
+    config: AbiConfig,
+    *,
+    work_order_packet: Path,
+    operator_reviewed: bool,
+    decision: str | None,
+) -> int:
+    result = run_nonlocal_law_selected_target_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=operator_reviewed,
+        decision=decision,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_generate_selected_nonlocal_law_candidate(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    authorization_packet: Path,
+    allow_live_model: bool,
+) -> int:
+    result = run_selected_nonlocal_law_candidate_generation_placeholder(
+        config,
+        client_name=client_name,
+        authorization_packet=authorization_packet,
+        allow_live_model=allow_live_model,
     )
     print(json.dumps(result.payload, indent=2, sort_keys=True))
     return result.exit_code
