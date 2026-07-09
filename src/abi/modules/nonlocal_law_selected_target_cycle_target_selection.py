@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -69,16 +69,25 @@ SELECTED_TARGET_SEED_ID = "reduce_causal_mechanism_naming"
 SELECTED_RISK_ID = "causal_mechanism_overexplained"
 SELECTED_TARGET_CLASS = "mechanism_naming_reduction_target"
 TARGET_SCOPE = "selected_target_mechanism_visibility_repair"
+WORK_ORDER_TARGET_SCOPE = "mechanism_visibility_repair"
 TARGET_STATEMENT = (
     "Preserve packet_0001's living-event sequence gain while reducing explicit "
     "causal-mechanism language so object relations carry the perceptual change "
     "with less declaration."
 )
 CORE_REPAIR_PRINCIPLE = (
-    "The next repair should make causality felt through the object field rather "
-    "than repeatedly naming the law that perception is being conditioned."
+    "Make causality felt through the object field rather than repeatedly naming "
+    "the law that perception is being conditioned."
+)
+WORK_ORDER_PLANNING_PRINCIPLE = (
+    "The work order must not delete explanation, reduce object activity, or make "
+    "the text vague. It must move causal meaning from explicit mechanism "
+    "language into object relation, syntax, timing, and perceptual sequence."
 )
 NEXT_RECOMMENDED_ACTION = "plan_selected_target_cycle_work_order"
+SUPERSESSION_REASON_WORK_ORDER_SURFACE_MISSING = (
+    "selected_target_cycle_target_selection_work_order_surface_missing"
+)
 SELECTED_RISK_CLUSTER = (
     "causal_mechanism_overexplained",
     "room_begins_to_instruct_too_declarative",
@@ -86,8 +95,8 @@ SELECTED_RISK_CLUSTER = (
 )
 NON_SELECTED_TARGET_SEED_IDS = (
     "enact_return_instead_of_summarizing_law",
-    "integrate_or_remove_chemistry_register",
     "protect_object_field_delicacy",
+    "integrate_or_remove_chemistry_register",
 )
 NON_SELECTED_RISK_IDS = (
     "conclusion_summarizes_instead_of_enacts_return",
@@ -121,33 +130,49 @@ RANKED_TARGETS = (
             "living-event repair. It preserves the gain while testing whether "
             "causality can be felt through object relation rather than declared."
         ),
+        "work_order_implication": (
+            "Plan a bounded repair that preserves packet_0001's living-event "
+            "sequence while reducing explicit causal-mechanism language."
+        ),
     },
     {
         "rank": 2,
         "target_seed_id": "enact_return_instead_of_summarizing_law",
-        "source_risk_id": "conclusion_summarizes_instead_of_enacts_return",
+        "source_risk_ids": ["conclusion_summarizes_instead_of_enacts_return"],
         "reason": (
             "Structurally important and high priority, but should follow or be "
             "constrained by mechanism-naming reduction because return will "
             "continue to summarize if the law is still overdeclared."
         ),
+        "work_order_implication": (
+            "Carry forward as high-priority next-cycle risk; do not solve in "
+            "this work order unless needed as preservation constraint."
+        ),
     },
     {
         "rank": 3,
         "target_seed_id": "protect_object_field_delicacy",
-        "source_risk_id": "object_field_delicacy_overloaded_by_causal_explanation",
+        "source_risk_ids": ["object_field_delicacy_overloaded_by_causal_explanation"],
         "reason": (
             "Important constraint and potential later target, but partly "
             "overlaps with mechanism-naming reduction."
+        ),
+        "work_order_implication": (
+            "Treat as a guard constraint on the selected work order: reduction "
+            "of mechanism naming must not make objects less active or merely "
+            "atmospheric."
         ),
     },
     {
         "rank": 4,
         "target_seed_id": "integrate_or_remove_chemistry_register",
-        "source_risk_id": "chemistry_register_unresolved",
+        "source_risk_ids": ["chemistry_register_unresolved"],
         "reason": (
             "Real register issue, but narrower than the current central "
             "mechanism/return problem."
+        ),
+        "work_order_implication": (
+            "Carry forward unchanged; do not solve in the selected work order."
         ),
     },
 )
@@ -172,6 +197,17 @@ class SelectedTargetCycleTargetSelectionSubject:
     source_parent_ids: tuple[str, ...]
     active_risks: tuple[dict[str, Any], ...]
     allowed_target_seed_ids: tuple[str, ...]
+    superseded_target_selection_packet_id: str | None = None
+    supersession_reason: str | None = None
+    stale_surface_failures: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TargetSelectionSupersessionContext:
+    corrected_current_valid_target_selection_exists: bool
+    superseded_target_selection_packet_id: str | None = None
+    supersession_reason: str | None = None
+    stale_surface_failures: tuple[str, ...] = ()
 
 
 def run_selected_target_cycle_target_selection(
@@ -202,6 +238,24 @@ def run_selected_target_cycle_target_selection(
     try:
         subject = _load_subject(config, consolidation_packet_dir)
         _validate_subject_for_target_selection(config, subject)
+        supersession = _target_selection_supersession_context(config, subject)
+        if supersession.corrected_current_valid_target_selection_exists:
+            return _refusal(
+                consolidation_packet=consolidation_packet_dir,
+                message=(
+                    "Selected-target cycle target selection refused; corrected "
+                    "current-valid target-selection packet already exists for "
+                    f"consolidation packet {subject.consolidation_packet_id}."
+                ),
+            )
+        subject = replace(
+            subject,
+            superseded_target_selection_packet_id=(
+                supersession.superseded_target_selection_packet_id
+            ),
+            supersession_reason=supersession.supersession_reason,
+            stale_surface_failures=supersession.stale_surface_failures,
+        )
     except ValueError as error:
         return _refusal(
             consolidation_packet=consolidation_packet_dir,
@@ -437,11 +491,6 @@ def _validate_subject_for_target_selection(
             "Selected-target cycle target selection refused; strongest rival status "
             f"must be {EXPECTED_STRONGEST_RIVAL_STATUS}."
         )
-    if _accepted_target_selection_exists(config, subject):
-        raise ValueError(
-            "Selected-target cycle target selection refused; current-valid "
-            "target-selection packet already exists for this consolidation packet."
-        )
 
 
 def _write_artifacts(
@@ -623,6 +672,11 @@ def _build_source_intake(
         "source_consolidation_packet_artifact_id": (
             subject.consolidation_packet_artifact_id
         ),
+        "superseded_target_selection_packet_id": (
+            subject.superseded_target_selection_packet_id
+        ),
+        "supersession_reason": subject.supersession_reason,
+        "stale_surface_failures": list(subject.stale_surface_failures),
         "source_consolidation_artifact_ids": dict(subject.consolidation_artifact_ids),
         "source_consolidation_accepted": True,
         "source_consolidation_current_valid": True,
@@ -670,10 +724,19 @@ def _build_ranking(
         ranking["work_order_created"] = False
         ranking["generation_authorized"] = False
         rankings.append(ranking)
+    ranked_target_ids = [str(item["target_seed_id"]) for item in rankings]
     return {
         **_source_fields(subject),
+        "summary": (
+            "The selected next target is reduce_causal_mechanism_naming because "
+            "it directly addresses the central mechanism-visibility cluster "
+            "while preserving packet_0001's living-event sequence gain."
+        ),
         "rankings": rankings,
-        "ranked_target_seed_ids": [str(item["target_seed_id"]) for item in rankings],
+        "ranked_targets": rankings,
+        "ranked_target_seed_ids": ranked_target_ids,
+        "ranked_target_ids": ranked_target_ids,
+        "ranked_target_count": len(rankings),
         "selected_target_seed_id": SELECTED_TARGET_SEED_ID,
         "selected_target_rank": 1,
         "selected_target_ranked_first": True,
@@ -694,10 +757,12 @@ def _build_selected_target_decision(
         **_source_fields(subject),
         "selected_target_seed_id": SELECTED_TARGET_SEED_ID,
         "selected_risk_id": SELECTED_RISK_ID,
+        "selected_risk_cluster": list(SELECTED_RISK_CLUSTER),
         "selected_target_class": SELECTED_TARGET_CLASS,
-        "target_scope": TARGET_SCOPE,
+        "target_scope": WORK_ORDER_TARGET_SCOPE,
         "target_statement": TARGET_STATEMENT,
         "core_repair_principle": CORE_REPAIR_PRINCIPLE,
+        "work_order_planning_principle": WORK_ORDER_PLANNING_PRINCIPLE,
         "selected_target_count": 1,
         "why_selected_before_other_risks": [
             "It addresses the dominant risk cluster.",
@@ -707,6 +772,7 @@ def _build_selected_target_decision(
         ],
         "target_selection_authorized_by_consolidation": True,
         "target_selection_executed_by_this_packet": True,
+        "ready_for_work_order_planning": True,
         "work_order_authorized": False,
         "work_order_requires_separate_command": True,
         "generation_authorized": False,
@@ -760,6 +826,8 @@ def _build_non_selected_risk_carry_forward(
                 "not_selected_yet": True,
                 "blocks_finalization": True,
                 "possible_next_target_seed": _risk_to_seed(risk_id),
+                "recommended_next_handling": _risk_handling(risk_id),
+                "work_order_constraint_role": _risk_constraint_role(risk_id),
             }
         )
     return {
@@ -856,6 +924,7 @@ def _build_work_order_readiness(
         "selected_risk_id": SELECTED_RISK_ID,
         "work_order_authorized": False,
         "work_order_requires_separate_command": True,
+        "work_order_planning_requires_operator_review": True,
         "generation_authorized": False,
         "generation_requires_future_work_order": True,
         "generation_requires_separate_authorization": True,
@@ -920,6 +989,9 @@ def _build_gate_report(
         "selected_risk_id": SELECTED_RISK_ID,
         "selected_target_count": 1,
         "ready_for_work_order_planning": True,
+        "target_selected": True,
+        "selected_target_allowed": True,
+        "selected_target_ranked_first": True,
         "work_order_created": False,
         "work_order_authorized": False,
         "generation_authorized": False,
@@ -927,6 +999,7 @@ def _build_gate_report(
         "model_calls": 0,
         "finalization_eligible": False,
         "strongest_rival_remains_blocking": True,
+        "strongest_rival_resolved": False,
         "strongest_rival_defeated_claimed": False,
         "no_final_claim": True,
         "no_phase_shift_claim": True,
@@ -988,6 +1061,11 @@ def _build_packet_summary(
         "run_id": subject.run_id,
         "packet_id": packet_dir.name,
         "packet_dir": str(packet_dir),
+        "superseded_target_selection_packet_id": (
+            subject.superseded_target_selection_packet_id
+        ),
+        "supersession_reason": subject.supersession_reason,
+        "stale_surface_failures": list(subject.stale_surface_failures),
         "artifact_ids": {
             artifact_type: artifact.id for artifact_type, artifact in artifacts.items()
         },
@@ -1001,15 +1079,40 @@ def _build_packet_summary(
         "selected_target_class": SELECTED_TARGET_CLASS,
         "selected_target_count": 1,
         "target_selection_executed": True,
+        "ranked_target_ids": payloads["target_candidate_ranking_report"][
+            "ranked_target_ids"
+        ],
+        "ranked_targets": payloads["target_candidate_ranking_report"][
+            "ranked_targets"
+        ],
+        "ranked_target_count": payloads["target_candidate_ranking_report"][
+            "ranked_target_count"
+        ],
+        "selected_target_rank": 1,
+        "target_selected": True,
+        "gate_target_selected": payloads[
+            "selected_target_cycle_target_selection_gate_report"
+        ]["target_selected"],
+        "selected_target_allowed": True,
+        "selected_target_ranked_first": True,
+        "ready_for_work_order_planning": True,
+        "ready_for_selected_target_work_order_planning": True,
         "work_order_authorized": False,
         "work_order_requires_separate_command": True,
+        "work_order_planning_requires_operator_review": True,
         "generation_authorized": False,
         "candidate_generated": False,
         "model_calls": 0,
         "finalization_eligible": False,
         "no_final_claim": True,
+        "no_finality_claim": True,
         "no_phase_shift_claim": True,
         "strongest_rival_defeated_claimed": False,
+        "no_strongest_rival_defeat_claim": True,
+        "no_work_order_introduced": True,
+        "no_generation_path_introduced": True,
+        "no_model_call_introduced": True,
+        "no_candidate_introduced": True,
         "next_recommended_action": NEXT_RECOMMENDED_ACTION,
         "ranking_report": payloads["target_candidate_ranking_report"],
         "gate_report": payloads["selected_target_cycle_target_selection_gate_report"],
@@ -1095,6 +1198,263 @@ def _risk_to_seed(risk_id: str) -> str | None:
     if risk_id == "finalization_not_allowed":
         return None
     return None
+
+
+def _risk_handling(risk_id: str) -> str:
+    handling = {
+        "conclusion_summarizes_instead_of_enacts_return": (
+            "carry forward as the likely next return-enactment target after "
+            "mechanism-visibility repair is tested"
+        ),
+        "chemistry_register_unresolved": (
+            "carry forward unchanged as a later register integration or removal "
+            "target"
+        ),
+        "object_field_delicacy_overloaded_by_causal_explanation": (
+            "use as a guard constraint on the selected work order"
+        ),
+        "strongest_rival_remains_blocking": (
+            "keep strongest-rival pressure active; do not claim rival resolution"
+        ),
+        "finalization_not_allowed": (
+            "keep finalization locked until post-generation evidence and final "
+            "profile gates exist"
+        ),
+    }
+    return handling.get(risk_id, "carry forward for operator review")
+
+
+def _risk_constraint_role(risk_id: str) -> str:
+    roles = {
+        "conclusion_summarizes_instead_of_enacts_return": (
+            "future_target_after_selected_mechanism_visibility_repair"
+        ),
+        "chemistry_register_unresolved": "future_register_target",
+        "object_field_delicacy_overloaded_by_causal_explanation": (
+            "selected_work_order_guard_constraint"
+        ),
+        "strongest_rival_remains_blocking": "blocking_external_pressure",
+        "finalization_not_allowed": "finalization_lock",
+    }
+    return roles.get(risk_id, "operator_review_constraint")
+
+
+def _target_selection_supersession_context(
+    config: AbiConfig,
+    subject: SelectedTargetCycleTargetSelectionSubject,
+) -> TargetSelectionSupersessionContext:
+    root = (
+        config.run_dir(subject.run_id)
+        / "nonlocal_law_selected_target_cycle_target_selection"
+    )
+    if not root.exists():
+        return TargetSelectionSupersessionContext(
+            corrected_current_valid_target_selection_exists=False
+        )
+
+    superseded_packet_id: str | None = None
+    stale_surface_failures: tuple[str, ...] = ()
+    for packet_dir in sorted(root.glob("packet_*")):
+        packet_path = (
+            packet_dir
+            / "nonlocal_law_selected_target_cycle_target_selection_packet.json"
+        )
+        if not packet_path.exists():
+            continue
+        try:
+            payload = _read_payload(packet_path)
+        except ValueError:
+            continue
+        if not _is_matching_target_selection_payload(payload, subject):
+            continue
+        failures = _target_selection_surface_failures(packet_dir, payload)
+        if not failures:
+            return TargetSelectionSupersessionContext(
+                corrected_current_valid_target_selection_exists=True
+            )
+        superseded_packet_id = packet_dir.name
+        stale_surface_failures = tuple(failures)
+
+    if superseded_packet_id:
+        return TargetSelectionSupersessionContext(
+            corrected_current_valid_target_selection_exists=False,
+            superseded_target_selection_packet_id=superseded_packet_id,
+            supersession_reason=SUPERSESSION_REASON_WORK_ORDER_SURFACE_MISSING,
+            stale_surface_failures=stale_surface_failures,
+        )
+    return TargetSelectionSupersessionContext(
+        corrected_current_valid_target_selection_exists=False
+    )
+
+
+def _is_matching_target_selection_payload(
+    payload: dict[str, Any],
+    subject: SelectedTargetCycleTargetSelectionSubject,
+) -> bool:
+    return (
+        payload.get("accepted") is True
+        and payload.get("source_consolidation_packet_id")
+        == subject.consolidation_packet_id
+        and payload.get("selected_target_seed_id") == SELECTED_TARGET_SEED_ID
+        and payload.get("target_selection_executed") is True
+        and payload.get("work_order_authorized") is False
+        and payload.get("generation_authorized") is False
+        and payload.get("candidate_generated") is False
+        and int(payload.get("model_calls") or 0) == 0
+        and payload.get("finalization_eligible") is False
+    )
+
+
+def _target_selection_surface_failures(
+    packet_dir: Path,
+    packet_payload: dict[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    expected_ids = [str(item["target_seed_id"]) for item in RANKED_TARGETS]
+    if packet_payload.get("ranked_target_ids") != expected_ids:
+        failures.append("packet.ranked_target_ids_missing_or_invalid")
+    if packet_payload.get("ranked_target_count") != len(expected_ids):
+        failures.append("packet.ranked_target_count_missing_or_invalid")
+    packet_ranked_targets = packet_payload.get("ranked_targets")
+    if not isinstance(packet_ranked_targets, list):
+        failures.append("packet.ranked_targets_missing_or_invalid")
+    elif [
+        item.get("target_seed_id") if isinstance(item, dict) else None
+        for item in packet_ranked_targets
+    ] != expected_ids:
+        failures.append("packet.ranked_targets_ids_invalid")
+    if not isinstance(packet_payload.get("ranking_report"), dict):
+        failures.append("packet.ranking_report_missing")
+    if packet_payload.get("target_selected") is not True:
+        failures.append("packet.target_selected_missing_or_invalid")
+    if packet_payload.get("gate_target_selected") is not True:
+        failures.append("packet.gate_target_selected_missing_or_invalid")
+    if packet_payload.get("selected_target_allowed") is not True:
+        failures.append("packet.selected_target_allowed_missing_or_invalid")
+    if packet_payload.get("selected_target_ranked_first") is not True:
+        failures.append("packet.selected_target_ranked_first_missing_or_invalid")
+    if packet_payload.get("ready_for_work_order_planning") is not True:
+        failures.append("packet.ready_for_work_order_planning_missing_or_invalid")
+    if packet_payload.get("ready_for_selected_target_work_order_planning") is not True:
+        failures.append(
+            "packet.ready_for_selected_target_work_order_planning_missing_or_invalid"
+        )
+
+    ranking = _optional_target_selection_payload(
+        packet_dir,
+        "target_candidate_ranking_report",
+        failures,
+    )
+    if ranking:
+        ranked_targets = ranking.get("ranked_targets")
+        if not isinstance(ranked_targets, list):
+            failures.append("ranking.ranked_targets_missing")
+        elif [
+            item.get("target_seed_id") if isinstance(item, dict) else None
+            for item in ranked_targets
+        ] != expected_ids:
+            failures.append("ranking.ranked_targets_ids_invalid")
+        if ranking.get("ranked_target_ids") != expected_ids:
+            failures.append("ranking.ranked_target_ids_missing_or_invalid")
+        if ranking.get("ranked_target_count") != len(expected_ids):
+            failures.append("ranking.ranked_target_count_missing_or_invalid")
+        if ranking.get("selected_target_rank") != 1:
+            failures.append("ranking.selected_target_rank_missing_or_invalid")
+        if ranking.get("selected_target_ranked_first") is not True:
+            failures.append("ranking.selected_target_ranked_first_missing_or_invalid")
+
+    decision = _optional_target_selection_payload(
+        packet_dir,
+        "selected_target_decision",
+        failures,
+    )
+    if decision:
+        if decision.get("selected_risk_cluster") != list(SELECTED_RISK_CLUSTER):
+            failures.append("decision.selected_risk_cluster_missing_or_invalid")
+        if decision.get("target_scope") != WORK_ORDER_TARGET_SCOPE:
+            failures.append("decision.target_scope_missing_or_invalid")
+        if decision.get("core_repair_principle") != CORE_REPAIR_PRINCIPLE:
+            failures.append("decision.core_repair_principle_missing_or_invalid")
+        if (
+            decision.get("work_order_planning_principle")
+            != WORK_ORDER_PLANNING_PRINCIPLE
+        ):
+            failures.append("decision.work_order_planning_principle_missing")
+        if decision.get("ready_for_work_order_planning") is not True:
+            failures.append("decision.ready_for_work_order_planning_missing")
+
+    carry = _optional_target_selection_payload(
+        packet_dir,
+        "non_selected_risk_carry_forward_report",
+        failures,
+    )
+    if carry:
+        risks = carry.get("non_selected_risks")
+        if not isinstance(risks, list):
+            failures.append("carry.non_selected_risks_missing")
+        else:
+            for risk in risks:
+                if not isinstance(risk, dict):
+                    failures.append("carry.non_selected_risk_malformed")
+                    continue
+                risk_id = str(risk.get("risk_id") or "unknown")
+                if not risk.get("recommended_next_handling"):
+                    failures.append(
+                        f"carry.{risk_id}.recommended_next_handling_missing"
+                    )
+                if not risk.get("work_order_constraint_role"):
+                    failures.append(
+                        f"carry.{risk_id}.work_order_constraint_role_missing"
+                    )
+
+    readiness = _optional_target_selection_payload(
+        packet_dir,
+        "next_work_order_readiness_report",
+        failures,
+    )
+    if readiness:
+        if readiness.get("ready_for_work_order_planning") is not True:
+            failures.append("readiness.ready_for_work_order_planning_missing")
+        if readiness.get("ready_for_selected_target_work_order_planning") is not True:
+            failures.append(
+                "readiness.ready_for_selected_target_work_order_planning_missing"
+            )
+        if readiness.get("work_order_planning_requires_operator_review") is not True:
+            failures.append(
+                "readiness.work_order_planning_requires_operator_review_missing"
+            )
+
+    gate = _optional_target_selection_payload(
+        packet_dir,
+        "selected_target_cycle_target_selection_gate_report",
+        failures,
+    )
+    if gate:
+        if gate.get("target_selected") is not True:
+            failures.append("gate.target_selected_missing_or_invalid")
+        if gate.get("selected_target_allowed") is not True:
+            failures.append("gate.selected_target_allowed_missing_or_invalid")
+        if gate.get("selected_target_ranked_first") is not True:
+            failures.append("gate.selected_target_ranked_first_missing_or_invalid")
+        if gate.get("strongest_rival_resolved") is not False:
+            failures.append("gate.strongest_rival_resolved_missing_or_invalid")
+    return failures
+
+
+def _optional_target_selection_payload(
+    packet_dir: Path,
+    artifact_type: str,
+    failures: list[str],
+) -> dict[str, Any] | None:
+    path = packet_dir / f"{artifact_type}.json"
+    if not path.exists():
+        failures.append(f"{artifact_type}.missing")
+        return None
+    try:
+        return _read_payload(path)
+    except ValueError:
+        failures.append(f"{artifact_type}.malformed")
+        return None
 
 
 def _has_newer_current_valid_consolidation(

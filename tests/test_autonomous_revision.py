@@ -29811,8 +29811,26 @@ def assert_selected_target_cycle_target_selection_acceptance(
     )
     assert result.payload["selected_target_count"] == 1
     assert result.payload["target_selection_executed"] is True
+    assert result.payload["ranked_target_ids"] == [
+        "reduce_causal_mechanism_naming",
+        "enact_return_instead_of_summarizing_law",
+        "protect_object_field_delicacy",
+        "integrate_or_remove_chemistry_register",
+    ]
+    assert [
+        target["target_seed_id"] for target in result.payload["ranked_targets"]
+    ] == result.payload["ranked_target_ids"]
+    assert result.payload["ranked_target_count"] == 4
+    assert result.payload["selected_target_rank"] == 1
+    assert result.payload["target_selected"] is True
+    assert result.payload["gate_target_selected"] is True
+    assert result.payload["selected_target_allowed"] is True
+    assert result.payload["selected_target_ranked_first"] is True
+    assert result.payload["ready_for_work_order_planning"] is True
+    assert result.payload["ready_for_selected_target_work_order_planning"] is True
     assert result.payload["work_order_authorized"] is False
     assert result.payload["work_order_requires_separate_command"] is True
+    assert result.payload["work_order_planning_requires_operator_review"] is True
     assert result.payload["generation_authorized"] is False
     assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0
@@ -29851,22 +29869,34 @@ def assert_selected_target_cycle_target_selection_acceptance(
         "protect_object_field_delicacy",
         "integrate_or_remove_chemistry_register",
     ]
+    assert ranking["ranked_targets"] == ranking["rankings"]
+    assert ranking["ranked_target_ids"] == ranked_ids
+    assert ranking["ranked_target_count"] == 4
+    assert ranking["selected_target_rank"] == 1
     assert ranking["selected_target_ranked_first"] is True
     assert ranking["rankings"][0]["source_risk_ids"] == [
         "causal_mechanism_overexplained",
         "room_begins_to_instruct_too_declarative",
         "later_seeing_must_be_changed_names_law_too_directly",
     ]
+    assert "bounded repair" in ranking["rankings"][0]["work_order_implication"]
 
     decision = read_payload(packet_dir / "selected_target_decision.json")
     assert decision["selected_target_seed_id"] == "reduce_causal_mechanism_naming"
     assert decision["selected_risk_id"] == "causal_mechanism_overexplained"
+    assert decision["selected_risk_cluster"] == [
+        "causal_mechanism_overexplained",
+        "room_begins_to_instruct_too_declarative",
+        "later_seeing_must_be_changed_names_law_too_directly",
+    ]
     assert decision["selected_target_class"] == "mechanism_naming_reduction_target"
-    assert decision["target_scope"] == "selected_target_mechanism_visibility_repair"
+    assert decision["target_scope"] == "mechanism_visibility_repair"
     assert "object relations carry" in decision["target_statement"]
     assert "object field" in decision["core_repair_principle"]
+    assert "must not delete explanation" in decision["work_order_planning_principle"]
     assert decision["target_selection_authorized_by_consolidation"] is True
     assert decision["target_selection_executed_by_this_packet"] is True
+    assert decision["ready_for_work_order_planning"] is True
 
     evidence = read_payload(packet_dir / "selected_risk_evidence_report.json")
     assert evidence["selected_risk_id"] == "causal_mechanism_overexplained"
@@ -29884,8 +29914,8 @@ def assert_selected_target_cycle_target_selection_acceptance(
     carry = read_payload(packet_dir / "non_selected_risk_carry_forward_report.json")
     assert carry["carried_forward_target_seed_ids"] == [
         "enact_return_instead_of_summarizing_law",
-        "integrate_or_remove_chemistry_register",
         "protect_object_field_delicacy",
+        "integrate_or_remove_chemistry_register",
     ]
     assert carry["carried_forward_risk_ids"] == [
         "conclusion_summarizes_instead_of_enacts_return",
@@ -29895,6 +29925,23 @@ def assert_selected_target_cycle_target_selection_acceptance(
         "finalization_not_allowed",
     ]
     assert all(risk["not_selected_yet"] is True for risk in carry["non_selected_risks"])
+    assert all(
+        isinstance(risk["recommended_next_handling"], str)
+        and risk["recommended_next_handling"]
+        for risk in carry["non_selected_risks"]
+    )
+    assert all(
+        isinstance(risk["work_order_constraint_role"], str)
+        and risk["work_order_constraint_role"]
+        for risk in carry["non_selected_risks"]
+    )
+    risk_roles = {
+        risk["risk_id"]: risk["work_order_constraint_role"]
+        for risk in carry["non_selected_risks"]
+    }
+    assert risk_roles["object_field_delicacy_overloaded_by_causal_explanation"] == (
+        "selected_work_order_guard_constraint"
+    )
 
     context = read_payload(packet_dir / "working_current_best_context_report.json")
     assert context["current_best_for_next_loop_packet_id"] == "packet_0001"
@@ -29929,6 +29976,7 @@ def assert_selected_target_cycle_target_selection_acceptance(
     assert readiness["selected_target_selection_packet_id"] == packet_dir.name
     assert readiness["work_order_authorized"] is False
     assert readiness["work_order_requires_separate_command"] is True
+    assert readiness["work_order_planning_requires_operator_review"] is True
     assert readiness["generation_authorized"] is False
     assert readiness["generation_requires_future_work_order"] is True
     assert readiness["generation_requires_separate_authorization"] is True
@@ -29945,6 +29993,10 @@ def assert_selected_target_cycle_target_selection_acceptance(
     assert "target_selection_ready" in gate["passed_gates"]
     assert "selected_target_allowed" in gate["passed_gates"]
     assert "selected_target_ranked_first" in gate["passed_gates"]
+    assert gate["target_selected"] is True
+    assert gate["selected_target_allowed"] is True
+    assert gate["selected_target_ranked_first"] is True
+    assert gate["strongest_rival_resolved"] is False
     assert "work_order_created" in gate["failed_gates"]
     assert "generation_authorized" in gate["failed_gates"]
     assert "candidate_generated" in gate["failed_gates"]
@@ -30065,6 +30117,110 @@ def test_selected_target_cycle_target_selection_refuses_invalid_source(
     assert result.payload["generation_authorized"] is False
     assert result.payload["candidate_generated"] is False
     assert result.payload["model_calls"] == 0
+
+
+def test_selected_target_cycle_target_selection_supersedes_stale_work_order_surface(
+    tmp_path,
+):
+    config, consolidation_packet, run_id, _consolidation_payload = (
+        build_selected_target_cycle_target_selection_ready_chain(tmp_path)
+    )
+    first = run_selected_target_cycle_target_selection(
+        config,
+        consolidation_packet=consolidation_packet,
+        operator_reviewed=True,
+    )
+    assert first.exit_code == 0
+    first_dir = Path(str(first.payload["packet_dir"]))
+    assert first_dir.name == "packet_0001"
+
+    def _stale_packet(payload):
+        payload["ranked_target_ids"] = [None]
+        payload["ranked_target_count"] = 1
+        payload["ranked_targets"] = None
+        payload["ranking_report"] = None
+        payload["gate_target_selected"] = None
+
+    def _stale_ranking(payload):
+        payload["ranked_target_ids"] = [None]
+        payload["ranked_target_count"] = 1
+        payload["ranked_targets"] = None
+
+    def _stale_carry(payload):
+        for risk in payload["non_selected_risks"]:
+            risk.pop("recommended_next_handling", None)
+            risk.pop("work_order_constraint_role", None)
+
+    def _stale_readiness(payload):
+        payload.pop("work_order_planning_requires_operator_review", None)
+
+    def _stale_gate(payload):
+        payload["target_selected"] = None
+
+    rewrite_payload(
+        first_dir / "nonlocal_law_selected_target_cycle_target_selection_packet.json",
+        _stale_packet,
+    )
+    rewrite_payload(first_dir / "target_candidate_ranking_report.json", _stale_ranking)
+    rewrite_payload(
+        first_dir / "non_selected_risk_carry_forward_report.json",
+        _stale_carry,
+    )
+    rewrite_payload(first_dir / "next_work_order_readiness_report.json", _stale_readiness)
+    rewrite_payload(
+        first_dir / "selected_target_cycle_target_selection_gate_report.json",
+        _stale_gate,
+    )
+
+    successor = run_selected_target_cycle_target_selection(
+        config,
+        consolidation_packet=consolidation_packet,
+        operator_reviewed=True,
+    )
+
+    successor_dir = assert_selected_target_cycle_target_selection_acceptance(
+        config,
+        run_id,
+        successor,
+    )
+    assert successor_dir.name == "packet_0002"
+    assert successor.payload["superseded_target_selection_packet_id"] == "packet_0001"
+    assert successor.payload["supersession_reason"] == (
+        "selected_target_cycle_target_selection_work_order_surface_missing"
+    )
+    assert "packet.ranked_target_ids_missing_or_invalid" in (
+        successor.payload["stale_surface_failures"]
+    )
+    assert "packet.ranked_targets_missing_or_invalid" in (
+        successor.payload["stale_surface_failures"]
+    )
+    assert (
+        "carry.conclusion_summarizes_instead_of_enacts_return"
+        ".recommended_next_handling_missing"
+    ) in successor.payload["stale_surface_failures"]
+    intake = read_payload(
+        successor_dir / "source_selected_target_cycle_consolidation_intake_summary.json"
+    )
+    assert intake["superseded_target_selection_packet_id"] == "packet_0001"
+    assert intake["supersession_reason"] == (
+        "selected_target_cycle_target_selection_work_order_surface_missing"
+    )
+
+    duplicate = run_selected_target_cycle_target_selection(
+        config,
+        consolidation_packet=consolidation_packet,
+        operator_reviewed=True,
+    )
+
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "current-valid target-selection packet already exists" in (
+        duplicate.payload["message"]
+    )
+    assert duplicate.payload["work_order_created"] is False
+    assert duplicate.payload["generation_authorized"] is False
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_selected_target_cycle_target_selection_refuses_duplicate(tmp_path):
