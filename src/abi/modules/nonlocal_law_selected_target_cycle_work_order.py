@@ -49,6 +49,14 @@ SEMANTIC_VALIDATOR_ID = (
     "selected_target_cycle_mechanism_visibility_semantic_validator_v1"
 )
 FUTURE_SCHEMA = "SelectedTargetCycleMechanismVisibilityGenerationOutput@1"
+PHRASE_INVENTORY_POLICY = "pressure_points_not_deletion_targets"
+PHRASE_INVENTORY_DELETION_POLICY = (
+    "deletion_forbidden_unless_independently_required_by_future_validator"
+)
+PHRASE_INVENTORY_POLICY_ID = "selected_target_cycle_phrase_pressure_point_policy_v1"
+SUPERSESSION_REASON_PHRASE_POLICY_SURFACE_MISSING = (
+    "selected_target_cycle_work_order_phrase_policy_surface_missing"
+)
 
 NONLOCAL_LAW_SELECTED_TARGET_CYCLE_WORK_ORDER_ARTIFACT_TYPES = (
     "nonlocal_law_selected_target_cycle_work_order_packet",
@@ -291,6 +299,7 @@ MATERIALITY_REQUIREMENTS = (
     "explanation not abolished",
     "no new object inventory",
     "no vague generic smoothing",
+    "phrase pressure points transformed or retained with justification, not automatically deleted",
 )
 SEMANTIC_REQUIREMENTS = (
     "mechanism naming reduction present",
@@ -301,6 +310,10 @@ SEMANTIC_REQUIREMENTS = (
     "rival imitation absent",
     "strongest rival not claimed defeated",
     "no finality or phase-shift claim",
+    "phrase inventory not treated as deletion list",
+    "retained explicit mechanism phrases are earned if retained",
+    "transformed mechanism phrases preserve causal force",
+    "reduction does not become vagueness or explanation deletion",
 )
 ABLATION_CONTROLS = (
     "full_mechanism_visibility_repair",
@@ -310,6 +323,8 @@ ABLATION_CONTROLS = (
     "vague_atmosphere_control",
     "object_activity_reduction_control",
     "strongest_rival_comparison",
+    "phrase_deletion_control",
+    "earned_retention_control",
 )
 READER_STATE_FOCUS = (
     "does causality remain felt after mechanism language is reduced?",
@@ -320,6 +335,9 @@ READER_STATE_FOCUS = (
     "does object-field delicacy improve?",
     "does return-summary risk remain carried forward?",
     "does strongest-rival pressure remain active?",
+    "did phrase handling preserve causal force?",
+    "did retained explicit mechanism language remain earned?",
+    "did the repair avoid mechanical deletion?",
 )
 
 
@@ -340,6 +358,18 @@ class SelectedTargetCycleWorkOrderSubject:
     target_selection_artifact_ids: dict[str, str]
     payloads: dict[str, dict[str, Any]]
     source_parent_ids: tuple[str, ...]
+    corrected_current_valid_work_order_exists: bool
+    superseded_work_order_packet_id: str | None
+    supersession_reason: str | None
+    stale_surface_failures: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WorkOrderSupersessionContext:
+    corrected_current_valid_work_order_exists: bool
+    superseded_work_order_packet_id: str | None = None
+    supersession_reason: str | None = None
+    stale_surface_failures: tuple[str, ...] = ()
 
 
 def run_selected_target_cycle_work_order_planning(
@@ -435,6 +465,11 @@ def _load_subject(
     packet = payloads["nonlocal_law_selected_target_cycle_target_selection_packet"]
     run_id = _required_string(packet.get("run_id"), "target-selection packet missing run_id")
     packet_id = str(packet.get("packet_id") or packet_dir.name)
+    supersession = _work_order_supersession_context(
+        config=config,
+        run_id=run_id,
+        source_target_selection_packet_id=packet_id,
+    )
     packet_path = packet_dir / "nonlocal_law_selected_target_cycle_target_selection_packet.json"
     with connect(config.db_path) as connection:
         packet_artifact = _artifact_for_path(connection, packet_path)
@@ -452,6 +487,12 @@ def _load_subject(
         target_selection_artifact_ids=artifact_ids,
         payloads=payloads,
         source_parent_ids=tuple(source_parent_ids),
+        corrected_current_valid_work_order_exists=(
+            supersession.corrected_current_valid_work_order_exists
+        ),
+        superseded_work_order_packet_id=supersession.superseded_work_order_packet_id,
+        supersession_reason=supersession.supersession_reason,
+        stale_surface_failures=supersession.stale_surface_failures,
     )
 
 
@@ -492,7 +533,7 @@ def _validate_subject(
             "Nonlocal law selected-target cycle work-order planning refused; "
             "target-selection packet is stale or superseded."
         )
-    if _current_valid_work_order_exists(config, subject):
+    if subject.corrected_current_valid_work_order_exists:
         raise ValueError(
             "Nonlocal law selected-target cycle work-order planning refused; "
             "current-valid selected-target cycle work order already exists for "
@@ -772,6 +813,13 @@ def _build_scope(subject: SelectedTargetCycleWorkOrderSubject) -> dict[str, obje
         "prior_living_event_sequence_repair_must_be_preserved": True,
         "old_living_event_sequence_repair_path_forbidden": True,
         "not_a_static_trace_repair_work_order": True,
+        "phrase_inventory_policy_consumed_by_future_generation": (
+            PHRASE_INVENTORY_POLICY
+        ),
+        "mechanism_naming_reduction_not_explanation_deletion": True,
+        "mechanism_naming_reduction_not_causal_weakening": True,
+        "mechanism_naming_reduction_not_vagueness": True,
+        "phrase_pressure_points_require_contextual_repair": True,
         "work_order_created": True,
         "generation_authorized": False,
         "candidate_generated": False,
@@ -796,6 +844,12 @@ def _build_repair_map(subject: SelectedTargetCycleWorkOrderSubject) -> dict[str,
         "object_activity_reduction_forbidden": True,
         "vagueness_as_solution_forbidden": True,
         "generic_smoothing_forbidden": True,
+        "phrase_inventory_is_not_deletion_list": True,
+        "repair_must_preserve_or_transform_each_pressure_point_contextually": True,
+        "retained_explicit_phrase_allowed_if_earned": True,
+        "transformed_phrase_must_preserve_causal_force": True,
+        "deletion_only_allowed_if_not_needed_for_earned_explanation": True,
+        "deletion_must_not_weaken_living_event_sequence": True,
         "repair_steps": list(REPAIR_STEPS),
         "do_not_solve_by": list(DO_NOT_SOLVE_BY),
         "work_order_created": True,
@@ -830,9 +884,15 @@ def _build_phrase_inventory(
 ) -> dict[str, object]:
     return {
         **_source_fields(subject),
-        "phrase_inventory": [dict(item) for item in PHRASE_INVENTORY],
+        "phrase_inventory": [_phrase_policy_item(item) for item in PHRASE_INVENTORY],
         "phrase_classes": sorted({str(item["phrase_class"]) for item in PHRASE_INVENTORY}),
+        "phrase_inventory_policy": PHRASE_INVENTORY_POLICY,
+        "phrase_inventory_deletion_policy": PHRASE_INVENTORY_DELETION_POLICY,
         "deletion_required": False,
+        "all_phrases_require_transformation_or_earned_retention": True,
+        "automatic_phrase_deletion_forbidden": True,
+        "phrase_inventory_should_not_drive_wholesale_deletion": True,
+        "future_generation_must_justify_retained_or_transformed_phrases": True,
         "transformation_or_earned_retention_required": True,
         "automatic_deletion_targets": False,
         "work_order_created": True,
@@ -840,6 +900,19 @@ def _build_phrase_inventory(
         "candidate_generated": False,
         "model_calls": 0,
         "worker": "explicit_mechanism_phrase_inventory_v1_controller",
+    }
+
+
+def _phrase_policy_item(item: dict[str, str]) -> dict[str, object]:
+    return {
+        **dict(item),
+        "deletion_required": False,
+        "automatic_deletion_forbidden": True,
+        "pressure_point_not_deletion_target": True,
+        "transformation_or_earned_retention_required": True,
+        "earned_retention_allowed": True,
+        "context_sensitive_decision_required": True,
+        "preserve_if_still_earned_after_object_pressure": True,
     }
 
 
@@ -936,6 +1009,12 @@ def _build_future_generation_contract(
         "materiality_policy_id": MATERIALITY_POLICY_ID,
         "semantic_validator_id": SEMANTIC_VALIDATOR_ID,
         "schema": FUTURE_SCHEMA,
+        "phrase_inventory_policy_id": PHRASE_INVENTORY_POLICY_ID,
+        "generation_must_treat_phrase_inventory_as_pressure_points_not_deletion_targets": (
+            True
+        ),
+        "generation_must_report_phrase_handling_decisions": True,
+        "generation_output_schema_requires_phrase_handling_report": True,
         "future_generation_requires_separate_authorization": True,
         "future_generation_authorized": False,
         "generation_attempt_budget": 0,
@@ -961,6 +1040,8 @@ def _build_validation_plan(
         "materiality_requirements": list(MATERIALITY_REQUIREMENTS),
         "semantic_requirements": list(SEMANTIC_REQUIREMENTS),
         "semantic_validation_requirements": list(SEMANTIC_REQUIREMENTS),
+        "phrase_handling_justification_required": True,
+        "phrase_inventory_not_deletion_list": True,
         "validation_required_before_candidate_evidence": True,
         "work_order_created": True,
         "generation_authorized": False,
@@ -977,6 +1058,7 @@ def _build_ablation_and_reader_eval_plan(
         **_source_fields(subject),
         "ablation_controls": list(ABLATION_CONTROLS),
         "reader_state_focus": list(READER_STATE_FOCUS),
+        "phrase_handling_ablation_required": True,
         "work_order_created": True,
         "generation_authorized": False,
         "candidate_generated": False,
@@ -997,6 +1079,10 @@ def _build_gate_report(subject: SelectedTargetCycleWorkOrderSubject) -> dict[str
         "packet_0002_preserved_as_prior_reference",
         "packet_0063_preserved_as_historical_reference",
         "non_universalization_guard_preserved",
+        "phrase_inventory_policy_present",
+        "phrase_inventory_not_deletion_list",
+        "phrase_handling_required_for_future_generation",
+        "generation_schema_requires_phrase_handling_report",
         "strongest_rival_remains_blocking",
         "no_generation_authorized",
         "no_candidate_generated",
@@ -1023,6 +1109,10 @@ def _build_gate_report(subject: SelectedTargetCycleWorkOrderSubject) -> dict[str
         "eligible": False,
         "work_order_created": True,
         "old_living_event_sequence_repair_path_not_used": True,
+        "phrase_inventory_policy_present": True,
+        "phrase_inventory_not_deletion_list": True,
+        "phrase_handling_required_for_future_generation": True,
+        "generation_schema_requires_phrase_handling_report": True,
         "generation_authorized": False,
         "candidate_generated": False,
         "model_calls": 0,
@@ -1057,6 +1147,9 @@ def _build_health_report(subject: SelectedTargetCycleWorkOrderSubject) -> dict[s
         "selected_risk_exact": True,
         "work_order_created": True,
         "old_living_event_sequence_repair_path_not_used": True,
+        "no_phrase_deletion_policy_gap": True,
+        "generation_authorization_surface_complete": True,
+        "phrase_inventory_safe_for_authorization": True,
         "no_generation_path_introduced": True,
         "no_model_call_introduced": True,
         "no_candidate_introduced": True,
@@ -1108,6 +1201,14 @@ def _build_packet_summary(
         "work_order_scope": WORK_ORDER_SCOPE,
         "work_order_created": True,
         "old_living_event_sequence_repair_path_not_used": True,
+        "superseded_work_order_packet_id": subject.superseded_work_order_packet_id,
+        "supersession_reason": subject.supersession_reason,
+        "phrase_inventory_policy": PHRASE_INVENTORY_POLICY,
+        "phrase_inventory_not_deletion_list": True,
+        "phrase_handling_required_for_future_generation": True,
+        "generation_schema_requires_phrase_handling_report": True,
+        "generation_authorization_surface_complete": True,
+        "ready_for_generation_authorization_review": True,
         "future_generation_authorized": False,
         "future_generation_requires_separate_authorization": True,
         "generation_attempt_budget": contract["generation_attempt_budget"],
@@ -1165,6 +1266,9 @@ def _source_fields(subject: SelectedTargetCycleWorkOrderSubject) -> dict[str, ob
         ),
         "learned_cycle_lesson_id": packet.get("learned_cycle_lesson_id"),
         "lesson_scope": packet.get("lesson_scope"),
+        "superseded_work_order_packet_id": subject.superseded_work_order_packet_id,
+        "supersession_reason": subject.supersession_reason,
+        "stale_work_order_surface_failures": list(subject.stale_surface_failures),
     }
 
 
@@ -1205,13 +1309,17 @@ def _has_newer_current_valid_target_selection(
     return False
 
 
-def _current_valid_work_order_exists(
+def _work_order_supersession_context(
     config: AbiConfig,
-    subject: SelectedTargetCycleWorkOrderSubject,
-) -> bool:
-    root = config.run_dir(subject.run_id) / "nonlocal_law_selected_target_cycle_work_order"
+    *,
+    run_id: str,
+    source_target_selection_packet_id: str,
+) -> WorkOrderSupersessionContext:
+    root = config.run_dir(run_id) / "nonlocal_law_selected_target_cycle_work_order"
     if not root.exists():
-        return False
+        return WorkOrderSupersessionContext(False)
+    stale_packet_id: str | None = None
+    stale_failures: tuple[str, ...] = ()
     for packet_dir in sorted(root.glob("packet_*")):
         path = packet_dir / "nonlocal_law_selected_target_cycle_work_order_packet.json"
         if not path.exists():
@@ -1220,20 +1328,220 @@ def _current_valid_work_order_exists(
             payload = _read_payload(path)
         except ValueError:
             continue
-        if (
-            payload.get("accepted") is True
-            and payload.get("source_target_selection_packet_id")
-            == subject.target_selection_packet_id
-            and payload.get("work_order_scope") == WORK_ORDER_SCOPE
-            and payload.get("work_order_kind") == WORK_ORDER_KIND
-            and payload.get("work_order_created") is True
-            and payload.get("generation_authorized") is False
-            and payload.get("candidate_generated") is False
-            and int(payload.get("model_calls") or 0) == 0
-            and payload.get("finalization_eligible") is False
+        if not _is_matching_work_order_payload(
+            payload,
+            source_target_selection_packet_id,
         ):
-            return True
-    return False
+            continue
+        failures = _work_order_phrase_policy_surface_failures(packet_dir, payload)
+        if not failures:
+            return WorkOrderSupersessionContext(
+                corrected_current_valid_work_order_exists=True
+            )
+        stale_packet_id = packet_dir.name
+        stale_failures = tuple(failures)
+    if stale_packet_id is None:
+        return WorkOrderSupersessionContext(False)
+    return WorkOrderSupersessionContext(
+        corrected_current_valid_work_order_exists=False,
+        superseded_work_order_packet_id=stale_packet_id,
+        supersession_reason=SUPERSESSION_REASON_PHRASE_POLICY_SURFACE_MISSING,
+        stale_surface_failures=stale_failures,
+    )
+
+
+def _is_matching_work_order_payload(
+    payload: dict[str, Any],
+    source_target_selection_packet_id: str,
+) -> bool:
+    return (
+        payload.get("accepted") is True
+        and payload.get("source_target_selection_packet_id")
+        == source_target_selection_packet_id
+        and payload.get("work_order_scope") == WORK_ORDER_SCOPE
+        and payload.get("work_order_kind") == WORK_ORDER_KIND
+        and payload.get("work_order_created") is True
+        and payload.get("generation_authorized") is False
+        and payload.get("candidate_generated") is False
+        and int(payload.get("model_calls") or 0) == 0
+        and payload.get("finalization_eligible") is False
+    )
+
+
+def _work_order_phrase_policy_surface_failures(
+    packet_dir: Path,
+    packet_payload: dict[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    for field_name in (
+        "phrase_inventory_policy",
+        "phrase_inventory_not_deletion_list",
+        "phrase_handling_required_for_future_generation",
+        "generation_schema_requires_phrase_handling_report",
+        "generation_authorization_surface_complete",
+        "ready_for_generation_authorization_review",
+    ):
+        if not packet_payload.get(field_name):
+            failures.append(f"packet.{field_name}")
+    if packet_payload.get("phrase_inventory_policy") != PHRASE_INVENTORY_POLICY:
+        failures.append("packet.phrase_inventory_policy_value")
+    phrase_inventory = _optional_payload(
+        packet_dir / "explicit_mechanism_phrase_inventory.json"
+    )
+    _require_phrase_inventory_surface(phrase_inventory, failures)
+
+    scope = _optional_payload(
+        packet_dir / "selected_mechanism_visibility_work_order_scope.json"
+    )
+    for field_name in (
+        "phrase_inventory_policy_consumed_by_future_generation",
+        "mechanism_naming_reduction_not_explanation_deletion",
+        "mechanism_naming_reduction_not_causal_weakening",
+        "mechanism_naming_reduction_not_vagueness",
+        "phrase_pressure_points_require_contextual_repair",
+    ):
+        if not scope.get(field_name):
+            failures.append(f"scope.{field_name}")
+    if (
+        scope.get("phrase_inventory_policy_consumed_by_future_generation")
+        != PHRASE_INVENTORY_POLICY
+    ):
+        failures.append("scope.phrase_inventory_policy_value")
+
+    repair = _optional_payload(packet_dir / "mechanism_naming_reduction_repair_map.json")
+    for field_name in (
+        "phrase_inventory_is_not_deletion_list",
+        "repair_must_preserve_or_transform_each_pressure_point_contextually",
+        "retained_explicit_phrase_allowed_if_earned",
+        "transformed_phrase_must_preserve_causal_force",
+        "deletion_only_allowed_if_not_needed_for_earned_explanation",
+        "deletion_must_not_weaken_living_event_sequence",
+    ):
+        if not repair.get(field_name):
+            failures.append(f"repair.{field_name}")
+
+    contract = _optional_payload(packet_dir / "future_generation_contract.json")
+    if contract.get("phrase_inventory_policy_id") != PHRASE_INVENTORY_POLICY_ID:
+        failures.append("future_generation_contract.phrase_inventory_policy_id")
+    for field_name in (
+        "generation_must_treat_phrase_inventory_as_pressure_points_not_deletion_targets",
+        "generation_must_report_phrase_handling_decisions",
+        "generation_output_schema_requires_phrase_handling_report",
+    ):
+        if not contract.get(field_name):
+            failures.append(f"future_generation_contract.{field_name}")
+
+    validation = _optional_payload(
+        packet_dir / "materiality_and_semantic_validation_plan.json"
+    )
+    materiality = validation.get("materiality_requirements")
+    semantic = validation.get("semantic_requirements")
+    if not isinstance(materiality, list) or (
+        "phrase pressure points transformed or retained with justification, "
+        "not automatically deleted"
+    ) not in materiality:
+        failures.append("validation.phrase_materiality_requirement")
+    if not isinstance(semantic, list) or "phrase inventory not treated as deletion list" not in semantic:
+        failures.append("validation.phrase_semantic_requirement")
+
+    plan = _optional_payload(packet_dir / "ablation_and_reader_eval_plan.json")
+    controls = plan.get("ablation_controls")
+    focus = plan.get("reader_state_focus")
+    for control_id in ("phrase_deletion_control", "earned_retention_control"):
+        if not isinstance(controls, list) or control_id not in controls:
+            failures.append(f"ablation.{control_id}")
+    for focus_item in (
+        "did phrase handling preserve causal force?",
+        "did retained explicit mechanism language remain earned?",
+        "did the repair avoid mechanical deletion?",
+    ):
+        if not isinstance(focus, list) or focus_item not in focus:
+            failures.append(f"reader_focus.{focus_item}")
+
+    gate = _optional_payload(packet_dir / "selected_target_cycle_work_order_gate_report.json")
+    for field_name in (
+        "phrase_inventory_policy_present",
+        "phrase_inventory_not_deletion_list",
+        "phrase_handling_required_for_future_generation",
+        "generation_schema_requires_phrase_handling_report",
+    ):
+        if gate.get(field_name) is not True:
+            failures.append(f"gate.{field_name}")
+
+    health = _optional_payload(packet_dir / "project_health_scope_guard_report.json")
+    for field_name in (
+        "no_phrase_deletion_policy_gap",
+        "generation_authorization_surface_complete",
+        "phrase_inventory_safe_for_authorization",
+    ):
+        if health.get(field_name) is not True:
+            failures.append(f"health.{field_name}")
+    return failures
+
+
+def _require_phrase_inventory_surface(
+    payload: dict[str, Any],
+    failures: list[str],
+) -> None:
+    if payload.get("phrase_inventory_policy") != PHRASE_INVENTORY_POLICY:
+        failures.append("phrase_inventory.phrase_inventory_policy")
+    if payload.get("phrase_inventory_deletion_policy") != PHRASE_INVENTORY_DELETION_POLICY:
+        failures.append("phrase_inventory.phrase_inventory_deletion_policy")
+    for field_name in (
+        "all_phrases_require_transformation_or_earned_retention",
+        "automatic_phrase_deletion_forbidden",
+        "phrase_inventory_should_not_drive_wholesale_deletion",
+        "future_generation_must_justify_retained_or_transformed_phrases",
+    ):
+        if payload.get(field_name) is not True:
+            failures.append(f"phrase_inventory.{field_name}")
+    phrases = payload.get("phrase_inventory")
+    if not isinstance(phrases, list) or len(phrases) != len(PHRASE_INVENTORY):
+        failures.append("phrase_inventory.phrase_inventory_count")
+        return
+    expected_phrases = {str(item["phrase"]) for item in PHRASE_INVENTORY}
+    actual_phrases = {
+        str(item.get("phrase"))
+        for item in phrases
+        if isinstance(item, dict) and item.get("phrase")
+    }
+    if actual_phrases != expected_phrases:
+        failures.append("phrase_inventory.phrase_inventory_set")
+    for item in phrases:
+        if not isinstance(item, dict):
+            failures.append("phrase_inventory.item_malformed")
+            continue
+        phrase = str(item.get("phrase") or "unknown")
+        _require_phrase_bool(item, "deletion_required", False, phrase, failures)
+        for field_name in (
+            "automatic_deletion_forbidden",
+            "pressure_point_not_deletion_target",
+            "transformation_or_earned_retention_required",
+            "earned_retention_allowed",
+            "context_sensitive_decision_required",
+            "preserve_if_still_earned_after_object_pressure",
+        ):
+            _require_phrase_bool(item, field_name, True, phrase, failures)
+
+
+def _require_phrase_bool(
+    item: dict[str, Any],
+    field_name: str,
+    expected: bool,
+    phrase: str,
+    failures: list[str],
+) -> None:
+    if item.get(field_name) is not expected:
+        failures.append(f"phrase_inventory.{phrase}.{field_name}")
+
+
+def _optional_payload(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return _read_payload(path)
+    except ValueError:
+        return {}
 
 
 def _validate_no_forbidden_source_claims(payloads: dict[str, dict[str, Any]]) -> None:

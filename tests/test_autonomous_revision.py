@@ -30325,13 +30325,15 @@ def assert_selected_target_cycle_work_order_acceptance(
     config: AbiConfig,
     run_id: str,
     result,
+    *,
+    expected_packet_id: str = "packet_0001",
 ) -> Path:
     assert result.exit_code == 0
     assert result.payload["accepted"] is True
     assert set(result.payload["artifact_ids"]) == set(
         NONLOCAL_LAW_SELECTED_TARGET_CYCLE_WORK_ORDER_ARTIFACT_TYPES
     )
-    assert result.payload["packet_id"] == "packet_0001"
+    assert result.payload["packet_id"] == expected_packet_id
     assert result.payload["source_target_selection_packet_id"] == "packet_0002"
     assert result.payload["source_consolidation_packet_id"] == "packet_0001"
     assert result.payload["source_loop_review_packet_id"] == "packet_0002"
@@ -30355,6 +30357,14 @@ def assert_selected_target_cycle_work_order_acceptance(
     assert result.payload["work_order_scope"] != "living_event_sequence_repair"
     assert result.payload["work_order_created"] is True
     assert result.payload["old_living_event_sequence_repair_path_not_used"] is True
+    assert result.payload["phrase_inventory_policy"] == (
+        "pressure_points_not_deletion_targets"
+    )
+    assert result.payload["phrase_inventory_not_deletion_list"] is True
+    assert result.payload["phrase_handling_required_for_future_generation"] is True
+    assert result.payload["generation_schema_requires_phrase_handling_report"] is True
+    assert result.payload["generation_authorization_surface_complete"] is True
+    assert result.payload["ready_for_generation_authorization_review"] is True
     assert result.payload["future_generation_authorized"] is False
     assert result.payload["generation_attempt_budget"] == 0
     assert result.payload["generation_authorized"] is False
@@ -30401,6 +30411,13 @@ def assert_selected_target_cycle_work_order_acceptance(
     assert scope["prior_living_event_sequence_repair_must_be_preserved"] is True
     assert scope["old_living_event_sequence_repair_path_forbidden"] is True
     assert scope["not_a_static_trace_repair_work_order"] is True
+    assert scope["phrase_inventory_policy_consumed_by_future_generation"] == (
+        "pressure_points_not_deletion_targets"
+    )
+    assert scope["mechanism_naming_reduction_not_explanation_deletion"] is True
+    assert scope["mechanism_naming_reduction_not_causal_weakening"] is True
+    assert scope["mechanism_naming_reduction_not_vagueness"] is True
+    assert scope["phrase_pressure_points_require_contextual_repair"] is True
 
     repair = read_payload(packet_dir / "mechanism_naming_reduction_repair_map.json")
     assert repair["preserve_living_event_sequence_gain"] is True
@@ -30408,6 +30425,15 @@ def assert_selected_target_cycle_work_order_acceptance(
     assert repair["object_activity_reduction_forbidden"] is True
     assert repair["vagueness_as_solution_forbidden"] is True
     assert repair["generic_smoothing_forbidden"] is True
+    assert repair["phrase_inventory_is_not_deletion_list"] is True
+    assert (
+        repair["repair_must_preserve_or_transform_each_pressure_point_contextually"]
+        is True
+    )
+    assert repair["retained_explicit_phrase_allowed_if_earned"] is True
+    assert repair["transformed_phrase_must_preserve_causal_force"] is True
+    assert repair["deletion_only_allowed_if_not_needed_for_earned_explanation"] is True
+    assert repair["deletion_must_not_weaken_living_event_sequence"] is True
     assert "delete explanation" in repair["bad_repair"]
     assert "preserve object-event causality" in repair["correct_repair"]
     assert "deleting explanation wholesale" in repair["do_not_solve_by"]
@@ -30427,11 +30453,31 @@ def assert_selected_target_cycle_work_order_acceptance(
 
     inventory = read_payload(packet_dir / "explicit_mechanism_phrase_inventory.json")
     phrases = {item["phrase"] for item in inventory["phrase_inventory"]}
+    assert len(inventory["phrase_inventory"]) == 9
     assert "changes the next glance" in phrases
     assert "perception has to pass" in phrases
+    assert inventory["phrase_inventory_policy"] == "pressure_points_not_deletion_targets"
+    assert inventory["phrase_inventory_deletion_policy"] == (
+        "deletion_forbidden_unless_independently_required_by_future_validator"
+    )
     assert inventory["deletion_required"] is False
+    assert inventory["all_phrases_require_transformation_or_earned_retention"] is True
+    assert inventory["automatic_phrase_deletion_forbidden"] is True
+    assert inventory["phrase_inventory_should_not_drive_wholesale_deletion"] is True
+    assert (
+        inventory["future_generation_must_justify_retained_or_transformed_phrases"]
+        is True
+    )
     assert inventory["transformation_or_earned_retention_required"] is True
     assert inventory["automatic_deletion_targets"] is False
+    for phrase in inventory["phrase_inventory"]:
+        assert phrase["deletion_required"] is False
+        assert phrase["automatic_deletion_forbidden"] is True
+        assert phrase["pressure_point_not_deletion_target"] is True
+        assert phrase["transformation_or_earned_retention_required"] is True
+        assert phrase["earned_retention_allowed"] is True
+        assert phrase["context_sensitive_decision_required"] is True
+        assert phrase["preserve_if_still_earned_after_object_pressure"] is True
 
     transformations = read_payload(packet_dir / "allowed_transformation_map.json")
     assert {
@@ -30509,6 +30555,17 @@ def assert_selected_target_cycle_work_order_acceptance(
         "selected_target_cycle_mechanism_visibility_semantic_validator_v1"
     )
     assert contract["schema"] == "SelectedTargetCycleMechanismVisibilityGenerationOutput@1"
+    assert contract["phrase_inventory_policy_id"] == (
+        "selected_target_cycle_phrase_pressure_point_policy_v1"
+    )
+    assert (
+        contract[
+            "generation_must_treat_phrase_inventory_as_pressure_points_not_deletion_targets"
+        ]
+        is True
+    )
+    assert contract["generation_must_report_phrase_handling_decisions"] is True
+    assert contract["generation_output_schema_requires_phrase_handling_report"] is True
     assert contract["future_generation_requires_separate_authorization"] is True
     assert contract["future_generation_authorized"] is False
     assert contract["generation_attempt_budget"] == 0
@@ -30526,25 +30583,56 @@ def assert_selected_target_cycle_work_order_acceptance(
         "materiality_requirements"
     ]
     assert "living-event sequence preserved" in validation["materiality_requirements"]
+    assert (
+        "phrase pressure points transformed or retained with justification, not automatically deleted"
+        in validation["materiality_requirements"]
+    )
     assert "causality still felt through object field" in validation[
+        "semantic_requirements"
+    ]
+    assert "phrase inventory not treated as deletion list" in validation[
+        "semantic_requirements"
+    ]
+    assert "retained explicit mechanism phrases are earned if retained" in validation[
+        "semantic_requirements"
+    ]
+    assert "transformed mechanism phrases preserve causal force" in validation[
+        "semantic_requirements"
+    ]
+    assert "reduction does not become vagueness or explanation deletion" in validation[
         "semantic_requirements"
     ]
     assert "strongest rival not claimed defeated" in validation[
         "semantic_requirements"
     ]
+    assert validation["phrase_handling_justification_required"] is True
+    assert validation["phrase_inventory_not_deletion_list"] is True
 
     plan = read_payload(packet_dir / "ablation_and_reader_eval_plan.json")
     assert "full_mechanism_visibility_repair" in plan["ablation_controls"]
     assert "delete_explanation_control" in plan["ablation_controls"]
+    assert "phrase_deletion_control" in plan["ablation_controls"]
+    assert "earned_retention_control" in plan["ablation_controls"]
     assert "strongest_rival_comparison" in plan["ablation_controls"]
     assert "does causality remain felt after mechanism language is reduced?" in plan[
         "reader_state_focus"
     ]
+    assert "did phrase handling preserve causal force?" in plan["reader_state_focus"]
+    assert "did retained explicit mechanism language remain earned?" in plan[
+        "reader_state_focus"
+    ]
+    assert "did the repair avoid mechanical deletion?" in plan["reader_state_focus"]
+    assert plan["phrase_handling_ablation_required"] is True
 
     gate = read_payload(packet_dir / "selected_target_cycle_work_order_gate_report.json")
     assert gate["passed"] is False
     assert "work_order_created" in gate["passed_gates"]
     assert "old_living_event_sequence_repair_path_not_used" in gate["passed_gates"]
+    assert "phrase_inventory_policy_present" in gate["passed_gates"]
+    assert gate["phrase_inventory_policy_present"] is True
+    assert gate["phrase_inventory_not_deletion_list"] is True
+    assert gate["phrase_handling_required_for_future_generation"] is True
+    assert gate["generation_schema_requires_phrase_handling_report"] is True
     assert "generation_authorized" in gate["failed_gates"]
     assert "candidate_generated" in gate["failed_gates"]
     assert "finalization_eligible" in gate["failed_gates"]
@@ -30556,6 +30644,9 @@ def assert_selected_target_cycle_work_order_acceptance(
     assert health["project_health_scope_guard_passed"] is True
     assert health["source_chain_coherent"] is True
     assert health["old_living_event_sequence_repair_path_not_used"] is True
+    assert health["no_phrase_deletion_policy_gap"] is True
+    assert health["generation_authorization_surface_complete"] is True
+    assert health["phrase_inventory_safe_for_authorization"] is True
     assert health["no_generation_path_introduced"] is True
     assert health["no_model_call_introduced"] is True
     assert health["no_candidate_introduced"] is True
@@ -30592,6 +30683,150 @@ def test_selected_target_cycle_work_order_accepts_mechanism_visibility_packet(
     with connect(config.db_path) as connection:
         after_calls = list_model_calls(connection, run_id=run_id)
     assert len(after_calls) == len(before_calls)
+
+
+def test_selected_target_cycle_work_order_supersedes_stale_phrase_policy_surface(
+    tmp_path,
+):
+    config, target_selection_packet, _stale_selection, run_id = (
+        build_selected_target_cycle_work_order_ready_packet(tmp_path)
+    )
+    stale = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_dir = Path(str(stale.payload["packet_dir"]))
+
+    def _stale_packet(payload):
+        payload.pop("phrase_inventory_policy", None)
+        payload.pop("phrase_inventory_not_deletion_list", None)
+        payload.pop("phrase_handling_required_for_future_generation", None)
+        payload.pop("generation_schema_requires_phrase_handling_report", None)
+        payload.pop("generation_authorization_surface_complete", None)
+        payload.pop("ready_for_generation_authorization_review", None)
+
+    def _stale_inventory(payload):
+        payload.pop("phrase_inventory_policy", None)
+        payload.pop("phrase_inventory_deletion_policy", None)
+        payload.pop("all_phrases_require_transformation_or_earned_retention", None)
+        payload.pop("automatic_phrase_deletion_forbidden", None)
+        payload.pop("phrase_inventory_should_not_drive_wholesale_deletion", None)
+        payload.pop(
+            "future_generation_must_justify_retained_or_transformed_phrases",
+            None,
+        )
+        for phrase in payload["phrase_inventory"]:
+            phrase.pop("deletion_required", None)
+            phrase.pop("automatic_deletion_forbidden", None)
+            phrase.pop("pressure_point_not_deletion_target", None)
+            phrase.pop("transformation_or_earned_retention_required", None)
+            phrase.pop("earned_retention_allowed", None)
+            phrase.pop("context_sensitive_decision_required", None)
+            phrase.pop("preserve_if_still_earned_after_object_pressure", None)
+
+    def _stale_scope(payload):
+        payload.pop("phrase_inventory_policy_consumed_by_future_generation", None)
+        payload.pop("mechanism_naming_reduction_not_explanation_deletion", None)
+        payload.pop("mechanism_naming_reduction_not_causal_weakening", None)
+        payload.pop("mechanism_naming_reduction_not_vagueness", None)
+        payload.pop("phrase_pressure_points_require_contextual_repair", None)
+
+    def _stale_repair(payload):
+        payload.pop("phrase_inventory_is_not_deletion_list", None)
+        payload.pop(
+            "repair_must_preserve_or_transform_each_pressure_point_contextually",
+            None,
+        )
+        payload.pop("retained_explicit_phrase_allowed_if_earned", None)
+        payload.pop("transformed_phrase_must_preserve_causal_force", None)
+        payload.pop("deletion_only_allowed_if_not_needed_for_earned_explanation", None)
+        payload.pop("deletion_must_not_weaken_living_event_sequence", None)
+
+    def _stale_contract(payload):
+        payload.pop("phrase_inventory_policy_id", None)
+        payload.pop(
+            "generation_must_treat_phrase_inventory_as_pressure_points_not_deletion_targets",
+            None,
+        )
+        payload.pop("generation_must_report_phrase_handling_decisions", None)
+        payload.pop("generation_output_schema_requires_phrase_handling_report", None)
+
+    def _stale_gate(payload):
+        payload.pop("phrase_inventory_policy_present", None)
+        payload.pop("phrase_inventory_not_deletion_list", None)
+        payload.pop("phrase_handling_required_for_future_generation", None)
+        payload.pop("generation_schema_requires_phrase_handling_report", None)
+
+    def _stale_health(payload):
+        payload.pop("no_phrase_deletion_policy_gap", None)
+        payload.pop("generation_authorization_surface_complete", None)
+        payload.pop("phrase_inventory_safe_for_authorization", None)
+
+    rewrite_payload(
+        stale_dir / "nonlocal_law_selected_target_cycle_work_order_packet.json",
+        _stale_packet,
+    )
+    rewrite_payload(
+        stale_dir / "explicit_mechanism_phrase_inventory.json",
+        _stale_inventory,
+    )
+    rewrite_payload(
+        stale_dir / "selected_mechanism_visibility_work_order_scope.json",
+        _stale_scope,
+    )
+    rewrite_payload(
+        stale_dir / "mechanism_naming_reduction_repair_map.json",
+        _stale_repair,
+    )
+    rewrite_payload(stale_dir / "future_generation_contract.json", _stale_contract)
+    rewrite_payload(
+        stale_dir / "selected_target_cycle_work_order_gate_report.json",
+        _stale_gate,
+    )
+    rewrite_payload(stale_dir / "project_health_scope_guard_report.json", _stale_health)
+
+    successor = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+
+    successor_dir = assert_selected_target_cycle_work_order_acceptance(
+        config,
+        run_id,
+        successor,
+        expected_packet_id="packet_0002",
+    )
+    assert successor.payload["superseded_work_order_packet_id"] == "packet_0001"
+    assert successor.payload["supersession_reason"] == (
+        "selected_target_cycle_work_order_phrase_policy_surface_missing"
+    )
+    assert "phrase_inventory.phrase_inventory_policy" in successor.payload[
+        "stale_work_order_surface_failures"
+    ]
+    intake = read_payload(
+        successor_dir / "source_cycle_target_selection_intake_summary.json"
+    )
+    assert intake["superseded_work_order_packet_id"] == "packet_0001"
+    assert intake["supersession_reason"] == (
+        "selected_target_cycle_work_order_phrase_policy_surface_missing"
+    )
+
+    duplicate = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert duplicate.exit_code == 1
+    assert duplicate.payload["accepted"] is False
+    assert "current-valid selected-target cycle work order already exists" in (
+        duplicate.payload["message"]
+    )
+    assert duplicate.payload["work_order_created"] is False
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_selected_target_cycle_work_order_refuses_duplicate(tmp_path):
