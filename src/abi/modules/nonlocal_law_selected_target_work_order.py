@@ -280,6 +280,19 @@ def run_nonlocal_law_selected_target_work_order_planning(
                 f"{target_selection_packet_dir}"
             ),
         )
+    if (
+        target_selection_packet_dir
+        / "nonlocal_law_selected_target_cycle_target_selection_packet.json"
+    ).exists():
+        from abi.modules.nonlocal_law_selected_target_cycle_work_order import (
+            run_selected_target_cycle_work_order_planning,
+        )
+
+        return run_selected_target_cycle_work_order_planning(
+            config,
+            target_selection_packet=target_selection_packet_dir,
+            operator_reviewed=operator_reviewed,
+        )
 
     try:
         subject = _load_subject(config, target_selection_packet_dir)
