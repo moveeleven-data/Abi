@@ -8,13 +8,13 @@ It is written as an operator-facing engineering history. It records what was
 built, what was intentionally kept out of scope, and which invariants have been
 preserved across the build.
 
-Current documented endpoint in Git history:
+Current documented endpoint in Git history before this changelog commit:
 
-- `aee502e Allow live reader-state evaluation after fake evaluation`
+- `ea11a95 Add selected-target cycle work-order planning`
 - Active branch during latest changelog update:
-  `feature/nonlocal-law-candidate-evidence-synthesis`
-- Active working-tree addition during latest changelog update:
-  nonlocal law candidate evidence synthesis
+  `feature/selected-target-cycle-work-order-planning`
+- Latest working-tree addition during this changelog update:
+  selected-target cycle work-order planning for mechanism-visibility repair
 - The active runtime direction is the autonomous creative-engine path.
 
 ## Standing Invariants
@@ -2641,6 +2641,170 @@ The current strategic state is:
 - Abi has reached a real loop-closure threshold, but not a final-artifact
   threshold
 
+### Selected-Target Cycle Continuation After Loop Closure
+
+Commits since the prior changelog endpoint:
+
+- `4419344 Fix nonlocal law synthesis loop review surface`
+- `c80aa52 Add nonlocal law synthesis loop-review intake`
+- `40fe133 Fix nonlocal loop review consolidation surface`
+- `331b3a8 Add nonlocal law cycle consolidation`
+- `086cbcb Fix nonlocal law consolidation target selection surface`
+- `0948277 Add nonlocal law consolidated target selection`
+- `daa313d Fix nonlocal law target selection work order surface`
+- `456eb48 Fix selected target work order authorization surface`
+- `df683e3 Add selected target generation authorization`
+- `b6e0331 Fix selected target authorization handoff surface`
+- `ad2dba2 Add nonlocal law selected-target candidate generation`
+- `dd719f7 Add selected-target nonlocal law candidate ablation`
+- `8cef845 Add selected-target reader-state evaluation`
+- `af29df8 Fix selected-target reader-state risk probes`
+- `64514c1 Add selected-target evidence synthesis`
+- `04dd0f6 Fix selected-target loop-review intake`
+- `89b23a6 Fix selected-target loop-review consolidation surface`
+- `28cc4b6 Add selected-target loop consolidation`
+- `f076ba1 Add selected-target cycle target selection`
+- `a751006 Fix selected-target handoff surface`
+- `ea11a95 Add selected-target cycle work-order planning`
+
+Implemented after the previously documented nonlocal law candidate evidence
+synthesis:
+
+- Loop-review intake and surface fixes for the nonlocal law candidate evidence
+  synthesis path.
+- Nonlocal law cycle consolidation, preserving the evidence state after the
+  first law-guided candidate cycle.
+- Consolidated target selection from the nonlocal law cycle, followed by
+  work-order planning, generation authorization, selected-target candidate
+  generation, candidate ablation, reader-state evaluation, and evidence
+  synthesis for the selected-target branch.
+- Risk-probe contract hardening in selected-target reader-state evaluation so
+  required probes are represented by stable IDs and missing probe results fail
+  closed.
+- Selected-target loop-review intake, consolidation handoff, selected-target
+  loop consolidation, and selected-target cycle target selection.
+- A corrected target-selection handoff surface for the selected-target cycle:
+  packet-level ranked targets, ranked target IDs, selected-target gate aliases,
+  selected risk cluster, work-order planning principle, non-selected risk
+  handling, and work-order readiness are now explicit structured fields.
+- Supersession behavior for stale selected-target cycle target-selection
+  packets. The stale `packet_0001` surface can be superseded once by corrected
+  `packet_0002`; duplicate corrected packets refuse.
+- Selected-target cycle work-order planning for the new
+  `reduce_causal_mechanism_naming` target and
+  `mechanism_visibility_repair` scope.
+
+Current selected-target cycle state:
+
+- Corrected target-selection packet:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_selected_target_cycle_target_selection\packet_0002`
+- Work-order packet:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_selected_target_cycle_work_order\packet_0001`
+- Selected target:
+  `reduce_causal_mechanism_naming`
+- Selected risk:
+  `causal_mechanism_overexplained`
+- Selected target class:
+  `mechanism_naming_reduction_target`
+- Work-order scope:
+  `mechanism_visibility_repair`
+- Work-order kind:
+  `selected_target_cycle_work_order`
+- Prior working reference remains:
+  `packet_0002`
+- Current best for the next loop remains:
+  `packet_0001`
+- Historical reference remains:
+  `packet_0063`
+- Strongest-rival pressure remains blocking.
+
+The selected-target cycle work-order packet creates 15 artifacts:
+
+- `nonlocal_law_selected_target_cycle_work_order_packet`
+- `source_cycle_target_selection_intake_summary`
+- `selected_mechanism_visibility_work_order_scope`
+- `mechanism_naming_reduction_repair_map`
+- `preserved_living_event_sequence_gain_report`
+- `explicit_mechanism_phrase_inventory`
+- `allowed_transformation_map`
+- `forbidden_overcorrection_report`
+- `non_selected_risk_constraint_report`
+- `selected_target_cycle_unit_map`
+- `future_generation_contract`
+- `materiality_and_semantic_validation_plan`
+- `ablation_and_reader_eval_plan`
+- `selected_target_cycle_work_order_gate_report`
+- `project_health_scope_guard_report`
+
+The mechanism-visibility work order is explicitly not the old
+`living_event_sequence_repair` path. It preserves the previous living-event
+sequence gain while planning a different repair: reduce direct causal-mechanism
+language so object relation, syntax, timing, and perceptual sequence carry more
+of the causal force.
+
+The work-order records these explicit mechanism phrase pressure points:
+
+- `changes the next glance`
+- `changes the order of seeing`
+- `where later seeing must be changed by that receiving`
+- `condition through which the next perception has to pass`
+- `Only after this does the room begin to instruct`
+- `The room teaches slowly`
+- `one condition to the next`
+- `later seeing`
+- `perception has to pass`
+
+The phrase inventory does not require automatic deletion. It marks these as
+pressure points that future generation must transform or earn.
+
+Forbidden overcorrections now include:
+
+- explanation deletion
+- causal weakening
+- object deletion
+- new object inventory
+- generic lyricism
+- vague atmosphere
+- rival imitation
+- finality or rival-defeat claim
+
+The selected-target cycle unit map records eight units:
+
+- `preserve_living_event_sequence_gain`
+- `reduce_direct_mechanism_naming`
+- `convert_declarative_instruction_to_object_pressure`
+- `convert_law_naming_to_perceptual_sequence`
+- `preserve_earned_explanation_not_abolished`
+- `protect_object_activity_and_delicacy`
+- `preserve_non_selected_risks_as_constraints`
+- `preserve_strongest_rival_blocker_and_non_imitation`
+
+Future generation remains locked:
+
+- `future_generation_authorized: false`
+- `generation_attempt_budget: 0`
+- `generation_authorized: false`
+- `candidate_generated: false`
+- `model_calls: 0`
+- `finalization_eligible: false`
+
+Latest verification after this selected-target cycle work:
+
+- `ruff check .` passed.
+- `pytest -q` passed with 789 tests in about 13 minutes.
+- The real selected-target cycle work-order command accepted and created
+  `nonlocal_law_selected_target_cycle_work_order/packet_0001`.
+- `gate list` succeeded.
+- `finalization status --profile autonomous_creative_candidate` remained
+  ineligible.
+- `finalize --profile autonomous_creative_candidate` refused.
+
+Strategically, the repo has moved from first law-guided loop closure into a
+second, narrower cycle: preserve the working gains, isolate the overexplicit
+mechanism-naming residue, create a bounded work order for that residue, and
+keep generation, evaluation, synthesis, and finalization as separate future
+steps.
+
 ## Current Runtime Surface
 
 The current repo includes these active areas:
@@ -2698,6 +2862,12 @@ The current repo includes these active areas:
 - nonlocal law candidate ablation
 - nonlocal law candidate reader-state evaluation in fake and guarded live modes
 - nonlocal law candidate evidence synthesis
+- nonlocal law cycle consolidation and consolidated target selection
+- selected-target nonlocal law work-order planning, generation authorization,
+  candidate generation, ablation, reader-state evaluation, evidence synthesis,
+  loop review, and consolidation
+- selected-target cycle target selection and mechanism-visibility work-order
+  planning
 - target-aware executed ablation controls and comparator consistency checks
 - model-driver demos and model-call inspection
 - guarded live paths behind explicit opt-in
