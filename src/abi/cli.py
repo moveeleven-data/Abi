@@ -100,6 +100,10 @@ from abi.modules.nonlocal_law_selected_target_generation_authorization import (
     NONLOCAL_LAW_SELECTED_TARGET_GENERATION_AUTHORIZATION_DECISIONS,
     run_nonlocal_law_selected_target_generation_authorization,
 )
+from abi.modules.nonlocal_law_selected_target_cycle_generation_authorization import (
+    AUTHORIZATION_DECISION_AUTHORIZE_ONE_CYCLE,
+    run_selected_target_cycle_generation_authorization,
+)
 from abi.modules.nonlocal_law_selected_target_candidate_generation import (
     NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_GENERATION_CLIENTS,
     NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
@@ -773,7 +777,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     autonomous_selected_nonlocal_law_authorization_parser.add_argument(
         "--decision",
-        choices=NONLOCAL_LAW_SELECTED_TARGET_GENERATION_AUTHORIZATION_DECISIONS,
+        choices=(
+            *NONLOCAL_LAW_SELECTED_TARGET_GENERATION_AUTHORIZATION_DECISIONS,
+            AUTHORIZATION_DECISION_AUTHORIZE_ONE_CYCLE,
+        ),
         required=True,
         help="Operator selected-target generation authorization decision.",
     )
@@ -2400,6 +2407,22 @@ def _cmd_autonomous_authorize_selected_nonlocal_law_generation(
     operator_reviewed: bool,
     decision: str | None,
 ) -> int:
+    if (
+        decision == AUTHORIZATION_DECISION_AUTHORIZE_ONE_CYCLE
+        or (
+            config.root / work_order_packet
+            if not work_order_packet.is_absolute()
+            else work_order_packet
+        ).joinpath("nonlocal_law_selected_target_cycle_work_order_packet.json").exists()
+    ):
+        result = run_selected_target_cycle_generation_authorization(
+            config,
+            work_order_packet=work_order_packet,
+            operator_reviewed=operator_reviewed,
+            decision=decision,
+        )
+        print(json.dumps(result.payload, indent=2, sort_keys=True))
+        return result.exit_code
     result = run_nonlocal_law_selected_target_generation_authorization(
         config,
         work_order_packet=work_order_packet,

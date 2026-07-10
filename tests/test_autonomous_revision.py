@@ -254,6 +254,13 @@ from abi.modules.nonlocal_law_selected_target_cycle_work_order import (
     NONLOCAL_LAW_SELECTED_TARGET_CYCLE_WORK_ORDER_ARTIFACT_TYPES,
     TARGET_UNIT_IDS as SELECTED_TARGET_CYCLE_WORK_ORDER_UNIT_IDS,
 )
+from abi.modules.nonlocal_law_selected_target_cycle_generation_authorization import (
+    ARTIFACT_TYPES as SELECTED_TARGET_CYCLE_GENERATION_AUTHORIZATION_ARTIFACT_TYPES,
+    AUTHORIZATION_DECISION_AUTHORIZE_ONE_CYCLE as SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    MATERIAL_GENERATION_UNIT_IDS as SELECTED_TARGET_CYCLE_AUTH_MATERIAL_UNIT_IDS,
+    PRESERVATION_OR_GUARD_UNIT_IDS as SELECTED_TARGET_CYCLE_AUTH_GUARD_UNIT_IDS,
+    run_selected_target_cycle_generation_authorization,
+)
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
     REVISION_PACKET_KIND_ABLATION_INFORMED,
@@ -30890,6 +30897,534 @@ def test_selected_target_cycle_work_order_cli_accepts_new_family(tmp_path, capsy
     assert payload["generation_authorized"] is False
     assert payload["candidate_generated"] is False
     assert payload["model_calls"] == 0
+
+
+def degrade_selected_target_cycle_work_order_phrase_policy_surface(
+    packet_dir: Path,
+) -> None:
+    def remove_fields(*field_names):
+        def _mutator(payload):
+            for field_name in field_names:
+                payload.pop(field_name, None)
+
+        return _mutator
+
+    def _stale_inventory(payload):
+        payload["phrase_inventory_not_deletion_list"] = False
+        payload.pop("phrase_inventory_policy", None)
+        payload.pop("phrase_inventory_deletion_policy", None)
+        payload.pop("all_phrases_require_transformation_or_earned_retention", None)
+        payload.pop("automatic_phrase_deletion_forbidden", None)
+        payload.pop("phrase_inventory_should_not_drive_wholesale_deletion", None)
+        payload.pop(
+            "future_generation_must_justify_retained_or_transformed_phrases",
+            None,
+        )
+        for phrase in payload["phrase_inventory"]:
+            phrase.pop("deletion_required", None)
+            phrase.pop("automatic_deletion_forbidden", None)
+            phrase.pop("pressure_point_not_deletion_target", None)
+            phrase.pop("transformation_or_earned_retention_required", None)
+            phrase.pop("earned_retention_allowed", None)
+            phrase.pop("context_sensitive_decision_required", None)
+            phrase.pop("preserve_if_still_earned_after_object_pressure", None)
+
+    rewrite_payload(
+        packet_dir / "nonlocal_law_selected_target_cycle_work_order_packet.json",
+        remove_fields(
+            "phrase_inventory_policy",
+            "phrase_inventory_not_deletion_list",
+            "phrase_handling_required_for_future_generation",
+            "generation_schema_requires_phrase_handling_report",
+            "generation_authorization_surface_complete",
+            "ready_for_generation_authorization_review",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "explicit_mechanism_phrase_inventory.json",
+        _stale_inventory,
+    )
+    rewrite_payload(
+        packet_dir / "selected_mechanism_visibility_work_order_scope.json",
+        remove_fields(
+            "phrase_inventory_policy_consumed_by_future_generation",
+            "mechanism_naming_reduction_not_explanation_deletion",
+            "mechanism_naming_reduction_not_causal_weakening",
+            "mechanism_naming_reduction_not_vagueness",
+            "phrase_pressure_points_require_contextual_repair",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "mechanism_naming_reduction_repair_map.json",
+        remove_fields(
+            "phrase_inventory_is_not_deletion_list",
+            "repair_must_preserve_or_transform_each_pressure_point_contextually",
+            "retained_explicit_phrase_allowed_if_earned",
+            "transformed_phrase_must_preserve_causal_force",
+            "deletion_only_allowed_if_not_needed_for_earned_explanation",
+            "deletion_must_not_weaken_living_event_sequence",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "future_generation_contract.json",
+        remove_fields(
+            "phrase_inventory_policy_id",
+            "generation_must_treat_phrase_inventory_as_pressure_points_not_deletion_targets",
+            "generation_must_report_phrase_handling_decisions",
+            "generation_output_schema_requires_phrase_handling_report",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "selected_target_cycle_work_order_gate_report.json",
+        remove_fields(
+            "phrase_inventory_policy_present",
+            "phrase_inventory_not_deletion_list",
+            "phrase_handling_required_for_future_generation",
+            "generation_schema_requires_phrase_handling_report",
+        ),
+    )
+    rewrite_payload(
+        packet_dir / "project_health_scope_guard_report.json",
+        remove_fields(
+            "no_phrase_deletion_policy_gap",
+            "generation_authorization_surface_complete",
+            "phrase_inventory_safe_for_authorization",
+        ),
+    )
+
+
+def build_selected_target_cycle_generation_authorization_ready_chain(tmp_path):
+    config, target_selection_packet, _stale_selection, run_id = (
+        build_selected_target_cycle_work_order_ready_packet(tmp_path)
+    )
+    stale = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert stale.exit_code == 0
+    assert stale.payload["packet_id"] == "packet_0001"
+    stale_dir = Path(str(stale.payload["packet_dir"]))
+    degrade_selected_target_cycle_work_order_phrase_policy_surface(stale_dir)
+    corrected = run_nonlocal_law_selected_target_work_order_planning(
+        config,
+        target_selection_packet=target_selection_packet,
+        operator_reviewed=True,
+    )
+    assert corrected.exit_code == 0
+    assert corrected.payload["packet_id"] == "packet_0002"
+    assert corrected.payload["generation_authorization_surface_complete"] is True
+    return config, Path(str(corrected.payload["packet_dir"])), stale_dir, run_id
+
+
+def assert_selected_target_cycle_generation_authorization_acceptance(
+    config: AbiConfig,
+    run_id: str,
+    result,
+) -> Path:
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert set(result.payload["artifact_ids"]) == set(
+        SELECTED_TARGET_CYCLE_GENERATION_AUTHORIZATION_ARTIFACT_TYPES
+    )
+    assert result.payload["packet_id"] == "packet_0001"
+    assert result.payload["source_work_order_packet_id"] == "packet_0002"
+    assert result.payload["superseded_work_order_packet_id"] == "packet_0001"
+    assert result.payload["supersession_reason"] == (
+        "selected_target_cycle_work_order_phrase_policy_surface_missing"
+    )
+    assert result.payload["source_target_selection_packet_id"] == "packet_0002"
+    assert result.payload["source_consolidation_packet_id"] == "packet_0001"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0002"
+    assert result.payload["source_synthesis_packet_id"] == "packet_0001"
+    assert result.payload["source_reader_state_packet_id"] == "packet_0005"
+    assert result.payload["source_candidate_packet_id"] == "packet_0001"
+    assert result.payload["current_best_for_next_loop_packet_id"] == "packet_0001"
+    assert result.payload["prior_working_current_best_candidate_packet_id"] == (
+        "packet_0002"
+    )
+    assert result.payload["prior_historical_current_best_candidate_packet_id"] == (
+        "packet_0063"
+    )
+    assert result.payload["selected_target_seed_id"] == "reduce_causal_mechanism_naming"
+    assert result.payload["selected_risk_id"] == "causal_mechanism_overexplained"
+    assert result.payload["selected_target_class"] == (
+        "mechanism_naming_reduction_target"
+    )
+    assert result.payload["work_order_scope"] == "mechanism_visibility_repair"
+    assert result.payload["phrase_inventory_policy"] == (
+        "pressure_points_not_deletion_targets"
+    )
+    assert result.payload["generation_authorized"] is True
+    assert result.payload["next_generation_authorized"] is True
+    assert result.payload["generation_attempt_budget"] == 1
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["model_calls"] == 0
+    assert result.payload["counts"]["model_calls"] == 0
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["next_recommended_action"] == (
+        "generate_selected_target_cycle_candidate"
+    )
+    assert result.payload["material_generation_unit_ids"] == list(
+        SELECTED_TARGET_CYCLE_AUTH_MATERIAL_UNIT_IDS
+    )
+    assert result.payload["preservation_or_guard_unit_ids"] == list(
+        SELECTED_TARGET_CYCLE_AUTH_GUARD_UNIT_IDS
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert (
+        packet_dir.parent.name
+        == "nonlocal_law_selected_target_cycle_generation_authorization"
+    )
+    for artifact_type in SELECTED_TARGET_CYCLE_GENERATION_AUTHORIZATION_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    intake = read_payload(packet_dir / "source_cycle_work_order_intake_summary.json")
+    assert intake["source_family"] == "nonlocal_law_selected_target_cycle_work_order"
+    assert intake["accepted_work_order"] is True
+    assert intake["work_order_current_valid"] is True
+    assert intake["source_chain_coherent"] is True
+    assert intake["phrase_inventory_not_deletion_list"] is True
+
+    decision = read_payload(packet_dir / "authorization_decision_record.json")
+    assert decision["decision"] == SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE
+    assert decision["authorization_scope"] == (
+        "one_bounded_mechanism_visibility_generation_attempt"
+    )
+    assert decision["operator_reviewed"] is True
+    assert decision["generation_attempt_budget"] == 1
+
+    scope = read_payload(
+        packet_dir / "mechanism_visibility_generation_scope_review.json"
+    )
+    assert scope["generation_limited_to_selected_target"] is True
+    assert scope["free_rewrite_allowed"] is False
+    assert scope["generation_must_preserve_living_event_sequence_gain"] is True
+    assert scope["generation_must_reduce_mechanism_naming_materially"] is True
+    assert scope["generation_must_report_phrase_handling"] is True
+    assert (
+        scope[
+            "generation_must_treat_phrase_inventory_as_pressure_points_not_deletion_targets"
+        ]
+        is True
+    )
+    assert scope["generation_must_not_delete_explanation_wholesale"] is True
+    assert scope["generation_must_not_reduce_object_activity"] is True
+    assert scope["generation_must_not_make_text_vague"] is True
+    assert scope["generation_must_not_expand_to_return_target"] is True
+    assert scope["generation_must_not_expand_to_chemistry_target"] is True
+    assert scope["generation_must_not_add_new_object_inventory"] is True
+    assert scope["generation_must_not_claim_finality"] is True
+    assert scope["generation_must_not_claim_strongest_rival_defeat"] is True
+
+    units = read_payload(packet_dir / "target_unit_authorization_scope.json")
+    unit_by_id = {unit["unit_id"]: unit for unit in units["target_units"]}
+    for unit_id in SELECTED_TARGET_CYCLE_AUTH_MATERIAL_UNIT_IDS:
+        assert unit_by_id[unit_id]["authorized_for_generation"] is True
+        assert unit_by_id[unit_id]["authorized_role"] == "material_generation_unit"
+        assert unit_by_id[unit_id]["material_change_allowed"] is True
+        assert unit_by_id[unit_id]["validation_required"] is True
+    for unit_id in SELECTED_TARGET_CYCLE_AUTH_GUARD_UNIT_IDS:
+        assert unit_by_id[unit_id]["authorized_for_generation"] is False
+        assert unit_by_id[unit_id]["authorized_role"] == "preservation_guard_unit"
+        assert unit_by_id[unit_id]["preservation_required"] is True
+        assert unit_by_id[unit_id]["validation_required"] is True
+
+    phrase_policy = read_payload(
+        packet_dir / "phrase_handling_authorization_policy.json"
+    )
+    assert phrase_policy["phrase_inventory_policy"] == (
+        "pressure_points_not_deletion_targets"
+    )
+    assert phrase_policy["phrase_inventory_not_deletion_list"] is True
+    assert phrase_policy["phrase_deletion_not_automatically_authorized"] is True
+    assert phrase_policy["phrase_handling_report_required"] is True
+    assert phrase_policy["all_phrase_pressure_points_carry_forward"] is True
+    assert phrase_policy["phrase_inventory_count"] == 9
+    for phrase in phrase_policy["phrase_inventory"]:
+        assert phrase["deletion_required"] is False
+        assert phrase["automatic_deletion_forbidden"] is True
+        assert phrase["pressure_point_not_deletion_target"] is True
+        assert phrase["transformation_or_earned_retention_required"] is True
+        assert phrase["earned_retention_allowed"] is True
+        assert phrase["context_sensitive_decision_required"] is True
+        assert phrase["preserve_if_still_earned_after_object_pressure"] is True
+
+    validation = read_payload(
+        packet_dir / "materiality_semantic_validation_readiness_report.json"
+    )
+    assert "explicit mechanism naming reduced materially" in validation[
+        "materiality_requirements"
+    ]
+    assert "phrase inventory not treated as deletion list" in validation[
+        "semantic_requirements"
+    ]
+    assert "transformed mechanism phrases preserve causal force" in validation[
+        "semantic_requirements"
+    ]
+
+    forbidden = read_payload(
+        packet_dir / "forbidden_overcorrection_and_regression_review.json"
+    )
+    assert forbidden["delete_explanation_forbidden"] is True
+    assert forbidden["phrase_inventory_as_deletion_list_forbidden"] is True
+    assert forbidden["return_target_expansion_forbidden"] is True
+    assert forbidden["chemistry_register_target_expansion_forbidden"] is True
+    assert forbidden["strongest_rival_defeat_claim_forbidden"] is True
+    assert forbidden["finality_claim_forbidden"] is True
+
+    protected = read_payload(packet_dir / "protected_living_event_gain_review.json")
+    assert protected["packet_0001_current_best_for_next_loop"] is True
+    assert (
+        protected["packet_0001_living_event_sequence_gain_must_be_preserved"] is True
+    )
+    assert protected["packet_0002_preserved_as_prior_working_reference"] is True
+    assert protected["packet_0063_preserved_as_historical_reference"] is True
+    assert "ring/grain relation changes later seeing" in protected["protected_gains"]
+
+    plan = read_payload(packet_dir / "post_generation_evidence_plan.json")
+    assert plan["required_next_steps_after_generation"] == [
+        "review_selected_target_cycle_candidate_before_ablation",
+        "ablate_selected_target_cycle_candidate",
+        "evaluate_selected_target_cycle_candidate_reader_state",
+        "synthesize_selected_target_cycle_candidate_evidence",
+        "loop_review_before_any_current_best_update",
+    ]
+    assert "phrase_deletion_control" in plan["ablation_controls"]
+    assert "earned_retention_control" in plan["ablation_controls"]
+    assert "did phrase handling preserve causal force?" in plan["reader_state_focus"]
+
+    budget = read_payload(packet_dir / "model_call_budget_report.json")
+    assert budget["model_call_budget"] == 1
+    assert budget["model_calls_consumed"] == 0
+    assert budget["remaining_model_calls"] == 1
+    assert budget["model_calls_made_by_authorization"] == 0
+    assert budget["model_call_budget_for_future_generate_command_only"] is True
+
+    lock = read_payload(packet_dir / "generation_lock_transition_report.json")
+    assert lock["generation_authorized"] is True
+    assert lock["next_generation_authorized"] is True
+    assert lock["authorization_packet_does_not_run_generation"] is True
+    assert lock["authorization_consumed"] is False
+    assert lock["candidate_generated"] is False
+    assert lock["model_calls"] == 0
+    assert lock["future_generation_attempt_budget"] == 1
+
+    gate = read_payload(
+        packet_dir / "selected_target_cycle_generation_authorization_gate_report.json"
+    )
+    assert gate["source_work_order_accepted"] is True
+    assert gate["mechanism_visibility_scope"] is True
+    assert gate["phrase_policy_present"] is True
+    assert gate["phrase_handling_report_required"] is True
+    assert gate["one_attempt_budget"] is True
+    assert "authorization_consumed" in gate["failed_gates"]
+    assert "candidate_generated" in gate["failed_gates"]
+    assert "finalization_eligible" in gate["failed_gates"]
+    assert "strongest_rival_resolved" in gate["failed_gates"]
+
+    health = read_payload(packet_dir / "project_health_scope_guard_report.json")
+    assert health["project_health_scope_guard_passed"] is True
+    assert health["no_candidate_introduced"] is True
+    assert health["no_model_call_introduced"] is True
+    assert health["authorization_does_not_create_candidate"] is True
+    assert health["authorization_does_not_call_model"] is True
+    assert health["one_attempt_only"] is True
+    assert health["phrase_inventory_safe_for_generation_authorization"] is True
+
+    with connect(config.db_path) as connection:
+        finalization = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert finalization.refused is True
+    return packet_dir
+
+
+def test_selected_target_cycle_generation_authorization_accepts_corrected_work_order(
+    tmp_path,
+):
+    config, work_order_packet, _stale_dir, run_id = (
+        build_selected_target_cycle_generation_authorization_ready_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection, run_id=run_id)
+
+    result = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+
+    assert_selected_target_cycle_generation_authorization_acceptance(
+        config,
+        run_id,
+        result,
+    )
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection, run_id=run_id)
+    assert len(after_calls) == len(before_calls)
+
+
+def test_selected_target_cycle_generation_authorization_cli_dispatches(
+    tmp_path,
+    capsys,
+):
+    _config, work_order_packet, _stale_dir, _run_id = (
+        build_selected_target_cycle_generation_authorization_ready_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "autonomous",
+            "authorize-selected-nonlocal-law-generation",
+            "--work-order-packet",
+            str(work_order_packet),
+            "--operator-reviewed",
+            "--decision",
+            SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["accepted"] is True
+    assert payload["source_work_order_packet_id"] == "packet_0002"
+    assert payload["generation_attempt_budget"] == 1
+    assert payload["authorization_consumed"] is False
+    assert payload["candidate_generated"] is False
+    assert payload["model_calls"] == 0
+    assert payload["next_recommended_action"] == "generate_selected_target_cycle_candidate"
+
+
+def test_selected_target_cycle_generation_authorization_refusals(tmp_path):
+    config, work_order_packet, stale_dir, _run_id = (
+        build_selected_target_cycle_generation_authorization_ready_chain(tmp_path)
+    )
+
+    missing_review = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=False,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+    assert missing_review.exit_code == 1
+    assert "--operator-reviewed" in missing_review.payload["message"]
+    assert missing_review.payload["model_calls"] == 0
+
+    stale = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=stale_dir,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+    assert stale.exit_code == 1
+    assert "stale or superseded" in stale.payload["message"]
+    assert stale.payload["candidate_generated"] is False
+
+    old_config, old_work_order, _old_stale, _old_run_id, _payload = (
+        build_nonlocal_law_selected_target_generation_authorization_ready_chain(
+            tmp_path / "old_family"
+        )
+    )
+    old_family = run_selected_target_cycle_generation_authorization(
+        old_config,
+        work_order_packet=old_work_order,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+    assert old_family.exit_code == 1
+    assert "work-order packet missing" in old_family.payload["message"]
+    assert old_family.payload["model_calls"] == 0
+
+    missing_policy_dir = tmp_path / "missing_policy_work_order"
+    shutil.copytree(work_order_packet, missing_policy_dir)
+    rewrite_payload(
+        missing_policy_dir
+        / "nonlocal_law_selected_target_cycle_work_order_packet.json",
+        lambda payload: payload.pop("phrase_inventory_policy", None),
+    )
+    missing_policy = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=missing_policy_dir,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+    assert missing_policy.exit_code == 1
+    assert "phrase_inventory_policy" in missing_policy.payload["message"]
+
+    deletion_list_dir = tmp_path / "deletion_list_work_order"
+    shutil.copytree(work_order_packet, deletion_list_dir)
+    rewrite_payload(
+        deletion_list_dir
+        / "nonlocal_law_selected_target_cycle_work_order_packet.json",
+        lambda payload: payload.__setitem__("phrase_inventory_not_deletion_list", False),
+    )
+    deletion_list = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=deletion_list_dir,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+    assert deletion_list.exit_code == 1
+    assert "phrase_inventory_not_deletion_list" in deletion_list.payload["message"]
+
+    missing_report_dir = tmp_path / "missing_phrase_report_work_order"
+    shutil.copytree(work_order_packet, missing_report_dir)
+    rewrite_payload(
+        missing_report_dir / "future_generation_contract.json",
+        lambda payload: payload.pop(
+            "generation_output_schema_requires_phrase_handling_report",
+            None,
+        ),
+    )
+    missing_report = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=missing_report_dir,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+    assert missing_report.exit_code == 1
+    assert (
+        "generation_output_schema_requires_phrase_handling_report"
+        in missing_report.payload["message"]
+    )
+
+
+def test_selected_target_cycle_generation_authorization_duplicate_refuses(tmp_path):
+    config, work_order_packet, _stale_dir, _run_id = (
+        build_selected_target_cycle_generation_authorization_ready_chain(tmp_path)
+    )
+    first = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+    assert first.exit_code == 0
+
+    duplicate = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+
+    assert duplicate.exit_code == 1
+    assert "current-valid authorization already exists" in duplicate.payload["message"]
+    assert duplicate.payload["generation_authorized"] is False
+    assert duplicate.payload["authorization_consumed"] is False
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["model_calls"] == 0
 
 
 def test_nonlocal_law_candidate_evidence_synthesis_cli_accepts(tmp_path, capsys):
