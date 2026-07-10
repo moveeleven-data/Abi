@@ -10,11 +10,11 @@ preserved across the build.
 
 Current documented endpoint in Git history before this changelog commit:
 
-- `ea11a95 Add selected-target cycle work-order planning`
+- `654eeda Fix selected-target phrase policy surface`
 - Active branch during latest changelog update:
-  `feature/selected-target-cycle-work-order-planning`
+  `main`
 - Latest working-tree addition during this changelog update:
-  selected-target cycle work-order planning for mechanism-visibility repair
+  selected-target cycle work-order phrase-policy surface repair
 - The active runtime direction is the autonomous creative-engine path.
 
 ## Standing Invariants
@@ -2693,13 +2693,25 @@ synthesis:
 - Selected-target cycle work-order planning for the new
   `reduce_causal_mechanism_naming` target and
   `mechanism_visibility_repair` scope.
+- A follow-up selected-target cycle phrase-policy surface fix. The original
+  work-order `packet_0001` correctly identified explicit mechanism phrases but
+  did not expose enough item-level policy to prove that those phrases were
+  pressure points rather than deletion targets.
+- Supersession behavior for stale selected-target cycle work-order packets.
+  Stale `packet_0001` is now superseded by corrected `packet_0002` with the
+  reason `selected_target_cycle_work_order_phrase_policy_surface_missing`;
+  duplicate corrected work orders refuse.
 
 Current selected-target cycle state:
 
 - Corrected target-selection packet:
   `runs\run_8fa54199f23f3d8e\nonlocal_law_selected_target_cycle_target_selection\packet_0002`
-- Work-order packet:
+- Stale work-order packet:
   `runs\run_8fa54199f23f3d8e\nonlocal_law_selected_target_cycle_work_order\packet_0001`
+- Corrected work-order packet:
+  `runs\run_8fa54199f23f3d8e\nonlocal_law_selected_target_cycle_work_order\packet_0002`
+- Corrected work-order supersession reason:
+  `selected_target_cycle_work_order_phrase_policy_surface_missing`
 - Selected target:
   `reduce_causal_mechanism_naming`
 - Selected risk:
@@ -2755,7 +2767,21 @@ The work-order records these explicit mechanism phrase pressure points:
 - `perception has to pass`
 
 The phrase inventory does not require automatic deletion. It marks these as
-pressure points that future generation must transform or earn.
+pressure points that future generation must transform or earn. The corrected
+surface now carries item-level fields such as:
+
+- `deletion_required: false`
+- `automatic_deletion_forbidden: true`
+- `pressure_point_not_deletion_target: true`
+- `transformation_or_earned_retention_required: true`
+- `earned_retention_allowed: true`
+- `context_sensitive_decision_required: true`
+- `preserve_if_still_earned_after_object_pressure: true`
+
+The policy is also repeated through the work-order scope, repair map, future
+generation contract, validation plan, ablation/reader plan, gate report, health
+report, and top-level packet aliases so the next authorization step cannot
+misread phrase pressure points as a deletion list.
 
 Forbidden overcorrections now include:
 
@@ -2791,9 +2817,11 @@ Future generation remains locked:
 Latest verification after this selected-target cycle work:
 
 - `ruff check .` passed.
-- `pytest -q` passed with 789 tests in about 13 minutes.
+- `pytest -q` passed with 790 tests in about 12 minutes.
 - The real selected-target cycle work-order command accepted and created
   `nonlocal_law_selected_target_cycle_work_order/packet_0001`.
+- The phrase-policy surface fix then accepted and created corrected
+  `nonlocal_law_selected_target_cycle_work_order/packet_0002`.
 - `gate list` succeeded.
 - `finalization status --profile autonomous_creative_candidate` remained
   ineligible.
