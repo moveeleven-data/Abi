@@ -44,6 +44,7 @@ from abi.model_schemas import (
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
     SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
     SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA,
+    SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA,
     ModelValidationError,
     WorkerRole,
     json_schema_for_worker_schema,
@@ -260,6 +261,12 @@ from abi.modules.nonlocal_law_selected_target_cycle_generation_authorization imp
     MATERIAL_GENERATION_UNIT_IDS as SELECTED_TARGET_CYCLE_AUTH_MATERIAL_UNIT_IDS,
     PRESERVATION_OR_GUARD_UNIT_IDS as SELECTED_TARGET_CYCLE_AUTH_GUARD_UNIT_IDS,
     run_selected_target_cycle_generation_authorization,
+)
+from abi.modules.nonlocal_law_selected_target_cycle_candidate_generation import (
+    ARTIFACT_TYPES as SELECTED_TARGET_CYCLE_CANDIDATE_ARTIFACT_TYPES,
+    FAILED_ARTIFACT_TYPES as FAILED_SELECTED_TARGET_CYCLE_CANDIDATE_ARTIFACT_TYPES,
+    FakeSelectedTargetCycleMechanismVisibilityGenerationModelClient,
+    run_selected_target_cycle_candidate_generation,
 )
 from abi.modules.executed_ablation import (
     EXECUTED_ABLATION_ARTIFACT_TYPES,
@@ -31425,6 +31432,467 @@ def test_selected_target_cycle_generation_authorization_duplicate_refuses(tmp_pa
     assert duplicate.payload["authorization_consumed"] is False
     assert duplicate.payload["candidate_generated"] is False
     assert duplicate.payload["model_calls"] == 0
+
+
+def test_selected_target_cycle_candidate_generation_schema_and_prompt_lock_phrase_policy():
+    schema = json_schema_for_worker_schema(
+        SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA
+    )
+    for field_name in (
+        "generation_allowed",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+    ):
+        field_schema = schema["properties"][field_name]
+        assert field_schema["enum"] == [False]
+        assert "Must be false" in field_schema["description"]
+    phrase_item = schema["properties"]["phrase_handling_report"]["items"]
+    assert phrase_item["additionalProperties"] is False
+    assert phrase_item["properties"]["deletion_required"]["enum"] == [False]
+    assert phrase_item["properties"]["automatic_deletion_forbidden"]["enum"] == [True]
+    assert phrase_item["properties"]["pressure_point_not_deletion_target"][
+        "enum"
+    ] == [True]
+    assert phrase_item["properties"]["causal_force_preserved"]["enum"] == [True]
+    assert phrase_item["properties"]["living_event_sequence_weakened"]["enum"] == [
+        False
+    ]
+    assert schema["properties"]["target_unit_change_report"]["items"][
+        "additionalProperties"
+    ] is False
+
+    request = WorkerRequest(
+        run_id="run_schema_test",
+        worker_role=WorkerRole.SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATOR,
+        prompt_contract_id=(
+            "autonomous.selected_target_cycle_mechanism_visibility_generation.v1"
+        ),
+        schema=SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA,
+        input_text="{}",
+    )
+    response_format = openai_response_format_for_request(request)
+    assert response_format["strict"] is True
+    assert response_format["schema"]["properties"]["phrase_handling_report"][
+        "items"
+    ]["additionalProperties"] is False
+
+    prompt = _prompt_builder_for_schema(
+        SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA
+    )("{}")
+    assert "pressure points, not deletion targets" in prompt
+    assert "generation_allowed" in prompt
+    assert "SelectedTargetCycleMechanismVisibilityGenerationOutput@1" in prompt
+
+
+def selected_target_cycle_candidate_client_factory(mode: str = "valid"):
+    def _factory(
+        model: str,
+    ) -> FakeSelectedTargetCycleMechanismVisibilityGenerationModelClient:
+        return FakeSelectedTargetCycleMechanismVisibilityGenerationModelClient(
+            mode=mode,
+            provider="openai",
+            model=model,
+        )
+
+    return _factory
+
+
+def build_selected_target_cycle_candidate_generation_ready_chain(tmp_path):
+    config, work_order_packet, _stale_dir, run_id = (
+        build_selected_target_cycle_generation_authorization_ready_chain(tmp_path)
+    )
+    authorization = run_selected_target_cycle_generation_authorization(
+        config,
+        work_order_packet=work_order_packet,
+        operator_reviewed=True,
+        decision=SELECTED_TARGET_CYCLE_AUTH_DECISION_AUTHORIZE,
+    )
+    assert authorization.exit_code == 0
+    assert authorization.payload["packet_id"] == "packet_0001"
+    return config, Path(str(authorization.payload["packet_dir"])), run_id
+
+
+def assert_selected_target_cycle_candidate_acceptance(
+    config: AbiConfig,
+    run_id: str,
+    result,
+    *,
+    expected_model_calls: int,
+) -> Path:
+    assert result.exit_code == 0
+    assert result.payload["accepted"] is True
+    assert result.payload["candidate_generated"] is True
+    assert result.payload["candidate_artifact_created"] is True
+    assert result.payload["authorization_consumed"] is True
+    assert result.payload["model_calls"] == expected_model_calls
+    assert result.payload["counts"]["model_calls"] == expected_model_calls
+    assert result.payload["source_authorization_packet_id"] == "packet_0001"
+    assert result.payload["source_work_order_packet_id"] == "packet_0002"
+    assert result.payload["source_target_selection_packet_id"] == "packet_0002"
+    assert result.payload["source_consolidation_packet_id"] == "packet_0001"
+    assert result.payload["source_loop_review_packet_id"] == "packet_0002"
+    assert result.payload["source_synthesis_packet_id"] == "packet_0001"
+    assert result.payload["source_reader_state_packet_id"] == "packet_0005"
+    assert result.payload["source_candidate_packet_id"] == "packet_0001"
+    assert result.payload["current_best_for_next_loop_packet_id"] == "packet_0001"
+    assert result.payload["prior_working_current_best_candidate_packet_id"] == (
+        "packet_0002"
+    )
+    assert result.payload["prior_historical_current_best_candidate_packet_id"] == (
+        "packet_0063"
+    )
+    assert result.payload["selected_target_seed_id"] == "reduce_causal_mechanism_naming"
+    assert result.payload["selected_risk_id"] == "causal_mechanism_overexplained"
+    assert result.payload["selected_target_class"] == (
+        "mechanism_naming_reduction_target"
+    )
+    assert result.payload["work_order_scope"] == "mechanism_visibility_repair"
+    assert result.payload["phrase_inventory_policy"] == (
+        "pressure_points_not_deletion_targets"
+    )
+    assert result.payload["schema"] == (
+        "SelectedTargetCycleMechanismVisibilityGenerationOutput@1"
+    )
+    assert result.payload["model_backed"] is (expected_model_calls == 1)
+    assert result.payload["finalization_eligible"] is False
+    assert result.payload["no_final_claim"] is True
+    assert result.payload["no_phase_shift_claim"] is True
+    assert result.payload["strongest_rival_defeated_claimed"] is False
+    assert result.payload["next_recommended_action"] == (
+        "review_selected_target_cycle_candidate_before_ablation"
+    )
+    assert set(result.payload["artifact_paths"]) == set(
+        SELECTED_TARGET_CYCLE_CANDIDATE_ARTIFACT_TYPES
+    )
+
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert packet_dir.parent.name == "nonlocal_law_selected_target_cycle_candidate"
+    for artifact_type in SELECTED_TARGET_CYCLE_CANDIDATE_ARTIFACT_TYPES:
+        assert (packet_dir / f"{artifact_type}.json").exists()
+
+    generated_envelope = json.loads(
+        (packet_dir / "generated_candidate_text.json").read_text(encoding="utf-8")
+    )
+    assert generated_envelope["fixture_only"] is (expected_model_calls == 0)
+    if expected_model_calls:
+        assert generated_envelope["model_call_id"]
+    else:
+        assert generated_envelope["model_call_id"] is None
+    generated = generated_envelope["payload"]
+    assert generated["candidate_generated"] is True
+    assert generated["authorization_consumed"] is True
+    assert generated["fixture_only"] is (expected_model_calls == 0)
+    assert generated["model_backed"] is (expected_model_calls == 1)
+
+    phrase = read_payload(packet_dir / "phrase_handling_report.json")
+    assert phrase["phrase_handling_count"] == 9
+    assert phrase["phrase_inventory_not_deletion_list"] is True
+    for item in phrase["phrase_handling_report"]:
+        assert item["deletion_required"] is False
+        assert item["automatic_deletion_forbidden"] is True
+        assert item["pressure_point_not_deletion_target"] is True
+        assert item["transformation_or_earned_retention_required"] is True
+        assert item["causal_force_preserved"] is True
+        assert item["living_event_sequence_weakened"] is False
+
+    target = read_payload(packet_dir / "target_unit_change_report.json")
+    assert target["target_unit_count"] == len(SELECTED_TARGET_CYCLE_WORK_ORDER_UNIT_IDS)
+    assert set(target["target_unit_ids"]) == set(
+        SELECTED_TARGET_CYCLE_WORK_ORDER_UNIT_IDS
+    )
+
+    gate = read_payload(packet_dir / "selected_target_cycle_candidate_gate_report.json")
+    assert gate["passed"] is False
+    assert gate["candidate_generated"] is True
+    assert gate["authorization_consumed"] is True
+    assert gate["finalization_eligible"] is False
+    assert "strongest rival remains blocking" in gate["unresolved_blockers"]
+
+    with connect(config.db_path) as connection:
+        report = check_finalization(
+            connection,
+            run_id=run_id,
+            profile=GATE_PROFILE_AUTONOMOUS_CREATIVE_CANDIDATE,
+        )
+    assert report.refused is True
+    return packet_dir
+
+
+def test_selected_target_cycle_candidate_generation_fake_accepts_without_model_call(
+    tmp_path,
+):
+    config, authorization_packet, run_id = (
+        build_selected_target_cycle_candidate_generation_ready_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_selected_target_cycle_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+
+    packet_dir = assert_selected_target_cycle_candidate_acceptance(
+        config,
+        run_id,
+        result,
+        expected_model_calls=0,
+    )
+    assert packet_dir.name == "packet_0001"
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+    assert len(after_calls) == len(before_calls)
+
+
+def test_selected_target_cycle_candidate_generation_openai_refuses_without_opt_in(
+    tmp_path,
+):
+    config, authorization_packet, _run_id = (
+        build_selected_target_cycle_candidate_generation_ready_chain(tmp_path)
+    )
+    with connect(config.db_path) as connection:
+        before_calls = list_model_calls(connection)
+
+    result = run_selected_target_cycle_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=False,
+        max_model_calls=1,
+        api_key="test-key",
+        client_factory=selected_target_cycle_candidate_client_factory(),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert "--allow-live-model" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+    with connect(config.db_path) as connection:
+        after_calls = list_model_calls(connection)
+    assert len(after_calls) == len(before_calls)
+
+
+def test_selected_target_cycle_candidate_generation_openai_refuses_without_api_key(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config, authorization_packet, _run_id = (
+        build_selected_target_cycle_candidate_generation_ready_chain(tmp_path)
+    )
+    result = run_selected_target_cycle_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="",
+        client_factory=selected_target_cycle_candidate_client_factory(),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert "OPENAI_API_KEY" in result.payload["message"]
+    assert result.payload["model_calls"] == 0
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["candidate_generated"] is False
+
+
+def test_selected_target_cycle_candidate_generation_openai_stub_accepts(tmp_path):
+    config, authorization_packet, run_id = (
+        build_selected_target_cycle_candidate_generation_ready_chain(tmp_path)
+    )
+
+    result = run_selected_target_cycle_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="test-key",
+        model="test-selected-target-cycle-model",
+        client_factory=selected_target_cycle_candidate_client_factory(),
+    )
+
+    packet_dir = assert_selected_target_cycle_candidate_acceptance(
+        config,
+        run_id,
+        result,
+        expected_model_calls=1,
+    )
+    assert len(result.model_results) == 1
+    model_call = result.model_results[0].model_call
+    assert model_call.status == MODEL_CALL_SUCCESS
+    assert model_call.provider == "openai"
+    assert model_call.model == "test-selected-target-cycle-model"
+    assert model_call.worker_role == (
+        WorkerRole.SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATOR.value
+    )
+    assert model_call.schema_name == (
+        SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA.name
+    )
+    assert model_call.schema_version == "1"
+    assert model_call.prompt_contract_id == (
+        "autonomous.selected_target_cycle_mechanism_visibility_generation.v1"
+    )
+    generated = read_payload(packet_dir / "generated_candidate_text.json")
+    assert model_call.parsed_output_artifact_id == result.payload["candidate_artifact_id"]
+    assert generated["model_call_id"] == model_call.id
+    assert generated["fixture_only"] is False
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_fragment"),
+    [
+        ("missing_phrase_report", "phrase_handling_report must be a list"),
+        ("short_phrase_report", "phrase_handling_report must contain exactly 9"),
+        ("unknown_phrase", "unknown phrase"),
+        ("deletion_required", "deletion_required"),
+        ("deletion_list", "pressure_point_not_deletion_target"),
+        ("causal_force_lost", "causal_force_preserved"),
+        ("living_sequence_weakened", "living_event_sequence_weakened"),
+        ("generation_allowed", "generation_allowed"),
+        ("finality", "finality_claimed"),
+        ("phase_shift", "phase_shift_claimed"),
+        ("rival_defeat", "strongest_rival_defeated_claimed"),
+    ],
+)
+def test_selected_target_cycle_candidate_generation_schema_rejects_bad_outputs(
+    mode,
+    expected_fragment,
+):
+    request = WorkerRequest(
+        run_id="run_schema_test",
+        worker_role=WorkerRole.SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATOR,
+        prompt_contract_id=(
+            "autonomous.selected_target_cycle_mechanism_visibility_generation.v1"
+        ),
+        schema=SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA,
+        input_text=json.dumps(
+            {"target_unit_ids": list(SELECTED_TARGET_CYCLE_WORK_ORDER_UNIT_IDS)}
+        ),
+    )
+    raw = FakeSelectedTargetCycleMechanismVisibilityGenerationModelClient(
+        mode=mode
+    ).generate(request)
+
+    with pytest.raises(ModelValidationError) as error:
+        parse_and_validate_structured_output(
+            raw,
+            SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA,
+        )
+
+    assert expected_fragment in str(error.value)
+
+
+def test_selected_target_cycle_candidate_generation_failure_packet_keeps_auth_open(
+    tmp_path,
+):
+    config, authorization_packet, _run_id = (
+        build_selected_target_cycle_candidate_generation_ready_chain(tmp_path)
+    )
+
+    result = run_selected_target_cycle_candidate_generation(
+        config,
+        client_name="openai",
+        authorization_packet=authorization_packet,
+        allow_live_model=True,
+        max_model_calls=1,
+        api_key="test-key",
+        model="test-selected-target-cycle-model",
+        client_factory=selected_target_cycle_candidate_client_factory(
+            mode="deletion_required"
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["accepted"] is False
+    assert result.payload["refused"] is True
+    assert result.payload["candidate_generated"] is False
+    assert result.payload["authorization_consumed"] is False
+    assert result.payload["model_calls"] == 1
+    assert result.payload["counts"]["model_calls"] == 1
+    assert "deletion_required" in " ".join(result.payload["validation_failures"])
+    packet_dir = Path(str(result.payload["packet_dir"]))
+    assert (
+        packet_dir.parent.name
+        == "nonlocal_law_selected_target_cycle_failed_generation"
+    )
+    assert set(result.payload["artifact_paths"]) == set(
+        FAILED_SELECTED_TARGET_CYCLE_CANDIDATE_ARTIFACT_TYPES
+    )
+    assert len(result.model_results) == 1
+    assert result.model_results[0].model_call.status == MODEL_CALL_VALIDATION_FAILED
+    assert result.model_results[0].model_call.parsed_output_artifact_id is None
+    with connect(config.db_path) as connection:
+        artifacts = list_artifacts(connection, _run_id)
+    accepted_packets = [
+        artifact
+        for artifact in artifacts
+        if artifact.type == "nonlocal_law_selected_target_cycle_candidate_packet"
+    ]
+    assert accepted_packets == []
+
+
+def test_selected_target_cycle_candidate_generation_duplicate_refuses(tmp_path):
+    config, authorization_packet, _run_id = (
+        build_selected_target_cycle_candidate_generation_ready_chain(tmp_path)
+    )
+    first = run_selected_target_cycle_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+    assert first.exit_code == 0
+
+    duplicate = run_selected_target_cycle_candidate_generation(
+        config,
+        client_name="fake",
+        authorization_packet=authorization_packet,
+    )
+
+    assert duplicate.exit_code == 1
+    assert "existing accepted candidate" in duplicate.payload["message"]
+    assert duplicate.payload["authorization_consumed"] is False
+    assert duplicate.payload["candidate_generated"] is False
+    assert duplicate.payload["model_calls"] == 0
+
+
+def test_selected_target_cycle_candidate_generation_cli_openai_guard_refuses(
+    tmp_path,
+    capsys,
+):
+    config, authorization_packet, _run_id = (
+        build_selected_target_cycle_candidate_generation_ready_chain(tmp_path)
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(config.root),
+            "autonomous",
+            "generate-selected-target-cycle-candidate",
+            "--client",
+            "openai",
+            "--authorization-packet",
+            str(authorization_packet),
+            "--max-model-calls",
+            "1",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload["accepted"] is False
+    assert "--allow-live-model" in payload["message"]
+    assert payload["model_calls"] == 0
+    assert payload["authorization_consumed"] is False
+    assert payload["candidate_generated"] is False
 
 
 def test_nonlocal_law_candidate_evidence_synthesis_cli_accepts(tmp_path, capsys):

@@ -27,6 +27,7 @@ from abi.model_schemas import (
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
     SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA,
     SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA,
+    SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA,
     json_schema_for_worker_schema,
 )
 
@@ -167,6 +168,8 @@ def _prompt_builder_for_schema(schema: object) -> object:
         return _build_nonlocal_law_guided_generation_prompt
     if schema == SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA:
         return _build_selected_nonlocal_law_target_generation_prompt
+    if schema == SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA:
+        return _build_selected_target_cycle_mechanism_visibility_generation_prompt
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return _build_nonlocal_law_candidate_reader_state_prompt
     if schema == SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
@@ -416,6 +419,31 @@ def _build_selected_nonlocal_law_target_generation_prompt(input_text: str) -> st
         "strongest_rival_defeated_claimed, and "
         "current_best_supersession_claimed to false at top level and inside "
         "safety_claims. Output structured schema only. Prompt packet:\n"
+        f"{input_text}"
+    )
+
+
+def _build_selected_target_cycle_mechanism_visibility_generation_prompt(
+    input_text: str,
+) -> str:
+    return (
+        "Return strict JSON matching "
+        "SelectedTargetCycleMechanismVisibilityGenerationOutput@1 for "
+        "autonomous.selected_target_cycle_mechanism_visibility_generation.v1. "
+        "Start from current working best packet_0001. Preserve packet_0001's "
+        "living-event sequence gain. Reduce explicit causal mechanism naming "
+        "materially. Do not delete explanation wholesale, reduce object "
+        "activity, make the text vague, add new object inventory, expand into "
+        "return-summary repair as the primary target, or expand into "
+        "chemistry-register repair as the primary target. Treat the phrase "
+        "inventory as pressure points, not deletion targets. For every phrase "
+        "pressure point, report whether it was transformed, retained as earned, "
+        "or removed because unneeded. Retained explicit phrases are allowed "
+        "only if earned by object pressure. Transformed phrases must preserve "
+        "causal force. Set generation_allowed, finality_claimed, "
+        "phase_shift_claimed, and strongest_rival_defeated_claimed to false. "
+        "Do not claim finality, phase shift, or strongest-rival defeat. Output "
+        "structured JSON only. Prompt packet:\n"
         f"{input_text}"
     )
 

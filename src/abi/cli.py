@@ -109,6 +109,11 @@ from abi.modules.nonlocal_law_selected_target_candidate_generation import (
     NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
     run_nonlocal_law_selected_target_candidate_generation,
 )
+from abi.modules.nonlocal_law_selected_target_cycle_candidate_generation import (
+    CLIENTS as SELECTED_TARGET_CYCLE_CANDIDATE_GENERATION_CLIENTS,
+    MAX_MODEL_CALLS_DEFAULT as SELECTED_TARGET_CYCLE_CANDIDATE_MAX_MODEL_CALLS_DEFAULT,
+    run_selected_target_cycle_candidate_generation,
+)
 from abi.modules.nonlocal_law_selected_target_candidate_ablation import (
     run_nonlocal_law_selected_target_candidate_ablation,
 )
@@ -811,6 +816,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-model-calls",
         type=int,
         default=NONLOCAL_LAW_SELECTED_TARGET_CANDIDATE_GENERATION_MAX_MODEL_CALLS_DEFAULT,
+        help="Maximum model calls allowed for guarded live-model paths.",
+    )
+    autonomous_selected_target_cycle_candidate_parser = (
+        autonomous_subparsers.add_parser(
+            "generate-selected-target-cycle-candidate",
+            help="Generate one bounded selected-target cycle candidate",
+        )
+    )
+    autonomous_selected_target_cycle_candidate_parser.add_argument(
+        "--client",
+        choices=SELECTED_TARGET_CYCLE_CANDIDATE_GENERATION_CLIENTS,
+        required=True,
+        help="Selected-target cycle generation client path.",
+    )
+    autonomous_selected_target_cycle_candidate_parser.add_argument(
+        "--authorization-packet",
+        type=Path,
+        required=True,
+        help="Selected-target cycle generation authorization packet directory.",
+    )
+    autonomous_selected_target_cycle_candidate_parser.add_argument(
+        "--allow-live-model",
+        action="store_true",
+        help="Explicitly allow guarded live-model paths.",
+    )
+    autonomous_selected_target_cycle_candidate_parser.add_argument(
+        "--max-model-calls",
+        type=int,
+        default=SELECTED_TARGET_CYCLE_CANDIDATE_MAX_MODEL_CALLS_DEFAULT,
         help="Maximum model calls allowed for guarded live-model paths.",
     )
     autonomous_selected_nonlocal_law_candidate_ablation_parser = (
@@ -1621,6 +1655,17 @@ def main(argv: list[str] | None = None) -> int:
         and args.autonomous_command == "generate-selected-nonlocal-law-candidate"
     ):
         return _cmd_autonomous_generate_selected_nonlocal_law_candidate(
+            config,
+            client_name=args.client,
+            authorization_packet=args.authorization_packet,
+            allow_live_model=args.allow_live_model,
+            max_model_calls=args.max_model_calls,
+        )
+    if (
+        args.command == "autonomous"
+        and args.autonomous_command == "generate-selected-target-cycle-candidate"
+    ):
+        return _cmd_autonomous_generate_selected_target_cycle_candidate(
             config,
             client_name=args.client,
             authorization_packet=args.authorization_packet,
@@ -2442,6 +2487,25 @@ def _cmd_autonomous_generate_selected_nonlocal_law_candidate(
     max_model_calls: int,
 ) -> int:
     result = run_nonlocal_law_selected_target_candidate_generation(
+        config,
+        client_name=client_name,
+        authorization_packet=authorization_packet,
+        allow_live_model=allow_live_model,
+        max_model_calls=max_model_calls,
+    )
+    print(json.dumps(result.payload, indent=2, sort_keys=True))
+    return result.exit_code
+
+
+def _cmd_autonomous_generate_selected_target_cycle_candidate(
+    config: AbiConfig,
+    *,
+    client_name: str,
+    authorization_packet: Path,
+    allow_live_model: bool,
+    max_model_calls: int,
+) -> int:
+    result = run_selected_target_cycle_candidate_generation(
         config,
         client_name=client_name,
         authorization_packet=authorization_packet,

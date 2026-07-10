@@ -70,6 +70,9 @@ class WorkerRole(str, Enum):
     RESIDUAL_INTERVENTION_GENERATOR = "residual_intervention_generator"
     NONLOCAL_LAW_GUIDED_GENERATOR = "nonlocal_law_guided_generator"
     SELECTED_NONLOCAL_LAW_TARGET_GENERATOR = "selected_nonlocal_law_target_generator"
+    SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATOR = (
+        "selected_target_cycle_mechanism_visibility_generator"
+    )
     NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATOR = (
         "nonlocal_law_candidate_reader_state_evaluator"
     )
@@ -505,6 +508,12 @@ SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA = WorkerSchema(
     artifact_type="model_selected_nonlocal_law_target_generation",
 )
 
+SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA = WorkerSchema(
+    name="SelectedTargetCycleMechanismVisibilityGenerationOutput",
+    version="1",
+    artifact_type="model_selected_target_cycle_mechanism_visibility_generation",
+)
+
 NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA = WorkerSchema(
     name="NonlocalLawCandidateReaderStateEvaluationOutput",
     version="1",
@@ -529,6 +538,7 @@ BOUNDED_MACRO_RECOMPOSITION_MODEL_SCHEMAS = (
     RESIDUAL_INTERVENTION_GENERATION_SCHEMA,
     NONLOCAL_LAW_GUIDED_GENERATION_SCHEMA,
     SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA,
+    SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA,
 )
 
 LOCAL_LAW_RIVAL_DIAGNOSTIC_MODEL_SCHEMAS = (
@@ -2682,6 +2692,145 @@ def selected_nonlocal_law_target_generation_json_schema() -> dict[str, Any]:
     )
 
 
+def selected_target_cycle_mechanism_visibility_generation_json_schema() -> dict[str, Any]:
+    safety_false = {
+        "type": "boolean",
+        "enum": [False],
+        "description": "Must be false for this bounded generation worker.",
+    }
+    phrase_item = _object_schema(
+        {
+            "phrase": {"type": "string"},
+            "phrase_found_in_source": {"type": "boolean"},
+            "handling_action": {
+                "type": "string",
+                "enum": [
+                    "transformed",
+                    "retained_as_earned",
+                    "removed_because_unneeded",
+                ],
+            },
+            "deletion_required": safety_false,
+            "automatic_deletion_forbidden": {
+                "type": "boolean",
+                "enum": [True],
+                "description": "Must be true.",
+            },
+            "pressure_point_not_deletion_target": {
+                "type": "boolean",
+                "enum": [True],
+                "description": "Must be true.",
+            },
+            "transformation_or_earned_retention_required": {
+                "type": "boolean",
+                "enum": [True],
+                "description": "Must be true.",
+            },
+            "earned_retention_allowed": {
+                "type": "boolean",
+                "enum": [True],
+                "description": "Must be true.",
+            },
+            "context_sensitive_decision_required": {
+                "type": "boolean",
+                "enum": [True],
+                "description": "Must be true.",
+            },
+            "preserve_if_still_earned_after_object_pressure": {
+                "type": "boolean",
+                "enum": [True],
+                "description": "Must be true.",
+            },
+            "handling_rationale": {"type": "string"},
+            "causal_force_preserved": {
+                "type": "boolean",
+                "enum": [True],
+                "description": "Must be true.",
+            },
+            "living_event_sequence_weakened": safety_false,
+        },
+        [
+            "phrase",
+            "phrase_found_in_source",
+            "handling_action",
+            "deletion_required",
+            "automatic_deletion_forbidden",
+            "pressure_point_not_deletion_target",
+            "transformation_or_earned_retention_required",
+            "earned_retention_allowed",
+            "context_sensitive_decision_required",
+            "preserve_if_still_earned_after_object_pressure",
+            "handling_rationale",
+            "causal_force_preserved",
+            "living_event_sequence_weakened",
+        ],
+    )
+    target_unit_item = _object_schema(
+        {
+            "unit_id": {"type": "string"},
+            "change_summary": {"type": "string"},
+            "material_change_present": {"type": "boolean"},
+            "preservation_passed": {"type": "boolean"},
+            "validation_required": {"type": "boolean"},
+        },
+        [
+            "unit_id",
+            "change_summary",
+            "material_change_present",
+            "preservation_passed",
+            "validation_required",
+        ],
+    )
+    simple_report = _object_schema(
+        {
+            "passed": {"type": "boolean"},
+            "summary": {"type": "string"},
+            "evidence": _string_array_schema(),
+        },
+        ["passed", "summary", "evidence"],
+    )
+    return _schema_with_properties(
+        {
+            "text": {"type": "string"},
+            "revision_summary": {"type": "string"},
+            "mechanism_visibility_repair_summary": {"type": "string"},
+            "phrase_handling_report": {
+                "type": "array",
+                "items": phrase_item,
+            },
+            "target_unit_change_report": {
+                "type": "array",
+                "items": target_unit_item,
+            },
+            "materiality_report": simple_report,
+            "semantic_report": simple_report,
+            "preservation_report": simple_report,
+            "forbidden_overcorrection_report": simple_report,
+            "post_generation_evidence_note": simple_report,
+            "generation_allowed": safety_false,
+            "finality_claimed": safety_false,
+            "phase_shift_claimed": safety_false,
+            "strongest_rival_defeated_claimed": safety_false,
+        },
+        [
+            "text",
+            "revision_summary",
+            "mechanism_visibility_repair_summary",
+            "phrase_handling_report",
+            "target_unit_change_report",
+            "materiality_report",
+            "semantic_report",
+            "preservation_report",
+            "forbidden_overcorrection_report",
+            "post_generation_evidence_note",
+            "generation_allowed",
+            "finality_claimed",
+            "phase_shift_claimed",
+            "strongest_rival_defeated_claimed",
+        ],
+    )
+
+
 def nonlocal_law_candidate_reader_state_evaluation_json_schema() -> dict[str, Any]:
     safety_false = {
         "type": "boolean",
@@ -3204,6 +3353,8 @@ def json_schema_for_worker_schema(schema: WorkerSchema) -> dict[str, Any]:
         return nonlocal_law_guided_generation_json_schema()
     if schema == SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA:
         return selected_nonlocal_law_target_generation_json_schema()
+    if schema == SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA:
+        return selected_target_cycle_mechanism_visibility_generation_json_schema()
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return nonlocal_law_candidate_reader_state_evaluation_json_schema()
     if schema == SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
@@ -3323,6 +3474,8 @@ def parse_and_validate_structured_output(raw_output: str, schema: WorkerSchema) 
         return _validate_nonlocal_law_guided_generation(payload)
     if schema == SELECTED_NONLOCAL_LAW_TARGET_GENERATION_SCHEMA:
         return _validate_selected_nonlocal_law_target_generation(payload)
+    if schema == SELECTED_TARGET_CYCLE_MECHANISM_VISIBILITY_GENERATION_SCHEMA:
+        return _validate_selected_target_cycle_mechanism_visibility_generation(payload)
     if schema == NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
         return _validate_nonlocal_law_candidate_reader_state_evaluation(payload)
     if schema == SELECTED_NONLOCAL_LAW_CANDIDATE_READER_STATE_EVALUATION_SCHEMA:
@@ -5149,6 +5302,310 @@ def _validate_selected_nonlocal_law_target_generation(
         "strongest_rival_defeated_claimed": False,
         "current_best_supersession_claimed": False,
         "generation_allowed": False,
+    }
+
+
+SELECTED_TARGET_CYCLE_PHRASES = (
+    "changes the next glance",
+    "changes the order of seeing",
+    "where later seeing must be changed by that receiving",
+    "condition through which the next perception has to pass",
+    "Only after this does the room begin to instruct",
+    "The room teaches slowly",
+    "one condition to the next",
+    "later seeing",
+    "perception has to pass",
+)
+SELECTED_TARGET_CYCLE_UNIT_IDS = (
+    "preserve_living_event_sequence_gain",
+    "reduce_direct_mechanism_naming",
+    "convert_declarative_instruction_to_object_pressure",
+    "convert_law_naming_to_perceptual_sequence",
+    "preserve_earned_explanation_not_abolished",
+    "protect_object_activity_and_delicacy",
+    "preserve_non_selected_risks_as_constraints",
+    "preserve_strongest_rival_blocker_and_non_imitation",
+)
+SELECTED_TARGET_CYCLE_MATERIAL_UNIT_IDS = (
+    "reduce_direct_mechanism_naming",
+    "convert_declarative_instruction_to_object_pressure",
+    "convert_law_naming_to_perceptual_sequence",
+)
+SELECTED_TARGET_CYCLE_PRESERVATION_UNIT_IDS = (
+    "preserve_living_event_sequence_gain",
+    "preserve_earned_explanation_not_abolished",
+    "protect_object_activity_and_delicacy",
+    "preserve_non_selected_risks_as_constraints",
+    "preserve_strongest_rival_blocker_and_non_imitation",
+)
+
+
+def _validate_selected_target_cycle_mechanism_visibility_generation(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    allowed_fields = {
+        "text",
+        "revision_summary",
+        "mechanism_visibility_repair_summary",
+        "phrase_handling_report",
+        "target_unit_change_report",
+        "materiality_report",
+        "semantic_report",
+        "preservation_report",
+        "forbidden_overcorrection_report",
+        "post_generation_evidence_note",
+        "generation_allowed",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+    }
+    extra_fields = sorted(set(payload) - allowed_fields)
+    if extra_fields:
+        raise ModelValidationError(
+            "unexpected fields in selected-target cycle generation output: "
+            + ", ".join(extra_fields)
+        )
+    for key in (
+        "text",
+        "revision_summary",
+        "mechanism_visibility_repair_summary",
+    ):
+        _require_type(payload, key, str)
+        if not payload[key].strip():
+            raise ModelValidationError(f"{key} must not be empty")
+
+    phrase_report = _validate_selected_target_cycle_phrase_report(
+        payload.get("phrase_handling_report")
+    )
+    target_report = _validate_selected_target_cycle_target_report(
+        payload.get("target_unit_change_report")
+    )
+    materiality = _validate_selected_target_cycle_simple_report(
+        payload.get("materiality_report"),
+        "materiality_report",
+    )
+    semantic = _validate_selected_target_cycle_simple_report(
+        payload.get("semantic_report"),
+        "semantic_report",
+    )
+    preservation = _validate_selected_target_cycle_simple_report(
+        payload.get("preservation_report"),
+        "preservation_report",
+    )
+    forbidden = _validate_selected_target_cycle_simple_report(
+        payload.get("forbidden_overcorrection_report"),
+        "forbidden_overcorrection_report",
+    )
+    evidence = _validate_selected_target_cycle_simple_report(
+        payload.get("post_generation_evidence_note"),
+        "post_generation_evidence_note",
+    )
+    for key in (
+        "generation_allowed",
+        "finality_claimed",
+        "phase_shift_claimed",
+        "strongest_rival_defeated_claimed",
+    ):
+        _require_false(payload, key)
+    return {
+        "text": payload["text"],
+        "revision_summary": payload["revision_summary"],
+        "mechanism_visibility_repair_summary": payload[
+            "mechanism_visibility_repair_summary"
+        ],
+        "phrase_handling_report": phrase_report,
+        "target_unit_change_report": target_report,
+        "materiality_report": materiality,
+        "semantic_report": semantic,
+        "preservation_report": preservation,
+        "forbidden_overcorrection_report": forbidden,
+        "post_generation_evidence_note": evidence,
+        "generation_allowed": False,
+        "finality_claimed": False,
+        "phase_shift_claimed": False,
+        "strongest_rival_defeated_claimed": False,
+    }
+
+
+def _validate_selected_target_cycle_phrase_report(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ModelValidationError("phrase_handling_report must be a list")
+    if len(value) != len(SELECTED_TARGET_CYCLE_PHRASES):
+        raise ModelValidationError("phrase_handling_report must contain exactly 9 items")
+    by_phrase: dict[str, dict[str, Any]] = {}
+    allowed_actions = (
+        "transformed",
+        "retained_as_earned",
+        "removed_because_unneeded",
+    )
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ModelValidationError(
+                f"phrase_handling_report[{index}] must be an object"
+            )
+        _require_type(item, "phrase", str, field_prefix=f"phrase_handling_report[{index}].")
+        phrase = item["phrase"]
+        if phrase not in SELECTED_TARGET_CYCLE_PHRASES:
+            raise ModelValidationError(f"unknown phrase in phrase_handling_report: {phrase}")
+        if phrase in by_phrase:
+            raise ModelValidationError(f"duplicate phrase in phrase_handling_report: {phrase}")
+        _require_type(
+            item,
+            "phrase_found_in_source",
+            bool,
+            field_prefix=f"phrase_handling_report[{index}].",
+        )
+        _require_type(
+            item,
+            "handling_action",
+            str,
+            field_prefix=f"phrase_handling_report[{index}].",
+        )
+        _require_enum_value(
+            item["handling_action"],
+            f"phrase_handling_report[{index}].handling_action",
+            allowed_actions,
+        )
+        _require_false(
+            item,
+            "deletion_required",
+            field_prefix=f"phrase_handling_report[{index}].",
+        )
+        for field in (
+            "automatic_deletion_forbidden",
+            "pressure_point_not_deletion_target",
+            "transformation_or_earned_retention_required",
+            "earned_retention_allowed",
+            "context_sensitive_decision_required",
+            "preserve_if_still_earned_after_object_pressure",
+            "causal_force_preserved",
+        ):
+            _require_true(
+                item,
+                field,
+                field_prefix=f"phrase_handling_report[{index}].",
+            )
+        _require_type(
+            item,
+            "handling_rationale",
+            str,
+            field_prefix=f"phrase_handling_report[{index}].",
+        )
+        if not item["handling_rationale"].strip():
+            raise ModelValidationError(
+                f"phrase_handling_report[{index}].handling_rationale must not be empty"
+            )
+        _require_false(
+            item,
+            "living_event_sequence_weakened",
+            field_prefix=f"phrase_handling_report[{index}].",
+        )
+        by_phrase[phrase] = {
+            "phrase": phrase,
+            "phrase_found_in_source": item["phrase_found_in_source"],
+            "handling_action": item["handling_action"],
+            "deletion_required": False,
+            "automatic_deletion_forbidden": True,
+            "pressure_point_not_deletion_target": True,
+            "transformation_or_earned_retention_required": True,
+            "earned_retention_allowed": True,
+            "context_sensitive_decision_required": True,
+            "preserve_if_still_earned_after_object_pressure": True,
+            "handling_rationale": item["handling_rationale"],
+            "causal_force_preserved": True,
+            "living_event_sequence_weakened": False,
+        }
+    missing = [phrase for phrase in SELECTED_TARGET_CYCLE_PHRASES if phrase not in by_phrase]
+    if missing:
+        raise ModelValidationError(
+            "phrase_handling_report missing required phrases: " + ", ".join(missing)
+        )
+    return [by_phrase[phrase] for phrase in SELECTED_TARGET_CYCLE_PHRASES]
+
+
+def _validate_selected_target_cycle_target_report(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ModelValidationError("target_unit_change_report must be a list")
+    by_unit: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ModelValidationError(
+                f"target_unit_change_report[{index}] must be an object"
+            )
+        _require_type(item, "unit_id", str, field_prefix=f"target_unit_change_report[{index}].")
+        unit_id = item["unit_id"]
+        if unit_id not in SELECTED_TARGET_CYCLE_UNIT_IDS:
+            raise ModelValidationError(f"unknown target unit: {unit_id}")
+        if unit_id in by_unit:
+            raise ModelValidationError(f"duplicate target unit: {unit_id}")
+        _require_type(
+            item,
+            "change_summary",
+            str,
+            field_prefix=f"target_unit_change_report[{index}].",
+        )
+        _require_type(
+            item,
+            "material_change_present",
+            bool,
+            field_prefix=f"target_unit_change_report[{index}].",
+        )
+        _require_type(
+            item,
+            "preservation_passed",
+            bool,
+            field_prefix=f"target_unit_change_report[{index}].",
+        )
+        _require_type(
+            item,
+            "validation_required",
+            bool,
+            field_prefix=f"target_unit_change_report[{index}].",
+        )
+        if unit_id in SELECTED_TARGET_CYCLE_MATERIAL_UNIT_IDS and item[
+            "material_change_present"
+        ] is not True:
+            raise ModelValidationError(f"material change missing for {unit_id}")
+        if unit_id in SELECTED_TARGET_CYCLE_PRESERVATION_UNIT_IDS and item[
+            "preservation_passed"
+        ] is not True:
+            raise ModelValidationError(f"preservation failed for {unit_id}")
+        if item["validation_required"] is not True:
+            raise ModelValidationError(f"validation_required must be true for {unit_id}")
+        by_unit[unit_id] = {
+            "unit_id": unit_id,
+            "change_summary": item["change_summary"],
+            "material_change_present": item["material_change_present"],
+            "preservation_passed": item["preservation_passed"],
+            "validation_required": True,
+        }
+    missing = [unit_id for unit_id in SELECTED_TARGET_CYCLE_UNIT_IDS if unit_id not in by_unit]
+    if missing:
+        raise ModelValidationError(
+            "target_unit_change_report missing required units: " + ", ".join(missing)
+        )
+    return [by_unit[unit_id] for unit_id in SELECTED_TARGET_CYCLE_UNIT_IDS]
+
+
+def _validate_selected_target_cycle_simple_report(
+    value: object,
+    label: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ModelValidationError(f"{label} must be an object")
+    _require_type(value, "passed", bool, field_prefix=f"{label}.")
+    if value["passed"] is not True:
+        raise ModelValidationError(f"{label}.passed must be true")
+    _require_type(value, "summary", str, field_prefix=f"{label}.")
+    if not value["summary"].strip():
+        raise ModelValidationError(f"{label}.summary must not be empty")
+    _require_string_list(value, "evidence", field_prefix=f"{label}.")
+    if not value["evidence"]:
+        raise ModelValidationError(f"{label}.evidence must not be empty")
+    return {
+        "passed": True,
+        "summary": value["summary"],
+        "evidence": list(value["evidence"]),
     }
 
 
